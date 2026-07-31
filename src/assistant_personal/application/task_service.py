@@ -2,6 +2,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from copy import deepcopy
+
 from src.assistant_personal.domain.task_models import Task
 from src.assistant_personal.infrastructure.mongo_client import get_db
 
@@ -85,12 +87,34 @@ class TaskService:
         result = db.personal_tasks.insert_one(payload)
         return {"inserted_id": str(result.inserted_id), "task_id": payload["task_id"]}
 
+    def _record_history(self, db: Any, task_id: str, updates: dict[str, Any], previous_task: dict[str, Any] | None) -> None:
+        """Guarda un registro de cambios en la colección task_history."""
+        if not updates:
+            return
+
+        history_entry = {
+            "task_id": task_id,
+            "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S"),
+            "changes": [],
+        }
+
+        for field, new_value in updates.items():
+            previous_value = previous_task.get(field) if previous_task else None
+            history_entry["changes"].append({
+                "field": field,
+                "previous_value": previous_value,
+                "new_value": new_value,
+            })
+
+        db.task_history.insert_one(history_entry)
+
     def update_task(self, task_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
         """Actualiza campos de una tarea existente identificada por task_id."""
         if not updates:
             raise ValueError("No se proporcionaron campos para actualizar")
 
         db = get_db(self.db_name)
+        previous_task = db.personal_tasks.find_one({"task_id": task_id}, {"_id": 0})
         result = db.personal_tasks.update_one(
             {"task_id": task_id},
             {"$set": updates},
@@ -98,6 +122,7 @@ class TaskService:
         if result.matched_count == 0:
             return None
 
+        self._record_history(db, task_id, updates, previous_task)
         updated_task = db.personal_tasks.find_one({"task_id": task_id}, {"_id": 0})
         return self._serialize_value(updated_task) if updated_task is not None else None
 

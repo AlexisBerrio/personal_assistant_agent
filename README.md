@@ -84,7 +84,32 @@ Envío JSON a PATCH /tasks/{task_id} con el estado de la tarea:
 }
 ```
 
-### 7. Ejecutar el CLI
+### 7. Historial de cambios
+
+El proyecto también puede registrar cambios en una colección separada llamada `task_history` para no saturar la colección principal de tareas.
+
+Ejemplo de documento para MongoDB:
+
+```json
+{
+  "task_id": "task-123",
+  "timestamp": "2026-07-31T10:30:00",
+  "changes": [
+    {
+      "field": "status",
+      "previous_value": "In Progress",
+      "new_value": "Completed"
+    },
+    {
+      "field": "description",
+      "previous_value": "Tarea pendiente",
+      "new_value": "Tarea finalizada"
+    }
+  ]
+}
+```
+
+### 8. Ejecutar el CLI
 
 ```powershell
 python -m src.assistant_personal.interfaces.cli

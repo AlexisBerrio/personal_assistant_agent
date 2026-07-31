@@ -14,18 +14,45 @@ class FakeInsertResult:
         self.inserted_id = inserted_id
 
 
+class FakeUpdateResult:
+    def __init__(self, matched_count=1, modified_count=1):
+        self.matched_count = matched_count
+        self.modified_count = modified_count
+
+
+class FakeHistoryCollection:
+    def __init__(self):
+        self.inserted_docs = []
+
+    def insert_one(self, payload):
+        self.inserted_docs.append(payload)
+        return FakeInsertResult("hist123")
+
+
 class FakeCollection:
     def __init__(self):
         self.last_insert_payload = None
+        self.last_update_payload = None
+        self.last_update_filter = None
+        self.doc = None
 
     def insert_one(self, payload):
         self.last_insert_payload = payload
         return FakeInsertResult("abc123")
 
+    def update_one(self, filter, update):
+        self.last_update_filter = filter
+        self.last_update_payload = update
+        return FakeUpdateResult()
+
+    def find_one(self, filter=None, projection=None):
+        return self.doc
+
 
 class FakeDatabase:
     def __init__(self):
         self.personal_tasks = FakeCollection()
+        self.task_history = FakeHistoryCollection()
 
 
 class TaskServiceTests(unittest.TestCase):
