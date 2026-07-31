@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
@@ -13,9 +15,15 @@ class TaskCreateRequest(BaseModel):
     """Modelo que define qué datos recibe la API para crear una tarea."""
     title: str
     description: str | None = None
-    priority: str = "medium"
-    due_date: str | None = None
-    source: str = "manual"
+    status: str = "In Progress"
+    category: str | None = None
+    tags: list[str] = []
+    priority: Any | None = None
+    dates: dict[str, Any] | None = None
+    recurrence: dict[str, Any] | None = None
+    context_metadata: dict[str, Any] | None = None
+    steps: list[dict[str, Any]] = []
+    agent_notes: list[dict[str, Any]] = []
 
 
 @app.get("/health")
@@ -30,9 +38,15 @@ def create_task(payload: TaskCreateRequest) -> dict[str, str]:
     task = Task(
         title=payload.title,
         description=payload.description,
+        status=payload.status,
+        category=payload.category,
+        tags=payload.tags,
         priority=payload.priority,
-        due_date=payload.due_date,
-        source=payload.source,
+        dates=payload.dates or {},
+        recurrence=payload.recurrence or {},
+        context_metadata=payload.context_metadata or {},
+        steps=payload.steps,
+        agent_notes=payload.agent_notes,
     )
     try:
         return service.create_task(task)

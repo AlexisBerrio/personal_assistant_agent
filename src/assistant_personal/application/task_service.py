@@ -18,18 +18,24 @@ class TaskService:
     def _to_dict(self, task: Task | dict[str, Any]) -> dict[str, Any]:
         """Convierte un objeto Task o un diccionario en un diccionario simple.
 
-        MongoDB trabaja mejor con diccionarios JSON-like, así que aquí
-        normalizamos la información antes de guardar o consultar.
+        La estructura oficial de la colección debe conservarse completa en el
+        payload para que el servicio sea consistente con los documentos reales.
         """
         if isinstance(task, Task):
-            return {
+            payload: dict[str, Any] = {
                 "title": task.title,
                 "description": task.description,
                 "status": task.status,
+                "category": task.category,
+                "tags": task.tags,
                 "priority": task.priority,
-                "due_date": task.due_date,
-                "source": task.source,
+                "dates": task.dates,
+                "recurrence": task.recurrence,
+                "context_metadata": task.context_metadata,
+                "steps": task.steps,
+                "agent_notes": task.agent_notes,
             }
+            return payload
         if isinstance(task, dict):
             return task
         raise TypeError("task debe ser un Task o un dict")
