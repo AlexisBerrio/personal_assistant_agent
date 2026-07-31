@@ -72,7 +72,14 @@ def get_task(task_id: str) -> dict[str, object] | None:
 
 @app.patch("/tasks/{task_id}")
 def update_task(task_id: str, payload: dict[str, Any]) -> dict[str, object]:
-    """Actualiza una tarea existente identificada por task_id."""
+    """Actualiza una tarea existente identificada por task_id.
+
+    Si el payload incluye un estado "Completed", la tarea se marca como
+    completada usando la misma ruta de actualización.
+    """
+    if str(payload.get("status", "")).strip().lower() == "completed":
+        return service.complete_task(task_id)
+
     try:
         updated_task = service.update_task(task_id, payload)
     except ValueError as exc:
@@ -81,12 +88,3 @@ def update_task(task_id: str, payload: dict[str, Any]) -> dict[str, object]:
     if updated_task is None:
         raise HTTPException(status_code=404, detail="Tarea no encontrada")
     return updated_task
-
-
-@app.patch("/tasks/complete")
-def complete_task(payload: dict[str, str]) -> dict[str, int]:
-    """Marca una tarea como completada usando el task_id recibido en el body."""
-    task_id = payload.get("task_id", "").strip()
-    if not task_id:
-        raise HTTPException(status_code=400, detail="El task_id de la tarea es obligatorio")
-    return service.complete_task(task_id)

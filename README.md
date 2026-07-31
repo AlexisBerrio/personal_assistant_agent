@@ -76,11 +76,11 @@ Envío JSON a PATCH /tasks/{task_id} con solo los campos que quieras modificar:
 
 ### 6. Completar una tarea
 
-Envío JSON a PATCH /tasks/complete con el identificador de la tarea:
+Envío JSON a PATCH /tasks/{task_id} con el estado de la tarea:
 
 ```json
 {
-  "task_id": "tu-task-id"
+  "status": "Completed"
 }
 ```
 

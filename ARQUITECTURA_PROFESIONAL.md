@@ -61,8 +61,7 @@ Son los puntos de entrada del sistema.
 - app.py expone una API REST con FastAPI.
 - /health devuelve estado básico del servicio.
 - /tasks permite listar y crear tareas.
-- /tasks/{task_id} permite consultar o actualizar una tarea concreta.
-- /tasks/complete permite completar una tarea con un payload mínimo.
+- /tasks/{task_id} permite consultar o actualizar una tarea concreta, incluyendo marcarla como completada con un payload de estado.
 - cli.py ofrece una forma simple de inspeccionar tareas desde terminal.
 
 ## Flujo actual

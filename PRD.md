@@ -129,7 +129,6 @@ Expone operaciones simples mediante FastAPI:
 - GET /tasks
 - GET /tasks/{task_id}
 - PATCH /tasks/{task_id}
-- PATCH /tasks/complete
 
 ---
 
