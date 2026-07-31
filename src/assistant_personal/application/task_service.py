@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Any
 
 from src.assistant_personal.domain.task_models import Task
@@ -40,10 +41,23 @@ class TaskService:
             return task
         raise TypeError("task debe ser un Task o un dict")
 
+    def _serialize_value(self, value: Any) -> Any:
+        """Convierte valores no JSON-serializables a tipos compatibles con FastAPI."""
+        if isinstance(value, datetime):
+            if value.tzinfo is not None:
+                value = value.astimezone(timezone.utc).replace(tzinfo=None)
+            return value.strftime("%Y-%m-%dT%H:%M:%S")
+        if isinstance(value, dict):
+            return {k: self._serialize_value(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self._serialize_value(item) for item in value]
+        return value
+
     def list_tasks(self) -> list[dict[str, Any]]:
         """Devuelve las tareas más recientes de la colección personal_tasks."""
         db = get_db(self.db_name)
-        return list(db.personal_tasks.find({}, {"_id": 0}).limit(10))
+        raw_tasks = list(db.personal_tasks.find({}, {"_id": 0}).limit(10))
+        return [self._serialize_value(task) for task in raw_tasks]
 
     def create_task(self, task: Task | dict[str, Any]) -> dict[str, Any]:
         """Crea una nueva tarea en MongoDB.

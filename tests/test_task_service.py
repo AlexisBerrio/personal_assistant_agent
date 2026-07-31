@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime
 from unittest.mock import patch
 
 from src.assistant_personal.application.task_service import TaskService
@@ -59,6 +60,59 @@ class TaskServiceTests(unittest.TestCase):
         self.assertEqual(payload["agent_notes"][0]["note"], "Tarea creada desde la prueba")
         self.assertNotIn("source", payload)
         self.assertNotIn("due_date", payload)
+
+    def test_list_tasks_serializes_datetime_values_for_api(self):
+        fake_db = FakeDatabase()
+        fake_db.personal_tasks.docs = [{
+            "title": "Tarea con fecha",
+            "description": "Demo",
+            "status": "In Progress",
+            "category": "Work",
+            "tags": ["demo"],
+            "priority": {"level": "High", "score": 90},
+            "dates": {"created_at": datetime(2026, 5, 21, 8, 30), "due_date": datetime(2026, 5, 24, 18, 0), "completed_at": None},
+            "recurrence": {"is_recurring": False, "frequency": None},
+            "context_metadata": {"source": "Alexa"},
+            "steps": [],
+            "agent_notes": [],
+        }]
+
+        class FakeCursor:
+            def __init__(self, docs):
+                self.docs = docs
+
+            def __iter__(self):
+                return iter(self.docs)
+
+            def limit(self, _limit):
+                return self
+
+        class FakeListCollection(FakeCollection):
+            def find(self, *_args, **_kwargs):
+                return FakeCursor(self.docs)
+
+        fake_db.personal_tasks = FakeListCollection()
+        fake_db.personal_tasks.docs = [{
+            "title": "Tarea con fecha",
+            "description": "Demo",
+            "status": "In Progress",
+            "category": "Work",
+            "tags": ["demo"],
+            "priority": {"level": "High", "score": 90},
+            "dates": {"created_at": datetime(2026, 5, 21, 8, 30), "due_date": datetime(2026, 5, 24, 18, 0), "completed_at": None},
+            "recurrence": {"is_recurring": False, "frequency": None},
+            "context_metadata": {"source": "Alexa"},
+            "steps": [],
+            "agent_notes": [],
+        }]
+
+        with patch("src.assistant_personal.application.task_service.get_db", return_value=fake_db):
+            service = TaskService()
+            result = service.list_tasks()
+
+        self.assertEqual(result[0]["dates"]["created_at"], "2026-05-21T08:30:00")
+        self.assertEqual(result[0]["dates"]["due_date"], "2026-05-24T18:00:00")
+        self.assertEqual(result[0]["dates"]["completed_at"], None)
 
 
 if __name__ == "__main__":
