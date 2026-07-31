@@ -32,8 +32,8 @@ def get_settings() -> Settings:
     venv_python = os.path.join(repo_root, ".venv", "Scripts", "python.exe")
     python_command = venv_python if os.path.exists(venv_python) else None
     return Settings(
-        mongo_uri=os.getenv("MONGO_URI", "mongodb://localhost:27017/"),
-        mongo_db_name=os.getenv("MONGO_DB_NAME", "sample_mflix"),
-        openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        mongo_uri=os.getenv("MONGO_URI"),
+        mongo_db_name=os.getenv("MONGO_DB_NAME"),
+        openai_model=os.getenv("OPENAI_MODEL"),
         python_command=python_command,
     )
