@@ -6,12 +6,11 @@ Se está construyendo un asistente personal orientado a la gestión de tareas y 
 
 - Python como lenguaje principal.
 - MongoDB como base de datos documental.
-- MCP para exponer herramientas a agentes.
-- Agentes con LLM para interpretar peticiones en lenguaje natural.
-- FastAPI como capa de API para interacción externa.
-- Alexa como futura interfaz por voz.
+- FastAPI como capa de API REST.
+- MCP como evolución natural para exponer herramientas a agentes.
+- Agentes con LLM y Alexa como futuras interfaces de interacción.
 
-El objetivo inicial es demostrar una arquitectura realista de un sistema de agentes capaz de crear, listar y gestionar tareas personales mediante herramientas externas y un modelo de lenguaje.
+El objetivo inicial ya ha quedado materializado en una base funcional capaz de crear, listar y persistir tareas personales mediante una API y un servicio de negocio claro.
 
 ---
 
@@ -19,25 +18,25 @@ El objetivo inicial es demostrar una arquitectura realista de un sistema de agen
 
 Crear una base profesional y pedagógica de un asistente personal que pueda:
 
-- comprender peticiones en lenguaje natural,
-- transformar esas peticiones en acciones concretas,
+- crear y consultar tareas desde una API,
 - almacenar información en MongoDB,
-- exponer funcionalidades a través de una API,
+- separar claramente negocio, infraestructura e interfaces,
 - prepararse para integrar agentes, MCP y Alexa en fases posteriores.
 
 ---
 
 ## 3. Contexto del proyecto
 
-Este proyecto nace como un ejercicio de aprendizaje y construcción práctica de sistemas de IA con agentes. La idea es no quedarse en un prototipo simple, sino organizar el desarrollo con una arquitectura pensada para ser escalable y comprensible.
+Este proyecto nace como un ejercicio de aprendizaje y construcción práctica de sistemas de IA con agentes. La idea no es solo demostrar un prototipo, sino organizar el desarrollo con una arquitectura pensada para ser escalable, enseñable y extensible.
 
-Actualmente se está trabajando en la capa base de negocio:
+En esta etapa ya se ha consolidado la capa base de negocio y de interfaz:
 
 - modelo de tareas,
 - servicio de tareas,
 - conexión con MongoDB,
 - API REST mínima,
-- estructura de proyecto modular.
+- CLI de prueba,
+- tests unitarios básicos.
 
 ---
 
@@ -45,12 +44,13 @@ Actualmente se está trabajando en la capa base de negocio:
 
 ### Incluido
 
-- Estructura de proyecto modular con carpetas por capas.
-- Modelo de dominio para tareas.
+- Estructura modular por capas: domain, application, infrastructure e interfaces.
+- Modelo de dominio para tareas con campos como título, descripción, estado, categoría, etiquetas, prioridad, fechas, recurrencia, metadatos y pasos.
 - Servicio de aplicación para crear y listar tareas.
-- Conexión básica a MongoDB.
-- API FastAPI con endpoints de prueba.
-- Documentación y comentarios para facilitar la comprensión.
+- Conexión a MongoDB a través de una capa de infraestructura.
+- API FastAPI con endpoints de salud y gestión de tareas.
+- CLI para listar tareas desde la capa de aplicación.
+- Tests unitarios que validan el comportamiento del servicio.
 
 ### No incluido todavía
 
@@ -63,16 +63,21 @@ Actualmente se está trabajando en la capa base de negocio:
 
 ---
 
-## 5. Arquitectura propuesta
+## 5. Arquitectura actual
 
 El proyecto sigue una arquitectura por capas:
 
-- Domain: modelos de negocio, por ejemplo Task.
-- Application: servicios de casos de uso, por ejemplo TaskService.
-- Infrastructure: integración con MongoDB y otros servicios externos.
-- Interfaces: API y futuras interfaces como Alexa o CLI.
+- Domain: modelos de negocio, como Task.
+- Application: servicios de casos de uso, como TaskService.
+- Infrastructure: integración con MongoDB y servicios externos.
+- Interfaces: API FastAPI, CLI y futuras experiencias conversacionales.
 
-Esto permite separar responsabilidad, hacer el sistema más comprensible y preparar el camino para escalar.
+El flujo actual es:
+
+1. La API recibe una petición HTTP.
+2. El endpoint construye o delega en un Task.
+3. TaskService prepara el payload y lo persiste en MongoDB.
+4. La respuesta se serializa para que sea compatible con JSON.
 
 ---
 
@@ -80,14 +85,19 @@ Esto permite separar responsabilidad, hacer el sistema más comprensible y prepa
 
 ### 6.1 Modelo de dominio
 
-Representa la entidad principal del negocio:
+Representa la entidad principal del negocio con la estructura actual de tareas:
 
 - título
 - descripción
 - estado
+- categoría
+- etiquetas
 - prioridad
-- fecha límite
-- origen de la tarea
+- fechas
+- recurrencia
+- metadatos de contexto
+- pasos
+- notas del agente
 
 ### 6.2 Servicio de tareas
 
@@ -97,7 +107,7 @@ Responsable de:
 - validar entradas,
 - crear tareas,
 - listar tareas,
-- marcar tareas como completadas.
+- serializar valores para devolver respuestas JSON compatibles.
 
 ### 6.3 Infraestructura MongoDB
 
@@ -105,7 +115,7 @@ Encargada de:
 
 - conectar con MongoDB,
 - abrir la base de datos correcta,
-- ejecutar operaciones básicas.
+- ejecutar operaciones básicas sobre la colección personal_tasks.
 
 ### 6.4 API
 
@@ -119,7 +129,7 @@ Expone operaciones simples mediante FastAPI:
 
 ## 7. Requisitos funcionales
 
-1. El sistema debe poder crear tareas con información básica.
+1. El sistema debe poder crear tareas con información básica o con estructura completa.
 2. El sistema debe poder listar tareas almacenadas.
 3. El sistema debe validar que una tarea tenga un título.
 4. La API debe responder con errores claros si la entrada es inválida.
@@ -144,6 +154,7 @@ Expone operaciones simples mediante FastAPI:
 - servicio de tareas
 - API mínima
 - conexión con MongoDB
+- CLI y tests básicos
 
 ### Fase 2: agentes y herramientas
 
@@ -169,12 +180,12 @@ Expone operaciones simples mediante FastAPI:
 
 ## 10. Notas importantes
 
-- El proyecto está pensado como una base educativa y profesional.
-- El enfoque no es solo “hacer que funcione”, sino “hacer que se entienda y escale”.
+- El proyecto ya tiene una base funcional real y verificable.
+- El enfoque sigue siendo educativo y profesional: hacer que el sistema sea comprensible, extensible y útil para continuar evolucionando.
 - Se recomienda mantener el código claro, modular y documentado para que futuras IAs o desarrolladores puedan continuar el trabajo sin ambigüedades.
 
 ---
 
-## 11. Resultado esperado
+## 11. Resultado esperado de esta etapa
 
-Al final de esta etapa, el proyecto debería tener una base sólida para continuar hacia un asistente personal real, con capacidad de gestionar tareas, interactuar con agentes, integrar herramientas externas y evolucionar hacia experiencias como Alexa o interfaces conversacionales más completas.
+Al final de esta etapa, el proyecto cuenta con una base sólida para continuar hacia un asistente personal real, con capacidad de gestionar tareas, interactuar con APIs, persistir datos y evolucionar hacia experiencias como Alexa o interfaces conversacionales más completas.

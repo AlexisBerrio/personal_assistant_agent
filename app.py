@@ -59,3 +59,12 @@ def create_task(payload: TaskCreateRequest) -> dict[str, str]:
 def list_tasks() -> list[dict[str, object]]:
     """Devuelve una lista de tareas almacenadas en MongoDB."""
     return service.list_tasks()
+
+
+@app.post("/tasks/complete")
+def complete_task(payload: dict[str, str]) -> dict[str, int]:
+    """Marca una tarea como completada usando el task_id recibido en el body."""
+    task_id = payload.get("task_id", "").strip()
+    if not task_id:
+        raise HTTPException(status_code=400, detail="El task_id de la tarea es obligatorio")
+    return service.complete_task(task_id)

@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -25,6 +26,7 @@ class TaskService:
         if isinstance(task, Task):
             payload: dict[str, Any] = {
                 "title": task.title,
+                "task_id": task.task_id,
                 "description": task.description,
                 "status": task.status,
                 "category": task.category,
@@ -69,15 +71,17 @@ class TaskService:
         if not payload.get("title"):
             raise ValueError("El título de la tarea es obligatorio")
 
+        payload["task_id"] = payload.get("task_id") or str(uuid.uuid4())
+
         db = get_db(self.db_name)
         result = db.personal_tasks.insert_one(payload)
-        return {"inserted_id": str(result.inserted_id)}
+        return {"inserted_id": str(result.inserted_id), "task_id": payload["task_id"]}
 
-    def complete_task(self, title: str) -> dict[str, Any]:
-        """Marca una tarea como completada en base a su título."""
+    def complete_task(self, task_id: str) -> dict[str, Any]:
+        """Marca una tarea como completada en base a su task_id."""
         db = get_db(self.db_name)
         result = db.personal_tasks.update_one(
-            {"title": title},
+            {"task_id": task_id},
             {"$set": {"status": "Completed"}},
         )
         return {"matched": result.matched_count, "modified": result.modified_count}

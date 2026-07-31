@@ -2,6 +2,9 @@ import unittest
 from datetime import datetime
 from unittest.mock import patch
 
+from fastapi.testclient import TestClient
+
+from app import app
 from src.assistant_personal.application.task_service import TaskService
 from src.assistant_personal.domain.task_models import Task
 
@@ -47,6 +50,7 @@ class TaskServiceTests(unittest.TestCase):
             result = service.create_task(task)
 
         self.assertEqual(result["inserted_id"], "abc123")
+        self.assertTrue(result["task_id"])
         self.assertIsInstance(fake_db.personal_tasks.last_insert_payload, dict)
         payload = fake_db.personal_tasks.last_insert_payload
         self.assertEqual(payload["title"], "Comprar pan")
@@ -113,6 +117,15 @@ class TaskServiceTests(unittest.TestCase):
         self.assertEqual(result[0]["dates"]["created_at"], "2026-05-21T08:30:00")
         self.assertEqual(result[0]["dates"]["due_date"], "2026-05-24T18:00:00")
         self.assertEqual(result[0]["dates"]["completed_at"], None)
+
+    def test_complete_task_endpoint_calls_service(self):
+        with patch("app.service.complete_task", return_value={"matched": 1, "modified": 1}) as mock_complete_task:
+            client = TestClient(app)
+            response = client.post("/tasks/complete", json={"task_id": "task-123"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"matched": 1, "modified": 1})
+        mock_complete_task.assert_called_once_with("task-123")
 
 
 if __name__ == "__main__":

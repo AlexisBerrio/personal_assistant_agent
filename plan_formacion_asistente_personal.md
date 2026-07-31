@@ -2,16 +2,19 @@
 
 ## Estado actual del proyecto
 
-Ya tienes una base muy buena para empezar:
+La base funcional del proyecto ya está operativa:
 
-- [mongo_mcp_server.py](mongo_mcp_server.py): servidor MCP con herramientas para consultar, insertar y agregar datos en MongoDB.
-- [multi_agent_system.py](multi_agent_system.py): orquestador y agente especialista que usan OpenAI y MCP para resolver peticiones sobre datos.
+- [app.py](app.py): API FastAPI con endpoints de salud y gestión de tareas.
+- [src/assistant_personal/application/task_service.py](src/assistant_personal/application/task_service.py): servicio de negocio para crear y listar tareas.
+- [src/assistant_personal/infrastructure/mongo_client.py](src/assistant_personal/infrastructure/mongo_client.py): conexión con MongoDB.
+- [src/assistant_personal/interfaces/cli.py](src/assistant_personal/interfaces/cli.py): interfaz simple por terminal.
+- [tests/test_task_service.py](tests/test_task_service.py): pruebas básicas del comportamiento del servicio.
 
-Eso significa que ya has construido los bloques de:
+Esto significa que ya has construido los bloques de:
 
-- integración con MongoDB,
-- conexión de agentes a herramientas externas,
-- orquestación de flujos de trabajo con LLMs.
+- persistencia de tareas en MongoDB,
+- exposición de funcionalidad mediante una API REST,
+- separación modular entre negocio e infraestructura.
 
 ## Objetivo final
 
@@ -35,27 +38,26 @@ No basta con “usar OpenAI”; hay que entender cómo se diseña, controla y op
 
 ---
 
-## Fase 1: fundamentos esenciales (semana 1)
+## Fase 1: fundamentos esenciales (completada en parte)
 
 ### Objetivo
 Comprender la base sobre la que se apoya todo el proyecto.
 
-### Temas
+### Temas ya trabajados
 
-- Python avanzado: funciones, clases, async/await, manejo de errores.
-- JSON, modelos de datos y serialización.
-- MongoDB: documentos, colecciones, consultas, agregaciones, índices.
-- Variables de entorno y seguridad básica.
-- Introducción a APIs REST y webhooks.
+- Python para servicios y modelos de datos.
+- JSON y serialización de respuestas.
+- MongoDB para almacenar documentos de tareas.
+- APIs REST simples con FastAPI.
 
 ### Entregable
 
 - Entender cómo se almacenan y consultan tareas en MongoDB.
-- Ser capaz de crear consultas simples y complejas desde Python.
+- Ser capaz de crear una tarea desde la API y ver el resultado en la colección.
 
 ---
 
-## Fase 2: llevar el proyecto a un dominio real (semana 2)
+## Fase 2: llevar el proyecto a un dominio real
 
 ### Objetivo
 Pasar del ejemplo genérico al caso real del asistente personal.
@@ -63,19 +65,18 @@ Pasar del ejemplo genérico al caso real del asistente personal.
 ### Temas
 
 - Diseño de esquema de datos para tareas personales.
-- Modelado de entidades: usuario, tarea, recordatorio, contexto, prioridad, estado.
-- Estrategias de consultas útiles para un asistente: hoy, mañana, completadas, pendientes, urgentes.
-- Reglas de negocio: si una tarea tiene prioridad alta, se muestra primero.
+- Modelado de entidades: tarea, contexto, prioridad, estado.
+- Estrategias de consultas útiles para un asistente: pendientes, urgentes o completadas.
+- Reglas de negocio: priorizar tareas relevantes o próximas a vencer.
 
 ### Entregable
 
-- Crear una base de datos llamada personal_management.
-- Definir una colección personal_tasks con estructura útil.
-- Insertar datos de ejemplo y probar consultas reales.
+- Mantener la colección personal_tasks con una estructura útil para futuras consultas.
+- Insertar datos reales y probar consultas simple y complejas.
 
 ---
 
-## Fase 3: MCP y herramientas para agentes (semana 3)
+## Fase 3: MCP y herramientas para agentes
 
 ### Objetivo
 Entender por qué MCP es clave para que un agente pueda usar herramientas externas.
@@ -100,7 +101,7 @@ Entender por qué MCP es clave para que un agente pueda usar herramientas extern
 
 ---
 
-## Fase 4: arquitectura de agentes (semana 4)
+## Fase 4: arquitectura de agentes
 
 ### Objetivo
 Entender cómo construir sistemas multiagente de forma limpia.
@@ -124,33 +125,7 @@ Entender cómo construir sistemas multiagente de forma limpia.
 
 ---
 
-## Fase 4.1: skills de agentes (semana 4.5)
-
-### Objetivo
-Incorporar habilidades reutilizables y profesionales a los agentes, no solo prompts sueltos.
-
-### Temas
-
-- Qué es una skill de agente y por qué es útil.
-- Skills de planificación: descomponer una petición compleja en pasos.
-- Skills de herramienta: elegir cuándo usar MongoDB, MCP o APIs externas.
-- Skills de reflexión: detectar si la respuesta es incompleta o errónea.
-- Skills de memoria: recordar contexto relevante entre turnos.
-- Skills de validación: comprobar que la respuesta cumple el objetivo antes de entregarla.
-- Skills de coordinación: cómo un orquestador delega a especialistas.
-
-### Entregable
-
-- Definir un conjunto de skills básicas para este proyecto:
-  - skill de gestión de tareas,
-  - skill de consulta de datos,
-  - skill de respuesta conversacional,
-  - skill de validación de resultados.
-- Implementarlas como bloques claros dentro del flujo del agente.
-
----
-
-## Fase 5: integración con Alexa (semana 5)
+## Fase 5: integración con Alexa
 
 ### Objetivo
 Añadir una interfaz por voz al sistema.
@@ -174,7 +149,7 @@ Añadir una interfaz por voz al sistema.
 
 ---
 
-## Fase 6: producción y robustez (semana 6)
+## Fase 6: producción y robustez
 
 ### Objetivo
 Salir del prototipo y convertir el sistema en algo serio.
@@ -198,66 +173,16 @@ Salir del prototipo y convertir el sistema en algo serio.
 
 ---
 
-## Fase 6.1: RAG y memoria contextual (semana 6.5)
+## Próximo paso recomendable
 
-### Objetivo
-Añadir una capa de conocimiento más avanzada para que el asistente no dependa solo del modelo, sino también de información estructurada y contextual.
+Antes de avanzar hacia MCP o Alexa, conviene consolidar:
 
-### Temas
+- validaciones de entrada más estrictas,
+- mejor manejo de errores,
+- tests de integración,
+- una capa de repositorio para separar acceso a datos del servicio de negocio.
 
-- Qué es RAG y por qué es útil.
-- Diferencia entre conocimiento estático, memoria y herramientas externas.
-- Embeddings y búsqueda semántica.
-- Cómo conectar MongoDB con un pipeline de recuperación de contexto.
-- Cómo usar RAG para recordar preferencias, hábitos, reglas de negocio y documentos del usuario.
-- Limitaciones de RAG: contexto incompleto, chunks mal segmentados, respuestas inventadas.
-- Memoria a corto y largo plazo para agentes.
-
-### Entregable
-
-- Diseñar una capa de RAG para el asistente personal con:
-  - memoria de preferencias del usuario,
-  - documentos o reglas de contexto,
-  - recuperación semántica de información relevante,
-  - integración con el agente para responder mejor.
-
----
-
-## Ruta de implementación en este repositorio
-
-### Sprint 1: preparar la capa de datos
-
-- Crear la base de datos personal_management.
-- Definir la colección personal_tasks.
-- Insertar ejemplos reales.
-- Probar consultas básicas.
-
-### Sprint 2: ampliar el servidor MCP
-
-- Añadir herramientas de gestión de tareas.
-- Asegurar que las respuestas sean serializables y útiles.
-- Añadir validaciones de entrada.
-
-### Sprint 3: mejorar el agente
-
-- Hacer que el sistema entienda intenciones de negocio.
-- Añadir un flujo para tareas, recordatorios y preguntas.
-
-### Sprint 4: integrar Alexa
-
-- Crear un endpoint de backend.
-- Conectar la lógica del agente con la interfaz por voz.
-- Probar comandos reales.
-
-### Sprint 5: hardening
-
-- Añadir tests.
-- Crear documentación.
-- Preparar despliegue.
-
----
-
-## Conceptos que debes dominar para convertirte en experto
+Ese trabajo hará que la siguiente etapa sea mucho más limpia y profesional.
 
 ### 1. IA generativa
 

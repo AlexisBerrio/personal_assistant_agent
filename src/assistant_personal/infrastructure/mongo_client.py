@@ -26,10 +26,19 @@ class MongoConnection:
         try:
             self.client = MongoClient(settings.mongo_uri, serverSelectionTimeoutMS=10000)
             self.client.admin.command("ping")
+            self._ensure_task_indexes()
         except Exception as exc:  # pragma: no cover - fallback de conexión
             self.connection_error = str(exc)
             self.client = None
             print(f"[Mongo] No se pudo conectar: {exc}", file=sys.stderr)
+
+    def _ensure_task_indexes(self) -> None:
+        """Crea índices de negocio necesarios para la colección de tareas."""
+        if self.client is None:
+            return
+
+        db = self.client[settings.mongo_db_name]
+        db.personal_tasks.create_index([("task_id", 1)], unique=True)
 
     def get_db(self, db_name: str = settings.mongo_db_name):
         """Devuelve una base de datos si la conexión está disponible."""

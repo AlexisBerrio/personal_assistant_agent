@@ -8,6 +8,7 @@ class Task:
     """
 
     title: str
+    task_id: Optional[str] = None
     description: Optional[str] = None
     status: str = "In Progress"
     category: Optional[str] = None

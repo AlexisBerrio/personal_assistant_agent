@@ -1,12 +1,13 @@
-# Arquitectura profesional propuesta para el proyecto
+# Arquitectura profesional actual del proyecto
 
 ## Objetivo
 
-Convertir el proyecto actual en una arquitectura más cercana a una implementación real de producto, con separación de responsabilidades, facilidad para escalar y claridad pedagógica.
+Mantener una arquitectura clara y pedagógica, con separación de responsabilidades entre negocio, infraestructura e interfaces, mientras el proyecto evoluciona desde un prototipo funcional hacia un sistema más completo.
 
-## Estructura propuesta
+## Estructura actual
 
 ```text
+app.py
 src/
   assistant_personal/
     __init__.py
@@ -23,89 +24,85 @@ src/
     interfaces/
       __init__.py
       cli.py
+tests/
+  test_task_service.py
 ```
 
 ## Capas del sistema
 
-### 1. Configuración
+### 1. Dominio
 
-Responsable de cargar variables de entorno y centralizar ajustes del sistema.
+Responsable de modelar la entidad principal del negocio.
 
-- Se encarga de leer .env.
-- Define valores como URI de MongoDB, modelo OpenAI y comandos de ejecución.
+- Define la clase Task.
+- Representa los datos de una tarea de forma clara.
+- Evita mezclar lógica de infraestructura con reglas de negocio.
 
-### 2. Dominio
+### 2. Aplicación
 
-Representa las reglas y entidades del negocio.
+Contiene los casos de uso del sistema.
 
-- Aquí van modelos como Task.
-- Se evitan lógicas de infraestructura en esta capa.
+- TaskService gestiona la creación y consulta de tareas.
+- Se encarga de convertir los datos a un payload compatible con MongoDB.
+- También serializa los resultados para devolver JSON limpio a la API.
 
-### 3. Aplicación
+### 3. Infraestructura
 
-Contiene los casos de uso.
+Se encarga de integrar con servicios externos y capas técnicas.
 
-- Crear una tarea.
-- Listar tareas.
-- Completar una tarea.
-- Consultar tareas por prioridad o estado.
+- mongo_client.py abre la conexión con MongoDB.
+- La base de datos usada actualmente es personal_management.
+- La colección principal es personal_tasks.
 
-### 4. Infraestructura
+### 4. Interfaces
 
-Se encarga de integrar con servicios externos.
+Son los puntos de entrada del sistema.
 
-- MongoDB.
-- OpenAI.
-- MCP.
-- Alexa o APIs externas.
+- app.py expone una API REST con FastAPI.
+- /health devuelve estado básico del servicio.
+- /tasks permite listar y crear tareas.
+- cli.py ofrece una forma simple de inspeccionar tareas desde terminal.
 
-### 5. Interfaces
+## Flujo actual
 
-Es el punto de entrada del sistema.
+1. El cliente envía una petición HTTP a la API.
+2. FastAPI crea o recibe un objeto Task a partir del cuerpo JSON.
+3. TaskService prepara el payload y lo persiste en MongoDB.
+4. La respuesta vuelve al cliente con datos serializados y compatibles con JSON.
 
-- CLI.
-- API HTTP.
-- Integración con Alexa.
-- Future UI.
+## Qué aporta esta arquitectura
 
-## Cómo esta arquitectura ayuda
+- Mantiene el negocio separado de la infraestructura.
+- Facilita el aprendizaje y la comprensión del sistema.
+- Hace posible escalar a agentes, MCP o Alexa sin reescribir todo desde cero.
+- Permite introducir repositorios, validaciones más fuertes y servicios adicionales en fases futuras.
 
-- Facilita entender el flujo real de una solución profesional.
-- Separa negocio de infraestructura.
-- Hace más fácil agregar nuevas funcionalidades.
-- Permite escalar sin mezclar todo en un único archivo.
+## Evolución recomendada
 
-## Siguiente evolución recomendada
+### Fase A: consolidar la base
 
-### Fase A: consolidar capas
+- añadir validaciones más estrictas en la API,
+- separar aún más la lógica de acceso a datos,
+- mejorar los tests de integración.
 
-- Añadir repositorios para abstraer MongoDB.
-- Separar validación de datos de la lógica de negocio.
-- Crear un servicio de tareas más robusto.
+### Fase B: conectar agentes y herramientas
 
-### Fase B: introducir una API
+- exponer tareas como herramientas para un agente,
+- integrar un servidor MCP,
+- orquestar flujos de negocio con LLMs.
 
-- Añadir FastAPI.
-- Exponer endpoints para crear y consultar tareas.
+### Fase C: experiencia conversacional
 
-### Fase C: integrar agentes y herramientas
-
-- Conectar el servicio de tareas con el agente MCP.
-- Añadir un orquestador que decida cuándo usar herramientas.
-
-### Fase D: Alexa
-
-- Crear un endpoint para intents de Alexa.
-- Mapear comandos de voz a acciones del sistema.
+- integrar Alexa o una interfaz de voz,
+- traducir comandos naturales a acciones del sistema.
 
 ## Recomendación pedagógica
 
-Aprende el proyecto en este orden:
+El proyecto ya ha avanzado lo suficiente como para enseñar el patrón correcto de diseño:
 
-1. Configuración.
-2. Dominio.
-3. Casos de uso.
-4. Infraestructura.
-5. Interfaces.
+1. dominio claro,
+2. servicio de aplicación,
+3. infraestructura aislada,
+4. interfaces simples y bien definidas.
 
-Así comprenderás cómo se construye una implementación real, no solo un script experimental.
+Ese orden es el que mejor prepara el proyecto para crecer hacia un asistente real y profesional.
