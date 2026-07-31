@@ -85,6 +85,22 @@ class TaskService:
         result = db.personal_tasks.insert_one(payload)
         return {"inserted_id": str(result.inserted_id), "task_id": payload["task_id"]}
 
+    def update_task(self, task_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+        """Actualiza campos de una tarea existente identificada por task_id."""
+        if not updates:
+            raise ValueError("No se proporcionaron campos para actualizar")
+
+        db = get_db(self.db_name)
+        result = db.personal_tasks.update_one(
+            {"task_id": task_id},
+            {"$set": updates},
+        )
+        if result.matched_count == 0:
+            return None
+
+        updated_task = db.personal_tasks.find_one({"task_id": task_id}, {"_id": 0})
+        return self._serialize_value(updated_task) if updated_task is not None else None
+
     def complete_task(self, task_id: str) -> dict[str, Any]:
         """Marca una tarea como completada en base a su task_id."""
         db = get_db(self.db_name)

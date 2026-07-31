@@ -70,7 +70,20 @@ def get_task(task_id: str) -> dict[str, object] | None:
     return task
 
 
-@app.post("/tasks/complete")
+@app.patch("/tasks/{task_id}")
+def update_task(task_id: str, payload: dict[str, Any]) -> dict[str, object]:
+    """Actualiza una tarea existente identificada por task_id."""
+    try:
+        updated_task = service.update_task(task_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if updated_task is None:
+        raise HTTPException(status_code=404, detail="Tarea no encontrada")
+    return updated_task
+
+
+@app.patch("/tasks/complete")
 def complete_task(payload: dict[str, str]) -> dict[str, int]:
     """Marca una tarea como completada usando el task_id recibido en el body."""
     task_id = payload.get("task_id", "").strip()
