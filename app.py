@@ -61,6 +61,15 @@ def list_tasks() -> list[dict[str, object]]:
     return service.list_tasks()
 
 
+@app.get("/tasks/{task_id}")
+def get_task(task_id: str) -> dict[str, object] | None:
+    """Devuelve una tarea concreta a partir de su task_id."""
+    task = service.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Tarea no encontrada")
+    return task
+
+
 @app.post("/tasks/complete")
 def complete_task(payload: dict[str, str]) -> dict[str, int]:
     """Marca una tarea como completada usando el task_id recibido en el body."""

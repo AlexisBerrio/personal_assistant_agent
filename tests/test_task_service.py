@@ -118,6 +118,15 @@ class TaskServiceTests(unittest.TestCase):
         self.assertEqual(result[0]["dates"]["due_date"], "2026-05-24T18:00:00")
         self.assertEqual(result[0]["dates"]["completed_at"], None)
 
+    def test_get_task_by_id_endpoint_calls_service(self):
+        with patch("app.service.get_task", return_value={"title": "Tarea demo", "task_id": "task-123"}) as mock_get_task:
+            client = TestClient(app)
+            response = client.get("/tasks/task-123")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"title": "Tarea demo", "task_id": "task-123"})
+        mock_get_task.assert_called_once_with("task-123")
+
     def test_complete_task_endpoint_calls_service(self):
         with patch("app.service.complete_task", return_value={"matched": 1, "modified": 1}) as mock_complete_task:
             client = TestClient(app)

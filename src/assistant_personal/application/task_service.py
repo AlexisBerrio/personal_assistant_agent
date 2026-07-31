@@ -61,6 +61,14 @@ class TaskService:
         raw_tasks = list(db.personal_tasks.find({}, {"_id": 0}).limit(10))
         return [self._serialize_value(task) for task in raw_tasks]
 
+    def get_task(self, task_id: str) -> dict[str, Any] | None:
+        """Devuelve una tarea concreta por su task_id."""
+        db = get_db(self.db_name)
+        task = db.personal_tasks.find_one({"task_id": task_id}, {"_id": 0})
+        if task is None:
+            return None
+        return self._serialize_value(task)
+
     def create_task(self, task: Task | dict[str, Any]) -> dict[str, Any]:
         """Crea una nueva tarea en MongoDB.
 
