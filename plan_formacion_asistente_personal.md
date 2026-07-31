@@ -5,7 +5,7 @@
 La base funcional del proyecto ya está operativa:
 
 - [app.py](app.py): API FastAPI con endpoints de salud y gestión de tareas.
-- [src/assistant_personal/application/task_service.py](src/assistant_personal/application/task_service.py): servicio de negocio para crear y listar tareas.
+- [src/assistant_personal/application/task_service.py](src/assistant_personal/application/task_service.py): servicio de negocio para crear, listar, consultar, actualizar y completar tareas.
 - [src/assistant_personal/infrastructure/mongo_client.py](src/assistant_personal/infrastructure/mongo_client.py): conexión con MongoDB.
 - [src/assistant_personal/interfaces/cli.py](src/assistant_personal/interfaces/cli.py): interfaz simple por terminal.
 - [tests/test_task_service.py](tests/test_task_service.py): pruebas básicas del comportamiento del servicio.
@@ -14,7 +14,8 @@ Esto significa que ya has construido los bloques de:
 
 - persistencia de tareas en MongoDB,
 - exposición de funcionalidad mediante una API REST,
-- separación modular entre negocio e infraestructura.
+- separación modular entre negocio e infraestructura,
+- patrón profesional de actualización con PATCH para modificar recursos.
 
 ## Objetivo final
 

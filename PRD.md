@@ -10,7 +10,7 @@ Se está construyendo un asistente personal orientado a la gestión de tareas y 
 - MCP como evolución natural para exponer herramientas a agentes.
 - Agentes con LLM y Alexa como futuras interfaces de interacción.
 
-El objetivo inicial ya ha quedado materializado en una base funcional capaz de crear, listar y persistir tareas personales mediante una API y un servicio de negocio claro.
+El objetivo inicial ya ha quedado materializado en una base funcional capaz de crear, listar, consultar, actualizar y completar tareas personales mediante una API y un servicio de negocio claro.
 
 ---
 
@@ -46,7 +46,7 @@ En esta etapa ya se ha consolidado la capa base de negocio y de interfaz:
 
 - Estructura modular por capas: domain, application, infrastructure e interfaces.
 - Modelo de dominio para tareas con campos como título, descripción, estado, categoría, etiquetas, prioridad, fechas, recurrencia, metadatos y pasos.
-- Servicio de aplicación para crear y listar tareas.
+- Servicio de aplicación para crear, listar, consultar, actualizar y completar tareas.
 - Conexión a MongoDB a través de una capa de infraestructura.
 - API FastAPI con endpoints de salud y gestión de tareas.
 - CLI para listar tareas desde la capa de aplicación.
@@ -107,6 +107,9 @@ Responsable de:
 - validar entradas,
 - crear tareas,
 - listar tareas,
+- consultar tareas por task_id,
+- actualizar campos parciales,
+- completar tareas,
 - serializar valores para devolver respuestas JSON compatibles.
 
 ### 6.3 Infraestructura MongoDB
@@ -124,16 +127,21 @@ Expone operaciones simples mediante FastAPI:
 - GET /health
 - POST /tasks
 - GET /tasks
+- GET /tasks/{task_id}
+- PATCH /tasks/{task_id}
+- PATCH /tasks/complete
 
 ---
 
 ## 7. Requisitos funcionales
 
 1. El sistema debe poder crear tareas con información básica o con estructura completa.
-2. El sistema debe poder listar tareas almacenadas.
-3. El sistema debe validar que una tarea tenga un título.
-4. La API debe responder con errores claros si la entrada es inválida.
-5. El sistema debe estar preparado para integrar agentes y herramientas más adelante.
+2. El sistema debe poder listar y consultar tareas almacenadas.
+3. El sistema debe poder actualizar tareas de forma parcial mediante PATCH.
+4. El sistema debe poder completar tareas mediante una actualización de estado.
+5. El sistema debe validar que una tarea tenga un título.
+6. La API debe responder con errores claros si la entrada es inválida.
+7. El sistema debe estar preparado para integrar agentes y herramientas más adelante.
 
 ---
 

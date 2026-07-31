@@ -42,7 +42,7 @@ Responsable de modelar la entidad principal del negocio.
 
 Contiene los casos de uso del sistema.
 
-- TaskService gestiona la creación y consulta de tareas.
+- TaskService gestiona la creación, lectura, actualización y finalización de tareas.
 - Se encarga de convertir los datos a un payload compatible con MongoDB.
 - También serializa los resultados para devolver JSON limpio a la API.
 
@@ -61,6 +61,8 @@ Son los puntos de entrada del sistema.
 - app.py expone una API REST con FastAPI.
 - /health devuelve estado básico del servicio.
 - /tasks permite listar y crear tareas.
+- /tasks/{task_id} permite consultar o actualizar una tarea concreta.
+- /tasks/complete permite completar una tarea con un payload mínimo.
 - cli.py ofrece una forma simple de inspeccionar tareas desde terminal.
 
 ## Flujo actual
