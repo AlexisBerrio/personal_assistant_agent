@@ -13,17 +13,26 @@ service = TaskService()
 
 class TaskCreateRequest(BaseModel):
     """Modelo que define qué datos recibe la API para crear una tarea."""
-    title: str = Field(min_length=1)
-    description: str | None = None
-    status: str = Field(default="Pending", min_length=1)
-    category: str | None = None
-    tags: list[str] = Field(default_factory=list)
-    priority: Any | None = None
-    dates: dict[str, Any] | None = None
-    recurrence: dict[str, Any] | None = None
-    context_metadata: dict[str, Any] | None = None
-    steps: list[dict[str, Any]] = Field(default_factory=list)
-    agent_notes: list[dict[str, Any]] = Field(default_factory=list)
+    title: str = Field(min_length=1, description="Título principal de la tarea.", json_schema_extra={"example": "Revisar propuesta"})
+    description: str | None = Field(default=None, description="Descripción opcional de la tarea.", json_schema_extra={"example": "Confirmar los últimos cambios antes de enviar"})
+    status: str = Field(default="Pending", min_length=1, description="Estado de la tarea. Valores permitidos: Pending, In Progress, Completed, Deleted.", json_schema_extra={"example": "Pending"})
+    category: str | None = Field(default=None, description="Categoría de la tarea. Valores permitidos: Personal, Work, Study, Health, Home.", json_schema_extra={"example": "Work"})
+    tags: list[str] = Field(default_factory=list, description="Etiquetas de clasificación.", json_schema_extra={"example": ["oficina", "urgente"]})
+    priority: dict[str, Any] | None = Field(default=None, description="Prioridad de la tarea. Debe incluir un campo level con uno de: Low, Medium, High.", json_schema_extra={"example": {"level": "High", "score": 90}})
+    dates: dict[str, Any] | None = Field(default=None, description="Fechas asociadas a la tarea.", json_schema_extra={"example": {"created_at": "2026-08-02T10:00:00", "due_date": "2026-08-05T12:00:00"}})
+    recurrence: dict[str, Any] | None = Field(default=None, description="Reglas de recurrencia si aplica.", json_schema_extra={"example": {"is_recurring": False, "frequency": None}})
+    context_metadata: dict[str, Any] | None = Field(default=None, description="Metadatos de contexto adicionales.", json_schema_extra={"example": {"source": "manual", "location": "home"}})
+    steps: list[dict[str, Any]] = Field(default_factory=list, description="Pasos de ejecución de la tarea.", json_schema_extra={"example": [{"step_id": 1, "text": "Revisar contenido", "is_completed": False}]})
+    agent_notes: list[dict[str, Any]] = Field(default_factory=list, description="Notas del agente asociadas a la tarea.", json_schema_extra={"example": [{"timestamp": "2026-08-02T10:05:00", "note": "Tarea creada desde la API"}]})
+
+
+class TaskUpdateRequest(BaseModel):
+    """Modelo que define qué datos admite la API para actualizar una tarea."""
+    title: str | None = Field(default=None, description="Nuevo título para la tarea.", json_schema_extra={"example": "Revisar propuesta actualizada"})
+    description: str | None = Field(default=None, description="Nueva descripción de la tarea.", json_schema_extra={"example": "Confirmar los últimos cambios antes de enviar"})
+    status: str | None = Field(default=None, description="Estado de la tarea. Valores permitidos: Pending, In Progress, Completed, Deleted.", json_schema_extra={"example": "In Progress"})
+    category: str | None = Field(default=None, description="Categoría de la tarea. Valores permitidos: Personal, Work, Study, Health, Home.", json_schema_extra={"example": "Work"})
+    priority: dict[str, Any] | None = Field(default=None, description="Prioridad de la tarea. Debe incluir un campo level con uno de: Low, Medium, High.", json_schema_extra={"example": {"level": "High", "score": 90}})
 
 
 @app.get("/health")
@@ -86,20 +95,21 @@ def get_task_history(task_id: str) -> list[dict[str, object]]:
 
 
 @app.patch("/tasks/{task_id}")
-def update_task(task_id: str, payload: dict[str, Any]) -> dict[str, object]:
+def update_task(task_id: str, payload: TaskUpdateRequest) -> dict[str, object]:
     """Actualiza una tarea existente identificada por task_id.
 
     Si el payload incluye un estado "Completed", la tarea se marca como
     completada usando la misma ruta de actualización.
     """
-    if not isinstance(payload, dict) or not payload:
+    payload_data = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
+    if not payload_data:
         raise HTTPException(status_code=400, detail="Se debe proporcionar al menos un campo para actualizar")
 
-    if str(payload.get("status", "")).strip().lower() == "completed":
+    if str(payload_data.get("status", "")).strip().lower() == "completed":
         return service.complete_task(task_id)
 
     try:
-        updated_task = service.update_task(task_id, payload)
+        updated_task = service.update_task(task_id, payload_data)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -54,11 +54,23 @@ uvicorn app:app --host 127.0.0.1 --port 8000
 
 Envío JSON a POST /tasks con un cuerpo como este:
 
-Valores permitidos para el campo status:
-- In Progress
-- Completed
-- Pending
-- Deleted
+```json
+{
+  "title": "Nueva tarea",
+  "description": "Creada desde la API",
+  "status": "Pending",
+  "category": "Work",
+  "priority": {
+    "level": "High",
+    "score": 90
+  }
+}
+```
+
+Valores permitidos:
+- status: Pending, In Progress, Completed, Deleted
+- category: Personal, Work, Study, Health, Home
+- priority.level: Low, Medium, High
 
 ```json
 {
@@ -75,8 +87,13 @@ Envío JSON a PATCH /tasks/{task_id} con solo los campos que quieras modificar:
 
 ```json
 {
-  "status": "Completed",
-  "title": "Nueva tarea actualizada"
+  "status": "In Progress",
+  "title": "Nueva tarea actualizada",
+  "category": "Work",
+  "priority": {
+    "level": "Medium",
+    "score": 60
+  }
 }
 ```
 

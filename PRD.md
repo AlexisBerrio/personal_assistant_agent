@@ -115,10 +115,22 @@ Responsable de:
 #### Catálogo de valores de negocio
 
 El campo status admite estos valores:
+- Pending
 - In Progress
 - Completed
-- Pending
 - Deleted
+
+La categoría admite estos valores:
+- Personal
+- Work
+- Study
+- Health
+- Home
+
+La prioridad admite estos valores en el campo level:
+- Low
+- Medium
+- High
 
 - convertir datos a un formato adecuado,
 - validar entradas,

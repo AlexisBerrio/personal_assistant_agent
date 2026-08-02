@@ -2,8 +2,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from copy import deepcopy
-
 from src.assistant_personal.domain.task_models import Task
 from src.assistant_personal.infrastructure.mongo_client import get_db
 
@@ -80,42 +78,58 @@ class TaskService:
             return [self._serialize_value(item) for item in value]
         return value
 
+    def _validate_status(self, status: Any) -> str:
+        """Valida y normaliza el estado de una tarea."""
+        if status is None:
+            return self.DEFAULT_STATUS
+        if not isinstance(status, str) or not status.strip():
+            raise ValueError("El estado de la tarea no puede estar vacío")
+
+        normalized_status = status.strip()
+        if normalized_status not in self.ALLOWED_STATUS_VALUES:
+            allowed_values = ", ".join(sorted(self.ALLOWED_STATUS_VALUES))
+            raise ValueError(f"Estado no válido. Valores permitidos: {allowed_values}")
+        return normalized_status
+
+    def _validate_priority(self, priority: Any) -> dict[str, Any] | None:
+        """Valida y normaliza la prioridad de una tarea."""
+        if priority is None:
+            return None
+        if not isinstance(priority, dict):
+            raise ValueError("La prioridad debe ser un objeto con un campo level")
+
+        priority_level = priority.get("level")
+        if not isinstance(priority_level, str) or not priority_level.strip():
+            raise ValueError("La prioridad debe incluir un nivel válido")
+
+        normalized_priority = priority_level.strip()
+        if normalized_priority not in self.ALLOWED_PRIORITY_VALUES:
+            allowed_values = ", ".join(sorted(self.ALLOWED_PRIORITY_VALUES))
+            raise ValueError(f"Prioridad no válida. Valores permitidos: {allowed_values}")
+        return {**priority, "level": normalized_priority}
+
+    def _validate_category(self, category: Any) -> str | None:
+        """Valida y normaliza la categoría de una tarea."""
+        if category is None:
+            return None
+        if not isinstance(category, str) or not category.strip():
+            raise ValueError("La categoría de la tarea no puede estar vacía")
+
+        normalized_category = category.strip()
+        if normalized_category not in self.ALLOWED_CATEGORY_VALUES:
+            allowed_values = ", ".join(sorted(self.ALLOWED_CATEGORY_VALUES))
+            raise ValueError(f"Categoría no válida. Valores permitidos: {allowed_values}")
+        return normalized_category
+
     def _validate_create_payload(self, payload: dict[str, Any]) -> None:
         """Valida los datos básicos de una tarea antes de persistirla."""
         title = payload.get("title")
         if not isinstance(title, str) or not title.strip():
             raise ValueError("El título de la tarea es obligatorio")
 
-        status = payload.get("status")
-        if status is not None:
-            if not isinstance(status, str) or not status.strip():
-                raise ValueError("El estado de la tarea no puede estar vacío")
-            normalized_status = status.strip()
-            if normalized_status not in self.ALLOWED_STATUS_VALUES:
-                allowed_values = ", ".join(sorted(self.ALLOWED_STATUS_VALUES))
-                raise ValueError(f"Estado no válido. Valores permitidos: {allowed_values}")
-
-        priority = payload.get("priority")
-        if priority is not None:
-            if isinstance(priority, dict):
-                priority_level = priority.get("level")
-                if not isinstance(priority_level, str) or not priority_level.strip():
-                    raise ValueError("La prioridad debe incluir un nivel válido")
-                normalized_priority = priority_level.strip()
-                if normalized_priority not in self.ALLOWED_PRIORITY_VALUES:
-                    allowed_values = ", ".join(sorted(self.ALLOWED_PRIORITY_VALUES))
-                    raise ValueError(f"Prioridad no válida. Valores permitidos: {allowed_values}")
-            else:
-                raise ValueError("La prioridad debe ser un objeto con un campo level")
-
-        category = payload.get("category")
-        if category is not None:
-            if not isinstance(category, str) or not category.strip():
-                raise ValueError("La categoría de la tarea no puede estar vacía")
-            normalized_category = category.strip()
-            if normalized_category not in self.ALLOWED_CATEGORY_VALUES:
-                allowed_values = ", ".join(sorted(self.ALLOWED_CATEGORY_VALUES))
-                raise ValueError(f"Categoría no válida. Valores permitidos: {allowed_values}")
+        self._validate_status(payload.get("status"))
+        self._validate_priority(payload.get("priority"))
+        self._validate_category(payload.get("category"))
 
     def _active_task_filter(self) -> dict[str, Any]:
         """Devuelve el filtro para encontrar tareas que no han sido borradas lógicamente."""
@@ -130,37 +144,13 @@ class TaskService:
             updates["title"] = title.strip()
 
         if "status" in updates:
-            status = updates["status"]
-            if not isinstance(status, str) or not status.strip():
-                raise ValueError("El estado de la tarea no puede estar vacío")
-            normalized_status = status.strip()
-            if normalized_status not in self.ALLOWED_STATUS_VALUES:
-                allowed_values = ", ".join(sorted(self.ALLOWED_STATUS_VALUES))
-                raise ValueError(f"Estado no válido. Valores permitidos: {allowed_values}")
-            updates["status"] = normalized_status
+            updates["status"] = self._validate_status(updates["status"])
 
         if "priority" in updates:
-            priority = updates["priority"]
-            if not isinstance(priority, dict):
-                raise ValueError("La prioridad debe ser un objeto con un campo level")
-            priority_level = priority.get("level")
-            if not isinstance(priority_level, str) or not priority_level.strip():
-                raise ValueError("La prioridad debe incluir un nivel válido")
-            normalized_priority = priority_level.strip()
-            if normalized_priority not in self.ALLOWED_PRIORITY_VALUES:
-                allowed_values = ", ".join(sorted(self.ALLOWED_PRIORITY_VALUES))
-                raise ValueError(f"Prioridad no válida. Valores permitidos: {allowed_values}")
-            updates["priority"] = {**priority, "level": normalized_priority}
+            updates["priority"] = self._validate_priority(updates["priority"])
 
         if "category" in updates:
-            category = updates["category"]
-            if not isinstance(category, str) or not category.strip():
-                raise ValueError("La categoría de la tarea no puede estar vacía")
-            normalized_category = category.strip()
-            if normalized_category not in self.ALLOWED_CATEGORY_VALUES:
-                allowed_values = ", ".join(sorted(self.ALLOWED_CATEGORY_VALUES))
-                raise ValueError(f"Categoría no válida. Valores permitidos: {allowed_values}")
-            updates["category"] = normalized_category
+            updates["category"] = self._validate_category(updates["category"])
 
     def list_tasks(self) -> list[dict[str, Any]]:
         """Devuelve las tareas más recientes de la colección personal_tasks."""
@@ -192,7 +182,9 @@ class TaskService:
         self._validate_create_payload(payload)
 
         payload["title"] = payload["title"].strip()
-        payload["status"] = payload.get("status") or self.DEFAULT_STATUS
+        payload["status"] = self._validate_status(payload.get("status"))
+        payload["priority"] = self._validate_priority(payload.get("priority"))
+        payload["category"] = self._validate_category(payload.get("category"))
         payload["task_id"] = payload.get("task_id") or str(uuid.uuid4())
         payload.setdefault("is_deleted", False)
         payload.setdefault("deleted_at", None)
