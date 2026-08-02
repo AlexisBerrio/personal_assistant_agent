@@ -188,6 +188,45 @@ class TaskServiceTests(unittest.TestCase):
 
         self.assertIn("título", str(context.exception).lower())
 
+    def test_create_task_uses_pending_as_default_status(self):
+        fake_db = FakeDatabase()
+
+        with patch("src.assistant_personal.application.task_service.get_db", return_value=fake_db):
+            service = TaskService()
+            service.create_task(Task(title="Nueva tarea"))
+
+        self.assertEqual(fake_db.personal_tasks.last_insert_payload["status"], "Pending")
+
+    def test_update_task_marks_task_as_in_progress_when_modified(self):
+        fake_db = FakeDatabase()
+        fake_db.personal_tasks.doc = {
+            "task_id": "task-123",
+            "title": "Tarea pendiente",
+            "status": "Pending",
+            "is_deleted": False,
+            "deleted_at": None,
+        }
+
+        with patch("src.assistant_personal.application.task_service.get_db", return_value=fake_db):
+            service = TaskService()
+            service.update_task("task-123", {"description": "Actualizada"})
+
+        self.assertEqual(fake_db.personal_tasks.last_update_payload["$set"]["status"], "In Progress")
+
+    def test_create_task_rejects_invalid_priority(self):
+        service = TaskService()
+        with self.assertRaises(ValueError) as context:
+            service.create_task({"title": "Tarea", "priority": "Critical"})
+
+        self.assertIn("prioridad", str(context.exception).lower())
+
+    def test_create_task_rejects_invalid_category(self):
+        service = TaskService()
+        with self.assertRaises(ValueError) as context:
+            service.create_task({"title": "Tarea", "category": "Unknown"})
+
+        self.assertIn("categoría", str(context.exception).lower())
+
     def test_delete_task_endpoint_calls_service(self):
         with patch("app.service.delete_task", return_value={"task_id": "task-123", "deleted": True}) as mock_delete_task:
             client = TestClient(app)

@@ -10,7 +10,7 @@ class Task:
     title: str
     task_id: Optional[str] = None
     description: Optional[str] = None
-    status: str = "In Progress"
+    status: str = "Pending"
     category: Optional[str] = None
     tags: list[str] = field(default_factory=list)
     priority: Any = None

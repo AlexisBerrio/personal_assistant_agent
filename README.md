@@ -54,11 +54,17 @@ uvicorn app:app --host 127.0.0.1 --port 8000
 
 Envío JSON a POST /tasks con un cuerpo como este:
 
+Valores permitidos para el campo status:
+- In Progress
+- Completed
+- Pending
+- Deleted
+
 ```json
 {
   "title": "Nueva tarea",
   "description": "Creada desde la API",
-  "status": "In Progress",
+  "status": "Pending",
   "category": "Work"
 }
 ```

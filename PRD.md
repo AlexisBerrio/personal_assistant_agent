@@ -103,6 +103,23 @@ Representa la entidad principal del negocio con la estructura actual de tareas:
 
 Responsable de:
 
+- validar entradas y valores de negocio,
+- aplicar reglas de dominio como el catálogo de estados permitidos,
+- crear tareas,
+- listar tareas,
+- consultar tareas por task_id,
+- actualizar campos parciales,
+- completar tareas,
+- serializar valores para devolver respuestas JSON compatibles.
+
+#### Catálogo de valores de negocio
+
+El campo status admite estos valores:
+- In Progress
+- Completed
+- Pending
+- Deleted
+
 - convertir datos a un formato adecuado,
 - validar entradas,
 - crear tareas,
@@ -141,8 +158,9 @@ Expone operaciones simples mediante FastAPI:
 4. El sistema debe poder completar tareas mediante una actualización de estado.
 5. El sistema debe poder consultar el historial de cambios de una tarea.
 6. El sistema debe validar que una tarea tenga un título.
-7. La API debe responder con errores claros si la entrada es inválida.
-8. El sistema debe estar preparado para integrar agentes y herramientas más adelante.
+7. El sistema debe validar que el estado de una tarea use uno de los valores permitidos del catálogo.
+8. La API debe responder con errores claros si la entrada es inválida.
+9. El sistema debe estar preparado para integrar agentes y herramientas más adelante.
 
 ---
 

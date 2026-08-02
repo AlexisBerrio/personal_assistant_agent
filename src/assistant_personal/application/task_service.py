@@ -15,6 +15,29 @@ class TaskService:
     listar o completar tareas y se encarga de comunicarse con MongoDB.
     """
 
+    DEFAULT_STATUS = "Pending"
+    IN_PROGRESS_STATUS = "In Progress"
+    COMPLETED_STATUS = "Completed"
+    DELETED_STATUS = "Deleted"
+    ALLOWED_STATUS_VALUES = {
+        DEFAULT_STATUS,
+        IN_PROGRESS_STATUS,
+        COMPLETED_STATUS,
+        DELETED_STATUS,
+    }
+    ALLOWED_PRIORITY_VALUES = {
+        "Low",
+        "Medium",
+        "High",
+    }
+    ALLOWED_CATEGORY_VALUES = {
+        "Personal",
+        "Work",
+        "Study",
+        "Health",
+        "Home",
+    }
+
     def __init__(self, db_name: str = "personal_management") -> None:
         # Guardamos el nombre de la base de datos que usaremos.
         self.db_name = db_name
@@ -64,8 +87,35 @@ class TaskService:
             raise ValueError("El título de la tarea es obligatorio")
 
         status = payload.get("status")
-        if status is not None and (not isinstance(status, str) or not status.strip()):
-            raise ValueError("El estado de la tarea no puede estar vacío")
+        if status is not None:
+            if not isinstance(status, str) or not status.strip():
+                raise ValueError("El estado de la tarea no puede estar vacío")
+            normalized_status = status.strip()
+            if normalized_status not in self.ALLOWED_STATUS_VALUES:
+                allowed_values = ", ".join(sorted(self.ALLOWED_STATUS_VALUES))
+                raise ValueError(f"Estado no válido. Valores permitidos: {allowed_values}")
+
+        priority = payload.get("priority")
+        if priority is not None:
+            if isinstance(priority, dict):
+                priority_level = priority.get("level")
+                if not isinstance(priority_level, str) or not priority_level.strip():
+                    raise ValueError("La prioridad debe incluir un nivel válido")
+                normalized_priority = priority_level.strip()
+                if normalized_priority not in self.ALLOWED_PRIORITY_VALUES:
+                    allowed_values = ", ".join(sorted(self.ALLOWED_PRIORITY_VALUES))
+                    raise ValueError(f"Prioridad no válida. Valores permitidos: {allowed_values}")
+            else:
+                raise ValueError("La prioridad debe ser un objeto con un campo level")
+
+        category = payload.get("category")
+        if category is not None:
+            if not isinstance(category, str) or not category.strip():
+                raise ValueError("La categoría de la tarea no puede estar vacía")
+            normalized_category = category.strip()
+            if normalized_category not in self.ALLOWED_CATEGORY_VALUES:
+                allowed_values = ", ".join(sorted(self.ALLOWED_CATEGORY_VALUES))
+                raise ValueError(f"Categoría no válida. Valores permitidos: {allowed_values}")
 
     def _active_task_filter(self) -> dict[str, Any]:
         """Devuelve el filtro para encontrar tareas que no han sido borradas lógicamente."""
@@ -83,7 +133,34 @@ class TaskService:
             status = updates["status"]
             if not isinstance(status, str) or not status.strip():
                 raise ValueError("El estado de la tarea no puede estar vacío")
-            updates["status"] = status.strip()
+            normalized_status = status.strip()
+            if normalized_status not in self.ALLOWED_STATUS_VALUES:
+                allowed_values = ", ".join(sorted(self.ALLOWED_STATUS_VALUES))
+                raise ValueError(f"Estado no válido. Valores permitidos: {allowed_values}")
+            updates["status"] = normalized_status
+
+        if "priority" in updates:
+            priority = updates["priority"]
+            if not isinstance(priority, dict):
+                raise ValueError("La prioridad debe ser un objeto con un campo level")
+            priority_level = priority.get("level")
+            if not isinstance(priority_level, str) or not priority_level.strip():
+                raise ValueError("La prioridad debe incluir un nivel válido")
+            normalized_priority = priority_level.strip()
+            if normalized_priority not in self.ALLOWED_PRIORITY_VALUES:
+                allowed_values = ", ".join(sorted(self.ALLOWED_PRIORITY_VALUES))
+                raise ValueError(f"Prioridad no válida. Valores permitidos: {allowed_values}")
+            updates["priority"] = {**priority, "level": normalized_priority}
+
+        if "category" in updates:
+            category = updates["category"]
+            if not isinstance(category, str) or not category.strip():
+                raise ValueError("La categoría de la tarea no puede estar vacía")
+            normalized_category = category.strip()
+            if normalized_category not in self.ALLOWED_CATEGORY_VALUES:
+                allowed_values = ", ".join(sorted(self.ALLOWED_CATEGORY_VALUES))
+                raise ValueError(f"Categoría no válida. Valores permitidos: {allowed_values}")
+            updates["category"] = normalized_category
 
     def list_tasks(self) -> list[dict[str, Any]]:
         """Devuelve las tareas más recientes de la colección personal_tasks."""
@@ -115,7 +192,7 @@ class TaskService:
         self._validate_create_payload(payload)
 
         payload["title"] = payload["title"].strip()
-        payload["status"] = payload.get("status") or "In Progress"
+        payload["status"] = payload.get("status") or self.DEFAULT_STATUS
         payload["task_id"] = payload.get("task_id") or str(uuid.uuid4())
         payload.setdefault("is_deleted", False)
         payload.setdefault("deleted_at", None)
@@ -131,7 +208,7 @@ class TaskService:
 
         history_entry = {
             "task_id": task_id,
-            "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S"),
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
             "changes": [],
         }
 
@@ -153,6 +230,9 @@ class TaskService:
             raise ValueError("No se proporcionaron campos para actualizar")
 
         self._validate_update_payload(updates)
+
+        if "status" not in updates:
+            updates["status"] = self.IN_PROGRESS_STATUS
 
         db = get_db(self.db_name)
         previous_task = db.personal_tasks.find_one({"task_id": task_id, "$or": [{"is_deleted": {"$ne": True}}, {"is_deleted": {"$exists": False}}]}, {"_id": 0})
@@ -179,9 +259,9 @@ class TaskService:
 
         result = db.personal_tasks.update_one(
             {"task_id": task_id, **self._active_task_filter()},
-            {"$set": {"status": "Completed"}},
+            {"$set": {"status": self.COMPLETED_STATUS}},
         )
-        self._record_history(db, task_id, {"status": "Completed"}, previous_task)
+        self._record_history(db, task_id, {"status": self.COMPLETED_STATUS}, previous_task)
         return {"matched": result.matched_count, "modified": result.modified_count}
 
     def delete_task(self, task_id: str) -> dict[str, Any] | None:
@@ -191,13 +271,13 @@ class TaskService:
         if previous_task is None:
             return None
 
-        deleted_at = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+        deleted_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         result = db.personal_tasks.update_one(
             {"task_id": task_id, **self._active_task_filter()},
-            {"$set": {"is_deleted": True, "deleted_at": deleted_at, "status": "Deleted"}},
+            {"$set": {"is_deleted": True, "deleted_at": deleted_at, "status": self.DELETED_STATUS}},
         )
         if result.matched_count == 0:
             return None
 
-        self._record_history(db, task_id, {"status": "Deleted", "is_deleted": True}, previous_task)
+        self._record_history(db, task_id, {"status": self.DELETED_STATUS, "is_deleted": True}, previous_task)
         return {"task_id": task_id, "deleted": True, "deleted_at": deleted_at}

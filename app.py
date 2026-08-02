@@ -15,7 +15,7 @@ class TaskCreateRequest(BaseModel):
     """Modelo que define qué datos recibe la API para crear una tarea."""
     title: str = Field(min_length=1)
     description: str | None = None
-    status: str = Field(default="In Progress", min_length=1)
+    status: str = Field(default="Pending", min_length=1)
     category: str | None = None
     tags: list[str] = Field(default_factory=list)
     priority: Any | None = None
