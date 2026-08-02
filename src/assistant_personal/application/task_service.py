@@ -71,6 +71,12 @@ class TaskService:
             return None
         return self._serialize_value(task)
 
+    def get_task_history(self, task_id: str) -> list[dict[str, Any]]:
+        """Devuelve el historial de cambios de una tarea."""
+        db = get_db(self.db_name)
+        history = list(db.task_history.find({"task_id": task_id}, {"_id": 0}).sort("timestamp", 1))
+        return [self._serialize_value(entry) for entry in history]
+
     def create_task(self, task: Task | dict[str, Any]) -> dict[str, Any]:
         """Crea una nueva tarea en MongoDB.
 

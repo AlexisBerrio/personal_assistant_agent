@@ -154,6 +154,15 @@ class TaskServiceTests(unittest.TestCase):
         self.assertEqual(response.json(), {"title": "Tarea demo", "task_id": "task-123"})
         mock_get_task.assert_called_once_with("task-123")
 
+    def test_get_task_history_endpoint_calls_service(self):
+        with patch("app.service.get_task_history", return_value=[{"task_id": "task-123", "changes": []}]) as mock_get_history:
+            client = TestClient(app)
+            response = client.get("/tasks/task-123/history")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [{"task_id": "task-123", "changes": []}])
+        mock_get_history.assert_called_once_with("task-123")
+
     def test_update_task_endpoint_calls_service(self):
         with patch("app.service.update_task", return_value={"task_id": "task-123", "title": "Actualizada"}) as mock_update_task:
             client = TestClient(app)

@@ -70,6 +70,15 @@ def get_task(task_id: str) -> dict[str, object] | None:
     return task
 
 
+@app.get("/tasks/{task_id}/history")
+def get_task_history(task_id: str) -> list[dict[str, object]]:
+    """Devuelve el historial de cambios de una tarea."""
+    history = service.get_task_history(task_id)
+    if not history:
+        raise HTTPException(status_code=404, detail="No se encontró historial para la tarea")
+    return history
+
+
 @app.patch("/tasks/{task_id}")
 def update_task(task_id: str, payload: dict[str, Any]) -> dict[str, object]:
     """Actualiza una tarea existente identificada por task_id.
