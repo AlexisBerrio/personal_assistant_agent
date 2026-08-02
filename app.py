@@ -1,7 +1,7 @@
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.assistant_personal.application.task_service import TaskService
 from src.assistant_personal.domain.task_models import Task
@@ -13,17 +13,17 @@ service = TaskService()
 
 class TaskCreateRequest(BaseModel):
     """Modelo que define qué datos recibe la API para crear una tarea."""
-    title: str
+    title: str = Field(min_length=1)
     description: str | None = None
-    status: str = "In Progress"
+    status: str = Field(default="In Progress", min_length=1)
     category: str | None = None
-    tags: list[str] = []
+    tags: list[str] = Field(default_factory=list)
     priority: Any | None = None
     dates: dict[str, Any] | None = None
     recurrence: dict[str, Any] | None = None
     context_metadata: dict[str, Any] | None = None
-    steps: list[dict[str, Any]] = []
-    agent_notes: list[dict[str, Any]] = []
+    steps: list[dict[str, Any]] = Field(default_factory=list)
+    agent_notes: list[dict[str, Any]] = Field(default_factory=list)
 
 
 @app.get("/health")
@@ -35,10 +35,16 @@ def health_check() -> dict[str, str]:
 @app.post("/tasks", status_code=201)
 def create_task(payload: TaskCreateRequest) -> dict[str, str]:
     """Recibe una tarea desde el cliente y la guarda usando el servicio."""
+    if not payload.title.strip():
+        raise HTTPException(status_code=400, detail="El título de la tarea es obligatorio")
+
+    if not payload.status.strip():
+        raise HTTPException(status_code=400, detail="El estado de la tarea no puede estar vacío")
+
     task = Task(
-        title=payload.title,
+        title=payload.title.strip(),
         description=payload.description,
-        status=payload.status,
+        status=payload.status.strip(),
         category=payload.category,
         tags=payload.tags,
         priority=payload.priority,
@@ -86,6 +92,9 @@ def update_task(task_id: str, payload: dict[str, Any]) -> dict[str, object]:
     Si el payload incluye un estado "Completed", la tarea se marca como
     completada usando la misma ruta de actualización.
     """
+    if not isinstance(payload, dict) or not payload:
+        raise HTTPException(status_code=400, detail="Se debe proporcionar al menos un campo para actualizar")
+
     if str(payload.get("status", "")).strip().lower() == "completed":
         return service.complete_task(task_id)
 
@@ -97,3 +106,12 @@ def update_task(task_id: str, payload: dict[str, Any]) -> dict[str, object]:
     if updated_task is None:
         raise HTTPException(status_code=404, detail="Tarea no encontrada")
     return updated_task
+
+
+@app.delete("/tasks/{task_id}")
+def delete_task(task_id: str) -> dict[str, object]:
+    """Marca una tarea como eliminada sin borrarla de la base de datos."""
+    deleted_task = service.delete_task(task_id)
+    if deleted_task is None:
+        raise HTTPException(status_code=404, detail="Tarea no encontrada")
+    return deleted_task

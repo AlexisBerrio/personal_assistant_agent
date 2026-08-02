@@ -181,6 +181,22 @@ class TaskServiceTests(unittest.TestCase):
         self.assertEqual(response.json(), {"matched": 1, "modified": 1})
         mock_complete_task.assert_called_once_with("task-123")
 
+    def test_create_task_rejects_blank_title(self):
+        service = TaskService()
+        with self.assertRaises(ValueError) as context:
+            service.create_task(Task(title="   "))
+
+        self.assertIn("título", str(context.exception).lower())
+
+    def test_delete_task_endpoint_calls_service(self):
+        with patch("app.service.delete_task", return_value={"task_id": "task-123", "deleted": True}) as mock_delete_task:
+            client = TestClient(app)
+            response = client.delete("/tasks/task-123")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"task_id": "task-123", "deleted": True})
+        mock_delete_task.assert_called_once_with("task-123")
+
 
 if __name__ == "__main__":
     unittest.main()

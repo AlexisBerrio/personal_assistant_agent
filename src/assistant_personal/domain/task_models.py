@@ -19,3 +19,5 @@ class Task:
     context_metadata: dict[str, Any] = field(default_factory=dict)
     steps: list[dict[str, Any]] = field(default_factory=list)
     agent_notes: list[dict[str, Any]] = field(default_factory=list)
+    is_deleted: bool = False
+    deleted_at: Optional[str] = None
