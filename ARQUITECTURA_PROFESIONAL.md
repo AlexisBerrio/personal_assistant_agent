@@ -62,6 +62,7 @@ Son los puntos de entrada del sistema.
 - /health devuelve estado básico del servicio.
 - /tasks permite listar y crear tareas.
 - /tasks/{task_id} permite consultar o actualizar una tarea concreta, incluyendo marcarla como completada con un payload de estado.
+- /tasks/{task_id}/history permite consultar el historial de cambios de una tarea.
 - cli.py ofrece una forma simple de inspeccionar tareas desde terminal.
 
 ## Flujo actual

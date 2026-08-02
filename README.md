@@ -88,6 +88,12 @@ Envío JSON a PATCH /tasks/{task_id} con el estado de la tarea:
 
 El proyecto también puede registrar cambios en una colección separada llamada `task_history` para no saturar la colección principal de tareas.
 
+Puedes consultar ese historial con:
+
+```http
+GET /tasks/{task_id}/history
+```
+
 Ejemplo de documento para MongoDB:
 
 ```json

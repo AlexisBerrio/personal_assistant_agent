@@ -128,6 +128,7 @@ Expone operaciones simples mediante FastAPI:
 - POST /tasks
 - GET /tasks
 - GET /tasks/{task_id}
+- GET /tasks/{task_id}/history
 - PATCH /tasks/{task_id}
 
 ---
@@ -138,9 +139,10 @@ Expone operaciones simples mediante FastAPI:
 2. El sistema debe poder listar y consultar tareas almacenadas.
 3. El sistema debe poder actualizar tareas de forma parcial mediante PATCH.
 4. El sistema debe poder completar tareas mediante una actualización de estado.
-5. El sistema debe validar que una tarea tenga un título.
-6. La API debe responder con errores claros si la entrada es inválida.
-7. El sistema debe estar preparado para integrar agentes y herramientas más adelante.
+5. El sistema debe poder consultar el historial de cambios de una tarea.
+6. El sistema debe validar que una tarea tenga un título.
+7. La API debe responder con errores claros si la entrada es inválida.
+8. El sistema debe estar preparado para integrar agentes y herramientas más adelante.
 
 ---
 

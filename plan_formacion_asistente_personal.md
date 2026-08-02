@@ -15,7 +15,8 @@ Esto significa que ya has construido los bloques de:
 - persistencia de tareas en MongoDB,
 - exposición de funcionalidad mediante una API REST,
 - separación modular entre negocio e infraestructura,
-- patrón profesional de actualización con PATCH para modificar recursos.
+- patrón profesional de actualización con PATCH para modificar recursos,
+- seguimiento de cambios mediante una colección de historial separada.
 
 ## Objetivo final
 
