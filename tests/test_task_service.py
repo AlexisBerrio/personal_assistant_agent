@@ -172,6 +172,28 @@ class TaskServiceTests(unittest.TestCase):
         self.assertEqual(response.json(), {"task_id": "task-123", "title": "Actualizada"})
         mock_update_task.assert_called_once_with("task-123", {"title": "Actualizada"})
 
+    def test_update_task_endpoint_accepts_steps_dates_and_recurrence(self):
+        with patch("app.service.update_task", return_value={"task_id": "task-123", "steps": [{"step_id": 1, "text": "Revisar", "is_completed": False}]}) as mock_update_task:
+            client = TestClient(app)
+            response = client.patch(
+                "/tasks/task-123",
+                json={
+                    "steps": [{"step_id": 1, "text": "Revisar", "is_completed": False}],
+                    "dates": {"due_date": "2026-08-05T12:00:00"},
+                    "recurrence": {"is_recurring": False, "frequency": None},
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        mock_update_task.assert_called_once_with(
+            "task-123",
+            {
+                "steps": [{"step_id": 1, "text": "Revisar", "is_completed": False}],
+                "dates": {"due_date": "2026-08-05T12:00:00"},
+                "recurrence": {"is_recurring": False, "frequency": None},
+            },
+        )
+
     def test_complete_task_endpoint_calls_service(self):
         with patch("app.service.complete_task", return_value={"matched": 1, "modified": 1}) as mock_complete_task:
             client = TestClient(app)

@@ -32,7 +32,12 @@ class TaskUpdateRequest(BaseModel):
     description: str | None = Field(default=None, description="Nueva descripción de la tarea.", json_schema_extra={"example": "Confirmar los últimos cambios antes de enviar"})
     status: str | None = Field(default=None, description="Estado de la tarea. Valores permitidos: Pending, In Progress, Completed, Deleted.", json_schema_extra={"example": "In Progress"})
     category: str | None = Field(default=None, description="Categoría de la tarea. Valores permitidos: Personal, Work, Study, Health, Home.", json_schema_extra={"example": "Work"})
+    tags: list[str] | None = Field(default=None, description="Etiquetas de clasificación actualizadas.", json_schema_extra={"example": ["oficina", "urgente"]})
     priority: dict[str, Any] | None = Field(default=None, description="Prioridad de la tarea. Debe incluir un campo level con uno de: Low, Medium, High.", json_schema_extra={"example": {"level": "High", "score": 90}})
+    dates: dict[str, Any] | None = Field(default=None, description="Fechas actualizadas de la tarea, como la fecha límite.", json_schema_extra={"example": {"due_date": "2026-08-05T12:00:00"}})
+    recurrence: dict[str, Any] | None = Field(default=None, description="Reglas de recurrencia actualizadas.", json_schema_extra={"example": {"is_recurring": False, "frequency": None}})
+    context_metadata: dict[str, Any] | None = Field(default=None, description="Metadatos de contexto actualizados.", json_schema_extra={"example": {"source": "manual", "location": "home"}})
+    steps: list[dict[str, Any]] | None = Field(default=None, description="Pasos de ejecución actualizados de la tarea.", json_schema_extra={"example": [{"step_id": 1, "text": "Revisar contenido", "is_completed": False}]})
 
 
 @app.get("/health")
