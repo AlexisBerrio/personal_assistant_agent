@@ -4,7 +4,7 @@ from typing import Any
 
 from src.assistant_personal.domain.task_models import Task
 from src.assistant_personal.domain.repositories.task_repository import TaskRepository
-from src.assistant_personal.infrastructure.mongo_client import get_db
+from src.assistant_personal.infrastructure.persistence.mongo.client import get_db
 from src.assistant_personal.infrastructure.persistence.mongo.mongo_repository import MongoTaskRepository
 
 

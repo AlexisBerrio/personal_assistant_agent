@@ -2,17 +2,21 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.assistant_personal.infrastructure.mcp.server import mcp
 from app import service
 
 
-@mcp.tool()
+def _get_mcp():
+    from src.assistant_personal.infrastructure.mcp.server import mcp
+    return mcp
+
+
+@_get_mcp().tool()
 def listar_tareas() -> list[dict[str, Any]]:
     """Devuelve las tareas activas del asistente personal."""
     return service.list_tasks()
 
 
-@mcp.tool()
+@_get_mcp().tool()
 def crear_tarea(
     title: str,
     description: str | None = None,
@@ -42,7 +46,7 @@ def crear_tarea(
     })
 
 
-@mcp.tool()
+@_get_mcp().tool()
 def actualizar_tarea(
     task_id: str,
     title: str | None = None,
@@ -85,13 +89,13 @@ def actualizar_tarea(
     return service.update_task(task_id, updates)
 
 
-@mcp.tool()
+@_get_mcp().tool()
 def completar_tarea(task_id: str) -> dict[str, Any]:
     """Marca una tarea como completada."""
     return service.complete_task(task_id)
 
 
-@mcp.tool()
+@_get_mcp().tool()
 def buscar_tarea(task_id: str) -> dict[str, Any] | None:
     """Busca una tarea concreta por su task_id."""
     return service.get_task(task_id)

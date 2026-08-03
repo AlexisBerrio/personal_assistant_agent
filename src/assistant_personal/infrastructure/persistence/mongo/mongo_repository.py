@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from src.assistant_personal.infrastructure.mongo_client import get_db
+from src.assistant_personal.infrastructure.persistence.mongo.client import get_db
 
 
 class MongoTaskRepository:
@@ -33,7 +33,8 @@ class MongoTaskRepository:
         }
 
         for field, new_value in updates.items():
-            previous_value = previous_task.get(field) if previous_task else None
+            previous_value = previous_task.get(
+                field) if previous_task else None
             history_entry["changes"].append({
                 "field": field,
                 "previous_value": previous_value,
@@ -79,7 +80,8 @@ class MongoTaskRepository:
             return None
 
         self._record_history(db, task_id, updates, previous_task)
-        updated_task = db.personal_tasks.find_one(self._active_task_filter(task_id), {"_id": 0})
+        updated_task = db.personal_tasks.find_one(
+            self._active_task_filter(task_id), {"_id": 0})
         return updated_task
 
     def complete_task(self, task_id: str) -> dict[str, Any]:
@@ -95,7 +97,8 @@ class MongoTaskRepository:
             self._active_task_filter(task_id),
             {"$set": {"status": "Completed"}},
         )
-        self._record_history(db, task_id, {"status": "Completed"}, previous_task)
+        self._record_history(
+            db, task_id, {"status": "Completed"}, previous_task)
         return {"matched": result.matched_count, "modified": result.modified_count}
 
     def delete_task(self, task_id: str) -> dict[str, Any] | None:
@@ -115,5 +118,6 @@ class MongoTaskRepository:
         if result.matched_count == 0:
             return None
 
-        self._record_history(db, task_id, {"status": "Deleted", "is_deleted": True}, previous_task)
+        self._record_history(
+            db, task_id, {"status": "Deleted", "is_deleted": True}, previous_task)
         return {"task_id": task_id, "deleted": True, "deleted_at": deleted_at}

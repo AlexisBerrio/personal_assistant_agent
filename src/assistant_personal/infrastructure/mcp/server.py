@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 try:
     from mcp.server.fastmcp import FastMCP
 except ImportError:  # pragma: no cover - exercised when the optional dependency is absent
@@ -17,6 +15,16 @@ except ImportError:  # pragma: no cover - exercised when the optional dependency
         def run(self) -> None:
             return None
 
-from app import service
-
 mcp = FastMCP("personal_assistant")
+
+
+def register_tools() -> None:
+    """Registra las herramientas MCP en el servidor."""
+    import src.assistant_personal.infrastructure.mcp.tools.task_tools as task_tools  # noqa: F401
+    _ = task_tools
+
+
+def run_server() -> None:
+    """Arranca el servidor MCP."""
+    register_tools()
+    mcp.run()

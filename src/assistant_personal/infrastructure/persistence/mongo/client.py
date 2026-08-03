@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import sys
 from typing import Any
 
@@ -10,11 +12,7 @@ settings = get_settings()
 
 
 class MongoConnection:
-    """Encapsula la conexión con MongoDB para no repetir lógica.
-
-    Esta clase intenta abrir una conexión al cluster y comprobarla con un ping.
-    Si falla, guarda el error para que el resto del sistema lo maneje bien.
-    """
+    """Encapsula la conexión con MongoDB para mantener la infraestructura ordenada."""
 
     def __init__(self) -> None:
         self.client: Any = None
