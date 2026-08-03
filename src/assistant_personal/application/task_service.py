@@ -4,6 +4,7 @@ from typing import Any
 
 from src.assistant_personal.domain.task_models import Task
 from src.assistant_personal.infrastructure.mongo_client import get_db
+from src.assistant_personal.infrastructure.task_repository import MongoTaskRepository
 
 
 class TaskService:
@@ -36,9 +37,10 @@ class TaskService:
         "Home",
     }
 
-    def __init__(self, db_name: str = "personal_management") -> None:
+    def __init__(self, db_name: str = "personal_management", repository: Any | None = None) -> None:
         # Guardamos el nombre de la base de datos que usaremos.
         self.db_name = db_name
+        self.repository = repository or MongoTaskRepository(db_name=db_name, get_db_fn=get_db)
 
     def _to_dict(self, task: Task | dict[str, Any]) -> dict[str, Any]:
         """Convierte un objeto Task o un diccionario en un diccionario simple.
@@ -131,10 +133,6 @@ class TaskService:
         self._validate_priority(payload.get("priority"))
         self._validate_category(payload.get("category"))
 
-    def _active_task_filter(self) -> dict[str, Any]:
-        """Devuelve el filtro para encontrar tareas que no han sido borradas lógicamente."""
-        return {"is_deleted": {"$ne": True}}
-
     def _validate_update_payload(self, updates: dict[str, Any]) -> None:
         """Valida los campos que se van a actualizar."""
         if "title" in updates:
@@ -154,22 +152,19 @@ class TaskService:
 
     def list_tasks(self) -> list[dict[str, Any]]:
         """Devuelve las tareas más recientes de la colección personal_tasks."""
-        db = get_db(self.db_name)
-        raw_tasks = list(db.personal_tasks.find(self._active_task_filter(), {"_id": 0}).limit(10))
+        raw_tasks = self.repository.list_active_tasks()
         return [self._serialize_value(task) for task in raw_tasks]
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         """Devuelve una tarea concreta por su task_id."""
-        db = get_db(self.db_name)
-        task = db.personal_tasks.find_one({"task_id": task_id, **self._active_task_filter()}, {"_id": 0})
+        task = self.repository.get_task_by_id(task_id)
         if task is None:
             return None
         return self._serialize_value(task)
 
     def get_task_history(self, task_id: str) -> list[dict[str, Any]]:
         """Devuelve el historial de cambios de una tarea."""
-        db = get_db(self.db_name)
-        history = list(db.task_history.find({"task_id": task_id}, {"_id": 0}).sort("timestamp", 1))
+        history = self.repository.get_task_history(task_id)
         return [self._serialize_value(entry) for entry in history]
 
     def create_task(self, task: Task | dict[str, Any]) -> dict[str, Any]:
@@ -189,30 +184,7 @@ class TaskService:
         payload.setdefault("is_deleted", False)
         payload.setdefault("deleted_at", None)
 
-        db = get_db(self.db_name)
-        result = db.personal_tasks.insert_one(payload)
-        return {"inserted_id": str(result.inserted_id), "task_id": payload["task_id"]}
-
-    def _record_history(self, db: Any, task_id: str, updates: dict[str, Any], previous_task: dict[str, Any] | None) -> None:
-        """Guarda un registro de cambios en la colección task_history."""
-        if not updates:
-            return
-
-        history_entry = {
-            "task_id": task_id,
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
-            "changes": [],
-        }
-
-        for field, new_value in updates.items():
-            previous_value = previous_task.get(field) if previous_task else None
-            history_entry["changes"].append({
-                "field": field,
-                "previous_value": previous_value,
-                "new_value": new_value,
-            })
-
-        db.task_history.insert_one(history_entry)
+        return self.repository.create_task(payload)
 
     def update_task(self, task_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
         """Actualiza campos de una tarea existente identificada por task_id."""
@@ -223,53 +195,16 @@ class TaskService:
 
         self._validate_update_payload(updates)
 
-        if "status" not in updates:
-            updates["status"] = self.IN_PROGRESS_STATUS
-
-        db = get_db(self.db_name)
-        previous_task = db.personal_tasks.find_one({"task_id": task_id, "$or": [{"is_deleted": {"$ne": True}}, {"is_deleted": {"$exists": False}}]}, {"_id": 0})
-        if previous_task is None:
-            return None
-
-        result = db.personal_tasks.update_one(
-            {"task_id": task_id, **self._active_task_filter()},
-            {"$set": updates},
-        )
-        if result.matched_count == 0:
-            return None
-
-        self._record_history(db, task_id, updates, previous_task)
-        updated_task = db.personal_tasks.find_one({"task_id": task_id, **self._active_task_filter()}, {"_id": 0})
+        task = Task(title="", status=self.DEFAULT_STATUS)
+        task.apply_updates(updates)
+        updates = {key: value for key, value in task.__dict__.items() if key in updates or key == "status"}
+        updated_task = self.repository.update_task(task_id, updates)
         return self._serialize_value(updated_task) if updated_task is not None else None
 
     def complete_task(self, task_id: str) -> dict[str, Any]:
         """Marca una tarea como completada en base a su task_id."""
-        db = get_db(self.db_name)
-        previous_task = db.personal_tasks.find_one({"task_id": task_id, "$or": [{"is_deleted": {"$ne": True}}, {"is_deleted": {"$exists": False}}]}, {"_id": 0})
-        if previous_task is None:
-            return {"matched": 0, "modified": 0}
-
-        result = db.personal_tasks.update_one(
-            {"task_id": task_id, **self._active_task_filter()},
-            {"$set": {"status": self.COMPLETED_STATUS}},
-        )
-        self._record_history(db, task_id, {"status": self.COMPLETED_STATUS}, previous_task)
-        return {"matched": result.matched_count, "modified": result.modified_count}
+        return self.repository.complete_task(task_id)
 
     def delete_task(self, task_id: str) -> dict[str, Any] | None:
         """Marca una tarea como eliminada sin borrarla de la base de datos."""
-        db = get_db(self.db_name)
-        previous_task = db.personal_tasks.find_one({"task_id": task_id, "$or": [{"is_deleted": {"$ne": True}}, {"is_deleted": {"$exists": False}}]}, {"_id": 0})
-        if previous_task is None:
-            return None
-
-        deleted_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-        result = db.personal_tasks.update_one(
-            {"task_id": task_id, **self._active_task_filter()},
-            {"$set": {"is_deleted": True, "deleted_at": deleted_at, "status": self.DELETED_STATUS}},
-        )
-        if result.matched_count == 0:
-            return None
-
-        self._record_history(db, task_id, {"status": self.DELETED_STATUS, "is_deleted": True}, previous_task)
-        return {"task_id": task_id, "deleted": True, "deleted_at": deleted_at}
+        return self.repository.delete_task(task_id)

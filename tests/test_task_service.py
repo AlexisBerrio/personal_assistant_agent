@@ -145,6 +145,23 @@ class TaskServiceTests(unittest.TestCase):
         self.assertEqual(result[0]["dates"]["due_date"], "2026-05-24T18:00:00")
         self.assertEqual(result[0]["dates"]["completed_at"], None)
 
+    def test_service_can_use_an_injected_repository(self):
+        class FakeRepository:
+            def __init__(self):
+                self.calls = []
+
+            def list_active_tasks(self):
+                self.calls.append("list")
+                return [{"task_id": "task-123", "title": "Tarea desde repositorio"}]
+
+        repository = FakeRepository()
+        service = TaskService(repository=repository)
+
+        result = service.list_tasks()
+
+        self.assertEqual(result[0]["title"], "Tarea desde repositorio")
+        self.assertEqual(repository.calls, ["list"])
+
     def test_get_task_by_id_endpoint_calls_service(self):
         with patch("app.service.get_task", return_value={"title": "Tarea demo", "task_id": "task-123"}) as mock_get_task:
             client = TestClient(app)
@@ -171,6 +188,13 @@ class TaskServiceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"task_id": "task-123", "title": "Actualizada"})
         mock_update_task.assert_called_once_with("task-123", {"title": "Actualizada"})
+
+    def test_task_domain_model_marks_pending_tasks_as_in_progress_on_update(self):
+        task = Task(title="Tarea pendiente", status="Pending")
+
+        task.apply_updates({"description": "Actualizada"})
+
+        self.assertEqual(task.status, "In Progress")
 
     def test_update_task_endpoint_accepts_steps_dates_and_recurrence(self):
         with patch("app.service.update_task", return_value={"task_id": "task-123", "steps": [{"step_id": 1, "text": "Revisar", "is_completed": False}]}) as mock_update_task:

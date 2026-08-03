@@ -21,3 +21,11 @@ class Task:
     agent_notes: list[dict[str, Any]] = field(default_factory=list)
     is_deleted: bool = False
     deleted_at: Optional[str] = None
+
+    def apply_updates(self, updates: dict[str, Any]) -> None:
+        """Aplica cambios de negocio a la tarea y actualiza su estado si procede."""
+        for field, value in updates.items():
+            setattr(self, field, value)
+
+        if self.status == "Pending" and updates:
+            self.status = "In Progress"
