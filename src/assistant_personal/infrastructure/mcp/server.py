@@ -6,6 +6,7 @@ from mcp.server.fastmcp import FastMCP
 from starlette.responses import JSONResponse
 
 mcp = FastMCP("personal_assistant")
+_tools_registered = False
 
 
 async def health_handler(_: Any) -> JSONResponse:
@@ -15,10 +16,15 @@ async def health_handler(_: Any) -> JSONResponse:
 
 def register_tools() -> None:
     """Registra las herramientas MCP en el servidor usando el servicio de la app."""
+    global _tools_registered
+    if _tools_registered:
+        return
+
     from app import service as app_service
     from src.assistant_personal.infrastructure.mcp.tools.task_tools import register_task_tools
 
     register_task_tools(mcp, app_service)
+    _tools_registered = True
 
 
 def create_mcp_app() -> Any:
@@ -43,3 +49,7 @@ def run_http_server(host: str = "127.0.0.1", port: int = 8001) -> None:
     import uvicorn
 
     uvicorn.run(mcp_http_app, host=host, port=port)
+
+
+if __name__ == "__main__":
+    run_server()

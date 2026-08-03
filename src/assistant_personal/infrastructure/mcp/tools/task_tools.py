@@ -13,7 +13,9 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
     @mcp.tool()
     def health_check() -> dict[str, Any]:
         """Verifica el estado del servidor MCP y sus dependencias (base de datos, conexiones)."""
-        mongo_status = service.repository.check_connection()
+        repository = service.repository
+        mongo_status = bool(repository.check_connection())
+
         return {
             "status": "ok" if mongo_status else "degraded",
             "service": "assistant-mcp-server",

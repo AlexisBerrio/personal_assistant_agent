@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 from app import app
 from src.assistant_personal.application.task_service import TaskService
 from src.assistant_personal.domain.task_models import Task
+from src.assistant_personal.infrastructure.mcp import server as mcp_server
+from src.assistant_personal.infrastructure.mcp.tools.task_tools import register_task_tools
 from src.assistant_personal.infrastructure.persistence.mongo.mongo_repository import MongoTaskRepository
 
 
@@ -162,6 +164,45 @@ class TaskServiceTests(unittest.TestCase):
 
         self.assertEqual(result[0]["title"], "Tarea desde repositorio")
         self.assertEqual(repository.calls, ["list"])
+
+    def test_health_check_uses_repository_check_connection_method(self):
+        class FakeMCP:
+            def __init__(self):
+                self.tools = {}
+
+            def tool(self):
+                def decorator(func):
+                    self.tools[func.__name__] = func
+                    return func
+                return decorator
+
+        class FakeRepository:
+            def check_connection(self):
+                return True
+
+        class FakeService:
+            def __init__(self):
+                self.repository = FakeRepository()
+
+        mcp = FakeMCP()
+        register_task_tools(mcp, FakeService())
+
+        result = mcp.tools["health_check"]()
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["database"], "connected")
+
+    def test_mcp_register_tools_is_idempotent(self):
+        with patch("src.assistant_personal.infrastructure.mcp.tools.task_tools.register_task_tools") as mock_register_task_tools:
+            original_flag = mcp_server._tools_registered
+            mcp_server._tools_registered = False
+            try:
+                mcp_server.register_tools()
+                mcp_server.register_tools()
+            finally:
+                mcp_server._tools_registered = original_flag
+
+        self.assertEqual(mock_register_task_tools.call_count, 1)
 
     def test_repository_active_task_filter_is_centered_in_one_helper(self):
         repository = MongoTaskRepository(get_db_fn=lambda _db_name: None)

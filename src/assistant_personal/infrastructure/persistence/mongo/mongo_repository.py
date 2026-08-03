@@ -22,6 +22,14 @@ class MongoTaskRepository:
             filter_query["task_id"] = task_id
         return filter_query
 
+    def check_connection(self) -> bool:
+        """Devuelve True si la base de datos responde a un ping."""
+        try:
+            self._get_db().command("ping")
+            return True
+        except Exception:
+            return False
+
     def _record_history(self, db: Any, task_id: str, updates: dict[str, Any], previous_task: dict[str, Any] | None) -> None:
         if not updates:
             return

@@ -6,6 +6,9 @@ from typing import Protocol, Any
 class TaskRepository(Protocol):
     """Puerto del dominio para persistir tareas y su historial."""
 
+    def check_connection(self) -> bool:
+        ...
+
     def list_active_tasks(self) -> list[dict[str, Any]]:
         ...
 
