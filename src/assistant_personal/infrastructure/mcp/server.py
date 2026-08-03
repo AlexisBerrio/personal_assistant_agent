@@ -1,30 +1,45 @@
 from __future__ import annotations
 
-try:
-    from mcp.server.fastmcp import FastMCP
-except ImportError:  # pragma: no cover - exercised when the optional dependency is absent
-    class FastMCP:  # type: ignore[override]
-        def __init__(self, name: str) -> None:
-            self.name = name
+from typing import Any
 
-        def tool(self):
-            def decorator(func):
-                return func
-            return decorator
-
-        def run(self) -> None:
-            return None
+from mcp.server.fastmcp import FastMCP
+from starlette.responses import JSONResponse
 
 mcp = FastMCP("personal_assistant")
 
 
+async def health_handler(_: Any) -> JSONResponse:
+    """Endpoint HTTP simple para comprobar que el servidor MCP responde."""
+    return JSONResponse({"status": "ok", "service": "assistant-mcp-server"})
+
+
 def register_tools() -> None:
-    """Registra las herramientas MCP en el servidor."""
-    import src.assistant_personal.infrastructure.mcp.tools.task_tools as task_tools  # noqa: F401
-    _ = task_tools
+    """Registra las herramientas MCP en el servidor usando el servicio de la app."""
+    from app import service as app_service
+    from src.assistant_personal.infrastructure.mcp.tools.task_tools import register_task_tools
+
+    register_task_tools(mcp, app_service)
+
+
+def create_mcp_app() -> Any:
+    """Crea una app ASGI para exponer el servidor MCP sobre HTTP."""
+    register_tools()
+    app = mcp.streamable_http_app()
+    app.add_route("/health", health_handler, methods=["GET"])
+    return app
+
+
+mcp_http_app = create_mcp_app()
 
 
 def run_server() -> None:
-    """Arranca el servidor MCP."""
+    """Arranca el servidor MCP en modo stdio."""
     register_tools()
     mcp.run()
+
+
+def run_http_server(host: str = "127.0.0.1", port: int = 8001) -> None:
+    """Arranca el servidor MCP sobre HTTP para pruebas desde Thunder Client."""
+    import uvicorn
+
+    uvicorn.run(mcp_http_app, host=host, port=port)
