@@ -3,8 +3,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.assistant_personal.domain.task_models import Task
+from src.assistant_personal.domain.repositories.task_repository import TaskRepository
 from src.assistant_personal.infrastructure.mongo_client import get_db
-from src.assistant_personal.infrastructure.task_repository import MongoTaskRepository
+from src.assistant_personal.infrastructure.persistence.mongo.mongo_repository import MongoTaskRepository
 
 
 class TaskService:
@@ -37,7 +38,7 @@ class TaskService:
         "Home",
     }
 
-    def __init__(self, db_name: str = "personal_management", repository: Any | None = None) -> None:
+    def __init__(self, db_name: str = "personal_management", repository: TaskRepository | None = None) -> None:
         # Guardamos el nombre de la base de datos que usaremos.
         self.db_name = db_name
         self.repository = repository or MongoTaskRepository(db_name=db_name, get_db_fn=get_db)

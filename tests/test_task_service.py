@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from app import app
 from src.assistant_personal.application.task_service import TaskService
 from src.assistant_personal.domain.task_models import Task
+from src.assistant_personal.infrastructure.persistence.mongo.mongo_repository import MongoTaskRepository
 
 
 class FakeInsertResult:
@@ -161,6 +162,13 @@ class TaskServiceTests(unittest.TestCase):
 
         self.assertEqual(result[0]["title"], "Tarea desde repositorio")
         self.assertEqual(repository.calls, ["list"])
+
+    def test_repository_active_task_filter_is_centered_in_one_helper(self):
+        repository = MongoTaskRepository(get_db_fn=lambda _db_name: None)
+
+        filter_query = repository._active_task_filter("task-123")
+
+        self.assertEqual(filter_query, {"task_id": "task-123", "is_deleted": {"$ne": True}})
 
     def test_get_task_by_id_endpoint_calls_service(self):
         with patch("app.service.get_task", return_value={"title": "Tarea demo", "task_id": "task-123"}) as mock_get_task:
