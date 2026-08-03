@@ -149,3 +149,15 @@ python -m src.assistant_personal.interfaces.cli
 - integrar agentes y herramientas con MCP,
 - añadir más validaciones y tests,
 - preparar una interfaz por voz como Alexa.
+
+## Conceptos clave de MCP
+
+Para entender la transición hacia agentes, este proyecto ya incluye una guía introductoria en [docs/mcp_intro.md](docs/mcp_intro.md).
+
+En ella se explica:
+
+- qué es MCP y por qué se usa,
+- la diferencia entre modelo, herramientas y contexto,
+- cómo exponer herramientas desde un servidor MCP,
+- cómo un agente decide cuándo invocar una herramienta,
+- y cómo diseñar prompts para guiar al agente.
