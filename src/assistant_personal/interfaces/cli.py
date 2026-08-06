@@ -38,6 +38,9 @@ def build_parser() -> argparse.ArgumentParser:
     complete_parser.add_argument("task_id")
     complete_parser.set_defaults(func=_handle_complete)
 
+    interactive_parser = subparsers.add_parser("interactive", help="Entrar en modo conversación continua")
+    interactive_parser.set_defaults(func=_handle_interactive)
+
     return parser
 
 
@@ -78,11 +81,42 @@ def _handle_complete(service: TaskService, args: argparse.Namespace) -> None:
     print(result)
 
 
+def _handle_interactive(service: TaskService, args: argparse.Namespace) -> None:
+    _run_interactive_loop(service)
+
+
+def _run_interactive_loop(service: TaskService) -> None:
+    orchestrator = TaskOrchestrator(service=service)
+    print("Asistente personal activo. Escribe 'salir' para terminar.")
+
+    while True:
+        try:
+            message = input("Usuario> ").strip()
+        except EOFError:
+            print("\nHasta pronto.")
+            break
+
+        if message.lower() in {"salir", "exit", "quit"}:
+            print("Hasta pronto.")
+            break
+
+        if not message:
+            print("Guardrails: el mensaje está vacío.")
+            continue
+
+        result = orchestrator.handle_message(message)
+        print(result)
+
+
 def main(argv: Sequence[str] | None = None, service: TaskService | None = None) -> None:
     parser = build_parser()
     raw_args = list(argv) if argv is not None else sys.argv[1:]
 
-    if raw_args and raw_args[0] not in {"list", "create", "update", "complete"}:
+    if raw_args and raw_args[0] == "interactive":
+        _run_interactive_loop(service or TaskService())
+        return
+
+    if raw_args and raw_args[0] not in {"list", "create", "update", "complete", "interactive"}:
         message = " ".join(raw_args)
         orchestrator = TaskOrchestrator(service=service or TaskService())
         result = orchestrator.handle_message(message)
@@ -99,6 +133,10 @@ def main(argv: Sequence[str] | None = None, service: TaskService | None = None) 
 
     if not hasattr(args, "func"):
         parser.print_help()
+        return
+
+    if args.command == "interactive":
+        _run_interactive_loop(service or TaskService())
         return
 
     service = service or TaskService()

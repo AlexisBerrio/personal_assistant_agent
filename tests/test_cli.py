@@ -4,6 +4,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from src.assistant_personal.interfaces.cli import main
 
@@ -42,6 +43,16 @@ class CliExecutionTests(unittest.TestCase):
         result = output.getvalue()
         self.assertIn("create_task", result.lower())
         self.assertIn("tarea para estudiar", result.lower())
+
+    def test_cli_enters_interactive_mode_when_requested(self) -> None:
+        output = StringIO()
+        with patch("builtins.input", side_effect=["salir"]):
+            with redirect_stdout(output):
+                main(["interactive"], service=FakeService())
+
+        result = output.getvalue()
+        self.assertIn("asistente personal activo", result.lower())
+        self.assertIn("hasta pronto", result.lower())
 
 
 if __name__ == "__main__":

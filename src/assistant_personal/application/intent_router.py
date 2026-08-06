@@ -22,14 +22,14 @@ class IntentRouter:
         if not normalized_message:
             return IntentResult(action="clarify", payload={"message": "No pude entender la petición."})
 
-        if any(keyword in normalized_message for keyword in ["listar", "ver", "mostrar", "pendientes", "tareas"]):
+        if any(keyword in normalized_message for keyword in ["listar", "ver", "mostrar", "pendientes", "tareas", "qué tengo", "qué tareas", "mis tareas", "pendiente"]):
             return IntentResult(action="list_tasks", payload={})
 
-        if any(keyword in normalized_message for keyword in ["crear", "añadir", "nueva tarea", "agregar"]):
+        if any(keyword in normalized_message for keyword in ["crear", "añadir", "nueva tarea", "agregar", "nueva", "haz", "hacer", "recordar"]):
             title = self._extract_title(normalized_message)
             return IntentResult(action="create_task", payload={"title": title})
 
-        if any(keyword in normalized_message for keyword in ["completar", "terminar", "marcar", "hecha"]):
+        if any(keyword in normalized_message for keyword in ["completar", "terminar", "marcar", "hecha", "hecho", "done", "finalizar", "cerrar"]):
             return IntentResult(action="complete_task", payload={})
 
         return IntentResult(action="clarify", payload={"message": "No pude identificar la acción que quieres realizar."})

@@ -27,19 +27,24 @@ class TaskOrchestrator:
 
         self.context.short_term_memory.add("user_message", message)
         prompt = self.prompt_builder.build_user_prompt(message)
+        context_summary = self.context.build_context_summary()
         intent = self.router.route(message)
         if intent.action == "clarify":
             return {"success": False, "action": "clarify", "reason": intent.payload.get("message", "No se pudo interpretar")}
 
         try:
             result = self._execute_with_retries(intent)
+            assistant_response = str(result)
+            self.context.short_term_memory.add_turn(message, assistant_response)
             return {
                 **result,
                 "prompt": prompt,
-                "context": self.context.build_context_summary(),
+                "context": context_summary,
             }
         except ValueError as exc:
-            return {"success": False, "action": intent.action, "reason": str(exc), "prompt": prompt, "context": self.context.build_context_summary()}
+            assistant_response = str(exc)
+            self.context.short_term_memory.add_turn(message, assistant_response)
+            return {"success": False, "action": intent.action, "reason": str(exc), "prompt": prompt, "context": context_summary}
 
     def _execute_with_retries(self, intent: Any) -> dict[str, Any]:
         last_error: Exception | None = None
