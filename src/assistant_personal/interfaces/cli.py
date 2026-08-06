@@ -7,11 +7,13 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from src.assistant_personal.application.orchestrator import TaskOrchestrator
 from src.assistant_personal.application.task_service import TaskService
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="CLI para interactuar con tareas del asistente personal")
+    parser.add_argument("message", nargs="?", help="Mensaje en lenguaje natural del usuario")
     subparsers = parser.add_subparsers(dest="command")
 
     list_parser = subparsers.add_parser("list", help="Listar tareas activas")
@@ -76,15 +78,30 @@ def _handle_complete(service: TaskService, args: argparse.Namespace) -> None:
     print(result)
 
 
-def main(argv: Sequence[str] | None = None) -> None:
+def main(argv: Sequence[str] | None = None, service: TaskService | None = None) -> None:
     parser = build_parser()
-    args = parser.parse_args(list(argv) if argv is not None else None)
+    raw_args = list(argv) if argv is not None else sys.argv[1:]
+
+    if raw_args and raw_args[0] not in {"list", "create", "update", "complete"}:
+        message = " ".join(raw_args)
+        orchestrator = TaskOrchestrator(service=service or TaskService())
+        result = orchestrator.handle_message(message)
+        print(result)
+        return
+
+    args = parser.parse_args(raw_args)
+
+    if args.message is not None and not args.command:
+        orchestrator = TaskOrchestrator(service=service or TaskService())
+        result = orchestrator.handle_message(args.message)
+        print(result)
+        return
 
     if not hasattr(args, "func"):
         parser.print_help()
         return
 
-    service = TaskService()
+    service = service or TaskService()
     args.func(service, args)
 
 

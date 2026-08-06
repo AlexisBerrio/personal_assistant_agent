@@ -45,6 +45,12 @@ Contiene los casos de uso del sistema.
 - TaskService gestiona la creación, lectura, actualización y finalización de tareas.
 - Se encarga de convertir los datos a un payload compatible con MongoDB.
 - También serializa los resultados para devolver JSON limpio a la API.
+- TaskOrchestrator actúa como orquestador de alto nivel para interpretar mensajes y decidir qué especialista o servicio ejecutar.
+- IntentRouter clasifica la intención del usuario para convertir lenguaje natural en acciones concretas.
+- PromptBuilder y los guardrails ayudan a guiar el comportamiento del agente y a evitar ejecuciones peligrosas o vacías.
+- AgentContext añade memoria de corto y largo plazo para que el sistema conserve contexto entre turnos.
+
+Esta capa se añadió para demostrar cómo un sistema de tareas puede evolucionar desde una API directa hacia un flujo más parecido a un asistente conversacional, sin perder la separación entre negocio e infraestructura.
 
 ### 3. Infraestructura
 

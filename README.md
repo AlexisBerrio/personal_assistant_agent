@@ -9,7 +9,34 @@ Asistente personal agéntico con arquitectura modular, MongoDB y FastAPI.
 - conexión con MongoDB,
 - API REST con FastAPI,
 - CLI simple para consultar tareas,
-- tests básicos del servicio.
+- tests básicos del servicio,
+- una capa inicial de orquestación para un agente que interpreta mensajes en lenguaje natural.
+
+## Avance reciente: orquestación de agente
+
+Se añadió una primera capa de agente orientada a aprendizaje y evolución del sistema.
+
+### Qué se hizo
+
+- se incorporó un orquestador que recibe un mensaje del usuario y decide qué acción ejecutar,
+- se añadió un router de intención para clasificar peticiones como listar, crear o completar tareas,
+- se incorporaron guardrails para rechazar mensajes vacíos o ambiguos,
+- se añadieron reintentos simples para manejar fallos transitorios,
+- se creó una memoria de corto y largo plazo para conservar contexto entre interacciones.
+
+### Por qué se hizo
+
+El objetivo era pasar de un backend CRUD funcional a un flujo más cercano a un asistente real. Esto permite demostrar, de forma pedagógica, cómo un sistema puede interpretar instrucciones naturales, protegerse frente a entradas inválidas y preparar la base para futuras integraciones con MCP, voz y agentes.
+
+### Para qué se usa
+
+Esta capa se usa para que el sistema pueda reaccionar a frases como:
+
+- "crear una tarea para estudiar"
+- "listar mis tareas"
+- "completar la tarea de comprar pan"
+
+y decidir la acción adecuada sin depender únicamente de un endpoint REST manual.
 
 ## Estructura del proyecto
 

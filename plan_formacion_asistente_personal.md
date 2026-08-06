@@ -16,7 +16,34 @@ Esto significa que ya has construido los bloques de:
 - exposición de funcionalidad mediante una API REST,
 - separación modular entre negocio e infraestructura,
 - patrón profesional de actualización con PATCH para modificar recursos,
-- seguimiento de cambios mediante una colección de historial separada.
+- seguimiento de cambios mediante una colección de historial separada,
+- una primera arquitectura de agente con orquestación, router de intención, guardrails, reintentos y memoria de contexto.
+
+## Progreso reciente en la ruta de agentes
+
+Se ha incorporado una capa inicial que permite pasar de una interacción manual sobre la API a una interacción más cercana a un asistente.
+
+### Qué se implementó
+
+- un orquestador que recibe un mensaje del usuario y decide si debe listar, crear o completar tareas,
+- un router de intención para convertir lenguaje natural en acciones concretas,
+- un prompt base para orientar el comportamiento del agente,
+- guardrails para bloquear mensajes vacíos o ambiguos,
+- reintentos breves para recuperarse de errores transitorios,
+- memoria de corto y largo plazo para contextualizar la conversación.
+
+### Por qué se hizo
+
+Este paso sirve para mostrar cómo un sistema puede evolucionar desde un servicio simple hacia un flujo de agente con decisiones, contexto y control. Además, permite aprender los mecanismos básicos que luego serán útiles para integrar MCP, herramientas externas y experiencias conversacionales más ricas.
+
+### Para qué sirve
+
+Esta capa prepara el proyecto para que en el futuro pueda:
+
+- interpretar instrucciones en lenguaje natural,
+- decidir cuándo usar una herramienta o un servicio,
+- reaccionar de forma más segura ante entradas ambiguas,
+- sostener conversaciones con contexto más parecido a un asistente real.
 
 ## Objetivo final
 

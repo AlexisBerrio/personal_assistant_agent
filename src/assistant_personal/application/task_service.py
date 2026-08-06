@@ -134,6 +134,12 @@ class TaskService:
         self._validate_priority(payload.get("priority"))
         self._validate_category(payload.get("category"))
 
+    def _require_task_id(self, task_id: str) -> str:
+        """Valida que el task_id sea un identificador útil para el negocio."""
+        if not isinstance(task_id, str) or not task_id.strip():
+            raise ValueError("El task_id de la tarea es obligatorio")
+        return task_id.strip()
+
     def _validate_update_payload(self, updates: dict[str, Any]) -> None:
         """Valida los campos que se van a actualizar."""
         if "title" in updates:
@@ -158,14 +164,16 @@ class TaskService:
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         """Devuelve una tarea concreta por su task_id."""
-        task = self.repository.get_task_by_id(task_id)
+        normalized_task_id = self._require_task_id(task_id)
+        task = self.repository.get_task_by_id(normalized_task_id)
         if task is None:
             return None
         return self._serialize_value(task)
 
     def get_task_history(self, task_id: str) -> list[dict[str, Any]]:
         """Devuelve el historial de cambios de una tarea."""
-        history = self.repository.get_task_history(task_id)
+        normalized_task_id = self._require_task_id(task_id)
+        history = self.repository.get_task_history(normalized_task_id)
         return [self._serialize_value(entry) for entry in history]
 
     def create_task(self, task: Task | dict[str, Any]) -> dict[str, Any]:
@@ -194,18 +202,21 @@ class TaskService:
         if not updates:
             raise ValueError("No se proporcionaron campos para actualizar")
 
+        normalized_task_id = self._require_task_id(task_id)
         self._validate_update_payload(updates)
 
         task = Task(title="", status=self.DEFAULT_STATUS)
         task.apply_updates(updates)
         updates = {key: value for key, value in task.__dict__.items() if key in updates or key == "status"}
-        updated_task = self.repository.update_task(task_id, updates)
+        updated_task = self.repository.update_task(normalized_task_id, updates)
         return self._serialize_value(updated_task) if updated_task is not None else None
 
     def complete_task(self, task_id: str) -> dict[str, Any]:
         """Marca una tarea como completada en base a su task_id."""
-        return self.repository.complete_task(task_id)
+        normalized_task_id = self._require_task_id(task_id)
+        return self.repository.complete_task(normalized_task_id)
 
     def delete_task(self, task_id: str) -> dict[str, Any] | None:
         """Marca una tarea como eliminada sin borrarla de la base de datos."""
-        return self.repository.delete_task(task_id)
+        normalized_task_id = self._require_task_id(task_id)
+        return self.repository.delete_task(normalized_task_id)
