@@ -1,6 +1,17 @@
 import unittest
 
 from src.assistant_personal.application.orchestrator import TaskOrchestrator
+from src.assistant_personal.domain.entities import IntentAction, IntentDecision
+
+
+class FakeRouter:
+    def route(self, _message):
+        return IntentDecision(
+            action=IntentAction.ASK_KNOWLEDGE_BASE,
+            payload={"query": "cual es la capital de colombia"},
+            confidence=1.0,
+            source="rule",
+        )
 
 
 class FakeService:
@@ -63,6 +74,16 @@ class TaskOrchestratorTests(unittest.TestCase):
         self.assertFalse(response["success"])
         self.assertEqual(response["action"], "clarify")
         self.assertIn("guardrails", response["reason"].lower())
+
+    def test_general_knowledge_queries_are_answered_without_the_central_agent(self):
+        service = FakeService()
+        orchestrator = TaskOrchestrator(service=service, router=FakeRouter())
+
+        response = orchestrator.handle_message("cual es la capital de colombia")
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["action"], "ask_knowledge_base")
+        self.assertIn("Consulta de conocimiento", response["result"])
 
 
 if __name__ == "__main__":

@@ -38,7 +38,8 @@ class TaskOrchestrator:
 
         if intent.action == "ask_knowledge_base":
             query = intent.payload.get("query") or message
-            return {"success": True, "action": "ask_knowledge_base", "result": f"Consulta de conocimiento: {query}", "prompt": prompt, "context": context_summary}
+            answer = intent.payload.get("answer") or self._answer_with_general_knowledge(query)
+            return {"success": True, "action": "ask_knowledge_base", "result": answer, "prompt": prompt, "context": context_summary}
 
         try:
             result = self._execute_with_retries(intent)
@@ -53,6 +54,9 @@ class TaskOrchestrator:
             assistant_response = str(exc)
             self.context.short_term_memory.add_turn(message, assistant_response)
             return {"success": False, "action": intent.action, "reason": str(exc), "prompt": prompt, "context": context_summary}
+
+    def _answer_with_general_knowledge(self, query: str) -> str:
+        return f"Consulta de conocimiento: {query}"
 
     def _execute_with_retries(self, intent: Any) -> dict[str, Any]:
         last_error: Exception | None = None

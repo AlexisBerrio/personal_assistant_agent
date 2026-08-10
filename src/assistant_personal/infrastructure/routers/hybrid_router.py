@@ -41,14 +41,20 @@ class ProductionIntentRouter:
             return fast_decision
 
         if self._llm_client:
-            try:
-                llm_decision = self._llm_client.classify_intent(clean_text)
-                if llm_decision.confidence >= 0.7:
-                    logger.info("[Router] Intención resuelta vía LLM (%s) con confianza %.2f", llm_decision.action, llm_decision.confidence)
-                    return llm_decision
-                logger.warning("[Router] LLM respondió con baja confianza (%.2f). Usando fallback.", llm_decision.confidence)
-            except Exception as exc:  # pragma: no cover - defensive path
-                logger.error("[Router] Error llamando al LLM Router: %s", exc, exc_info=True)
+            llm_decision = self._llm_client.classify_intent(clean_text)
+            if llm_decision.confidence >= 0.7:
+                logger.info("[Router] Intención resuelta vía LLM (%s) con confianza %.2f", llm_decision.action, llm_decision.confidence)
+                if llm_decision.action == IntentAction.ASK_KNOWLEDGE_BASE:
+                    answer = self._llm_client.answer_general_knowledge(clean_text)
+                    return IntentDecision(
+                        action=IntentAction.ASK_KNOWLEDGE_BASE,
+                        payload={"query": clean_text, "answer": answer},
+                        confidence=llm_decision.confidence,
+                        reasoning="Pregunta general detectada y respondida por el router.",
+                        source="llm",
+                    )
+                return llm_decision
+            logger.warning("[Router] LLM respondió con baja confianza (%.2f).", llm_decision.confidence)
 
         return IntentDecision(
             action=IntentAction.CLARIFY,
