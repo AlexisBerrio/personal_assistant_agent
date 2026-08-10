@@ -5,6 +5,7 @@ import re
 from typing import Optional, Protocol
 
 from src.assistant_personal.domain.entities import IntentAction, IntentDecision
+from src.assistant_personal.infrastructure.routers.openai_llm_client import OpenAILLMRouterClient
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ class ProductionIntentRouter:
     """Router híbrido para producción: reglas rápidas + LLM estructurado + fallback seguro."""
 
     def __init__(self, llm_client: Optional[LLMStructuredClient] = None):
-        self._llm_client = llm_client
+        self._llm_client = llm_client or OpenAILLMRouterClient()
 
     def route(self, user_message: str) -> IntentDecision:
         clean_text = (user_message or "").strip()
@@ -68,10 +69,10 @@ class ProductionIntentRouter:
                 source="rule",
             )
 
-        if any(token in text_lower for token in ["hola", "gracias", "buenos", "buenas"]):
+        if any(token in text_lower for token in ["hola", "gracias", "buenos", "buenas", "como estás", "como te va", "qué tal"]):
             return IntentDecision(
                 action=IntentAction.SMALL_TALK,
-                payload={"text": text},
+                payload={"text": text, "reply": "¡Hola! Estoy bien, gracias. ¿En qué te puedo ayudar hoy?"},
                 confidence=0.95,
                 source="rule",
             )

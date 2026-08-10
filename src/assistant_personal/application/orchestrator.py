@@ -32,6 +32,14 @@ class TaskOrchestrator:
         if intent.action == "clarify":
             return {"success": False, "action": "clarify", "reason": intent.payload.get("message", "No se pudo interpretar")}
 
+        if intent.action == "small_talk":
+            reply = intent.payload.get("reply") or "¡Hola! ¿En qué te puedo ayudar?"
+            return {"success": True, "action": "small_talk", "result": reply, "prompt": prompt, "context": context_summary}
+
+        if intent.action == "ask_knowledge_base":
+            query = intent.payload.get("query") or message
+            return {"success": True, "action": "ask_knowledge_base", "result": f"Consulta de conocimiento: {query}", "prompt": prompt, "context": context_summary}
+
         try:
             result = self._execute_with_retries(intent)
             assistant_response = str(result)

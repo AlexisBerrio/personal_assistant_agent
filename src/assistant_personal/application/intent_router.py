@@ -7,14 +7,14 @@ from typing import Any
 
 @dataclass
 class IntentResult:
-    """Representa una intención de alto nivel para el asistente."""
+    """Compatibilidad mínima para el router anterior."""
 
     action: str
     payload: dict[str, Any]
 
 
 class IntentRouter:
-    """Router simple que clasifica mensajes del usuario en acciones de tareas."""
+    """Router simple usado solo como compatibilidad de legado."""
 
     def route(self, message: str) -> IntentResult:
         normalized_message = (message or "").strip().lower()

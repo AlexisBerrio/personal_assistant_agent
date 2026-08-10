@@ -7,7 +7,7 @@ from typing import Optional
 class Settings:
     mongo_uri: str
     mongo_db_name: str = "sample_mflix"
-    openai_model: str = "gpt-4o-mini"
+    openai_model: Optional[str] = None
     python_command: Optional[str] = None
 
 
