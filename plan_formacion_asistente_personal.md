@@ -7,7 +7,7 @@ La base funcional del proyecto ya está operativa:
 - [app.py](app.py): API FastAPI con endpoints de salud y gestión de tareas.
 - [src/assistant_personal/application/task_service.py](src/assistant_personal/application/task_service.py): servicio de negocio para crear, listar, consultar, actualizar y completar tareas.
 - [src/assistant_personal/infrastructure/mongo_client.py](src/assistant_personal/infrastructure/mongo_client.py): conexión con MongoDB.
-- [src/assistant_personal/interfaces/cli.py](src/assistant_personal/interfaces/cli.py): interfaz simple por terminal.
+- [src/assistant_personal/interfaces/cli.py](src/assistant_personal/interfaces/cli.py): interfaz conversacional por terminal.
 - [tests/test_task_service.py](tests/test_task_service.py): pruebas básicas del comportamiento del servicio.
 
 Esto significa que ya has construido los bloques de:
@@ -30,6 +30,7 @@ Se ha incorporado una capa inicial que permite pasar de una interacción manual 
 - un prompt base para orientar el comportamiento del agente,
 - guardrails para bloquear mensajes vacíos o ambiguos,
 - reintentos breves para recuperarse de errores transitorios,
+- un flujo de respuestas de conocimiento gestionado directamente por el router,
 - memoria de corto y largo plazo para contextualizar la conversación.
 
 ### Por qué se hizo
@@ -209,6 +210,7 @@ Antes de avanzar hacia MCP o Alexa, conviene consolidar:
 - validaciones de entrada más estrictas,
 - mejor manejo de errores,
 - tests de integración,
+- memoria conversacional breve y escalable,
 - una capa de repositorio para separar acceso a datos del servicio de negocio.
 
 Ese trabajo hará que la siguiente etapa sea mucho más limpia y profesional.

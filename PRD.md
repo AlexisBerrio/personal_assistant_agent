@@ -49,13 +49,16 @@ En esta etapa ya se ha consolidado la capa base de negocio y de interfaz:
 - Servicio de aplicación para crear, listar, consultar, actualizar y completar tareas.
 - Conexión a MongoDB a través de una capa de infraestructura.
 - API FastAPI con endpoints de salud y gestión de tareas.
-- CLI para listar tareas desde la capa de aplicación.
-- Tests unitarios que validan el comportamiento del servicio.
+- CLI conversacional orientado a la interacción continua con el usuario.
+- Router de intenciones híbrido con reglas rápidas y LLM para clasificar mensajes.
+- Flujo de respuestas generales de conocimiento desde el propio router, sin depender de un agente principal.
+- Tests unitarios que validan el comportamiento del servicio y del router.
 
 ### No incluido todavía
 
-- Integración completa con agentes de IA.
+- Integración completa con agentes de IA especializados.
 - Integración con Alexa.
+- Memoria conversacional robusta y persistida.
 - RAG y memoria avanzada.
 - Autenticación y seguridad robusta.
 - Despliegue en producción.
@@ -74,10 +77,11 @@ El proyecto sigue una arquitectura por capas:
 
 El flujo actual es:
 
-1. La API recibe una petición HTTP.
-2. El endpoint construye o delega en un Task.
-3. TaskService prepara el payload y lo persiste en MongoDB.
-4. La respuesta se serializa para que sea compatible con JSON.
+1. El usuario interactúa por CLI o por una futura interfaz conversacional.
+2. El router de intenciones clasifica el mensaje en acciones como tareas, conversación casual o conocimiento general.
+3. El orquestador decide cómo resolver la intención, delegando en servicios o en respuestas directas del router.
+4. La capa de infraestructura puede persistir datos en MongoDB cuando la intención lo requiere.
+5. La respuesta se devuelve al usuario con contexto de la conversación.
 
 ---
 
@@ -200,6 +204,7 @@ Expone operaciones simples mediante FastAPI:
 - integración con MCP
 - agentes que ejecuten acciones sobre tareas
 - orquestación de flujos
+- enriquecimiento del router con memoria conversacional y contexto breve
 
 ### Fase 3: experiencia conversacional
 

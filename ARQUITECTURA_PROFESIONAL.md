@@ -69,14 +69,15 @@ Son los puntos de entrada del sistema.
 - /tasks permite listar y crear tareas.
 - /tasks/{task_id} permite consultar o actualizar una tarea concreta, incluyendo marcarla como completada con un payload de estado.
 - /tasks/{task_id}/history permite consultar el historial de cambios de una tarea.
-- cli.py ofrece una forma simple de inspeccionar tareas desde terminal.
+- cli.py ofrece un flujo conversacional continuo desde terminal, orientado a preguntas del usuario y a la clasificación de intenciones.
 
 ## Flujo actual
 
-1. El cliente envía una petición HTTP a la API.
-2. FastAPI crea o recibe un objeto Task a partir del cuerpo JSON.
-3. TaskService prepara el payload y lo persiste en MongoDB.
-4. La respuesta vuelve al cliente con datos serializados y compatibles con JSON.
+1. El usuario interactúa por CLI o por una futura interfaz conversacional.
+2. El router de intenciones clasifica el mensaje y decide si responde directamente, delega a tareas o requiere contexto.
+3. El orquestador coordina la ejecución y la respuesta.
+4. Cuando la intención implica persistencia, la capa de infraestructura opera sobre MongoDB.
+5. La respuesta vuelve al usuario con datos serializados o con contenido conversacional.
 
 ## Qué aporta esta arquitectura
 
