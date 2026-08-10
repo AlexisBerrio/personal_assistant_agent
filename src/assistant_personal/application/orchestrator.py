@@ -3,16 +3,16 @@ from __future__ import annotations
 from typing import Any
 
 from src.assistant_personal.application.agent_context import AgentContext
-from src.assistant_personal.application.intent_router import IntentRouter
 from src.assistant_personal.application.prompt_engineering import PromptBuilder
+from src.assistant_personal.infrastructure.routers.hybrid_router import ProductionIntentRouter
 
 
 class TaskOrchestrator:
     """Orquesta una interacción simple entre router, guardrails y especialista."""
 
-    def __init__(self, service: Any, router: IntentRouter | None = None, max_retries: int = 1) -> None:
+    def __init__(self, service: Any, router: Any = None, max_retries: int = 1) -> None:
         self.service = service
-        self.router = router or IntentRouter()
+        self.router = router or ProductionIntentRouter()
         self.max_retries = max_retries
         self.prompt_builder = PromptBuilder()
         self.context = AgentContext()
