@@ -4,59 +4,126 @@ from typing import Any
 
 from src.assistant_personal.application.agent_context import AgentContext
 from src.assistant_personal.application.prompt_engineering import PromptBuilder
+from src.assistant_personal.infrastructure.persistence.mongo.session_repository import MongoSessionRepository
 from src.assistant_personal.infrastructure.routers.hybrid_router import ProductionIntentRouter
 
 
 class TaskOrchestrator:
     """Orquesta una interacción simple entre router, guardrails y especialista."""
 
-    def __init__(self, service: Any, router: Any = None, max_retries: int = 1) -> None:
+    def __init__(self, service: Any, router: Any = None, max_retries: int = 1, session_repository: Any | None = None) -> None:
         self.service = service
         self.router = router or ProductionIntentRouter()
         self.max_retries = max_retries
         self.prompt_builder = PromptBuilder()
-        self.context = AgentContext()
+        self.session_repository = session_repository or MongoSessionRepository()
+        self.context = AgentContext(short_term_repository=self.session_repository)
+        self.session_id = "default"
 
     def handle_message(self, message: str) -> dict[str, Any]:
         if not message or not message.strip():
             return {
                 "success": False,
                 "action": "clarify",
+                "message": "Guardrails: el mensaje está vacío.",
                 "reason": "Guardrails: el mensaje está vacío.",
             }
 
-        self.context.short_term_memory.add("user_message", message)
-        prompt = self.prompt_builder.build_user_prompt(message)
-        context_summary = self.context.build_context_summary()
-        intent = self.router.route(message)
+        self.context.short_term_memory.add("user_message", message, session_id=self.session_id)
+        context_summary = self.context.build_context_summary(session_id=self.session_id)
+        prompt = self.prompt_builder.build_user_prompt(message, context_summary)
+
+        profile_facts = self._extract_profile_facts(message, context_summary)
+        self._persist_profile_facts(profile_facts)
+        context_summary = self.context.build_context_summary(session_id=self.session_id)
+
+        intent = self.router.route(message, context=context_summary)
         if intent.action == "clarify":
-            return {"success": False, "action": "clarify", "reason": intent.payload.get("message", "No se pudo interpretar")}
+            response_message = intent.payload.get("message", "No se pudo interpretar")
+            self.context.short_term_memory.add_turn(message, response_message, session_id=self.session_id)
+            return {"success": False, "action": "clarify", "message": response_message, "reason": response_message}
 
         if intent.action == "small_talk":
             reply = intent.payload.get("reply") or "¡Hola! ¿En qué te puedo ayudar?"
-            return {"success": True, "action": "small_talk", "result": reply, "prompt": prompt, "context": context_summary}
+            self.context.short_term_memory.add_turn(message, reply, session_id=self.session_id)
+            return {"success": True, "action": "small_talk", "message": reply, "result": reply}
 
         if intent.action == "ask_knowledge_base":
             query = intent.payload.get("query") or message
             answer = intent.payload.get("answer") or self._answer_with_general_knowledge(query)
-            return {"success": True, "action": "ask_knowledge_base", "result": answer, "prompt": prompt, "context": context_summary}
+            self.context.short_term_memory.add_turn(message, answer, session_id=self.session_id)
+            return {"success": True, "action": "ask_knowledge_base", "message": answer, "result": answer}
 
         try:
             result = self._execute_with_retries(intent)
-            assistant_response = str(result)
-            self.context.short_term_memory.add_turn(message, assistant_response)
+            assistant_response = self._format_public_message(intent.action, result)
+            self.context.short_term_memory.add_turn(message, assistant_response, session_id=self.session_id)
             return {
                 **result,
-                "prompt": prompt,
-                "context": context_summary,
+                "message": assistant_response,
             }
         except ValueError as exc:
             assistant_response = str(exc)
-            self.context.short_term_memory.add_turn(message, assistant_response)
-            return {"success": False, "action": intent.action, "reason": str(exc), "prompt": prompt, "context": context_summary}
+            self.context.short_term_memory.add_turn(message, assistant_response, session_id=self.session_id)
+            return {"success": False, "action": intent.action, "message": assistant_response, "reason": str(exc)}
+
+    def _extract_profile_facts(self, message: str, context_summary: str) -> list[dict[str, Any]]:
+        if not hasattr(self.router, "extract_profile_facts"):
+            return []
+
+        try:
+            extracted = self.router.extract_profile_facts(message, context=context_summary)
+        except Exception:
+            return []
+
+        if not extracted:
+            return []
+
+        if hasattr(extracted, "profile_facts"):
+            extracted = extracted.profile_facts
+
+        if not isinstance(extracted, list):
+            return []
+
+        facts: list[dict[str, Any]] = []
+        for item in extracted:
+            if isinstance(item, dict):
+                key = item.get("key")
+                value = item.get("value")
+                if key and value is not None:
+                    facts.append({"key": str(key), "value": str(value)})
+            else:
+                key = getattr(item, "key", None)
+                value = getattr(item, "value", None)
+                if key and value is not None:
+                    facts.append({"key": str(key), "value": str(value)})
+        return facts
+
+    def _persist_profile_facts(self, facts: list[dict[str, Any]]) -> None:
+        for fact in facts:
+            self.session_repository.add_context_item(self.session_id, fact["key"], fact["value"])
+            self.context.short_term_memory.add(fact["key"], fact["value"], session_id=self.session_id)
 
     def _answer_with_general_knowledge(self, query: str) -> str:
         return f"Consulta de conocimiento: {query}"
+
+    def _format_public_message(self, action: str, result: Any) -> str:
+        if action == "create_task":
+            if isinstance(result, dict):
+                payload = result.get("result") or result
+                if isinstance(payload, dict):
+                    title = payload.get("title") or "tarea"
+                    status = payload.get("status") or "creada"
+                    return f"Tarea creada: {title} ({status})"
+            return "Tarea creada"
+
+        if action == "list_tasks":
+            return "Aquí tienes tus tareas."
+
+        if action == "complete_task":
+            return "Tarea completada."
+
+        return str(result)
 
     def _execute_with_retries(self, intent: Any) -> dict[str, Any]:
         last_error: Exception | None = None

@@ -1,14 +1,91 @@
 import unittest
 
+from src.assistant_personal.application.agent_context import ShortTermMemory
 from src.assistant_personal.application.orchestrator import TaskOrchestrator
-from src.assistant_personal.domain.entities import IntentAction, IntentDecision
+from src.assistant_personal.domain.entities import IntentAction, IntentDecision, UserProfileExtraction, UserProfileFact
+from src.assistant_personal.infrastructure.persistence.mongo.session_repository import MongoSessionRepository
 
 
 class FakeRouter:
-    def route(self, _message):
+    def route(self, _message, context=None):
         return IntentDecision(
             action=IntentAction.ASK_KNOWLEDGE_BASE,
             payload={"query": "cual es la capital de colombia"},
+            confidence=1.0,
+            source="rule",
+        )
+
+
+class FakeContextRouter:
+    def __init__(self):
+        self.received_contexts = []
+
+    def extract_profile_facts(self, _message, context=None):
+        return UserProfileExtraction(profile_facts=[UserProfileFact(key="name", value="Alexis", confidence=1.0)])
+
+    def route(self, _message, context=None):
+        self.received_contexts.append(context)
+        if context and "name=Alexis" in context:
+            return IntentDecision(
+                action=IntentAction.ASK_KNOWLEDGE_BASE,
+                payload={"answer": "Tu nombre es Alexis."},
+                confidence=1.0,
+                source="rule",
+            )
+        return IntentDecision(
+            action=IntentAction.CLARIFY,
+            payload={"message": "No pude responder"},
+            confidence=0.0,
+            source="rule",
+        )
+
+
+class FakeSmallTalkRouter:
+    def route(self, _message, context=None):
+        return IntentDecision(
+            action=IntentAction.SMALL_TALK,
+            payload={"reply": "Hola, todo bien."},
+            confidence=1.0,
+            source="rule",
+        )
+
+
+class FakeGenericContextRouter:
+    def __init__(self):
+        self.received_contexts = []
+
+    def extract_profile_facts(self, _message, context=None):
+        return UserProfileExtraction(profile_facts=[UserProfileFact(key="color_favorito", value="Azul", confidence=1.0)])
+
+    def route(self, _message, context=None):
+        self.received_contexts.append(context)
+        if context and "color_favorito=Azul" in context:
+            return IntentDecision(
+                action=IntentAction.ASK_KNOWLEDGE_BASE,
+                payload={"answer": "Tu color favorito es Azul."},
+                confidence=1.0,
+                source="rule",
+            )
+        return IntentDecision(
+            action=IntentAction.CLARIFY,
+            payload={"message": "No pude responder"},
+            confidence=0.0,
+            source="rule",
+        )
+
+
+class FakeStructuredProfileRouter:
+    def __init__(self):
+        self.extract_calls = []
+
+    def extract_profile_facts(self, message, context=None):
+        self.extract_calls.append((message, context))
+        return UserProfileExtraction(profile_facts=[UserProfileFact(key="color_favorito", value="Azul", confidence=1.0)])
+
+    def route(self, _message, context=None):
+        return IntentDecision(
+            action=IntentAction.ASK_KNOWLEDGE_BASE,
+            payload={"answer": "Tu color favorito es Azul."},
             confidence=1.0,
             source="rule",
         )
@@ -31,6 +108,25 @@ class FakeService:
         return {"task_id": task_id, "status": "Completed"}
 
 
+class FakeCreateTaskRouter:
+    def extract_profile_facts(self, _message, context=None):
+        return UserProfileExtraction()
+
+    def route(self, message, context=None):
+        title = "Tarea nueva"
+        normalized = (message or "").lower()
+        if "estudiar" in normalized:
+            title = "Tarea para estudiar"
+        if "revisar" in normalized:
+            title = "Tarea para revisar"
+        return IntentDecision(
+            action=IntentAction.CREATE_TASK,
+            payload={"title": title},
+            confidence=1.0,
+            source="rule",
+        )
+
+
 class FlakyService(FakeService):
     def __init__(self):
         super().__init__()
@@ -43,10 +139,28 @@ class FlakyService(FakeService):
         return super().create_task(task)
 
 
+class FakeSessionCollection:
+    def __init__(self):
+        self.docs = {}
+
+    def find_one(self, filter_query):
+        return self.docs.get(filter_query.get("session_id"))
+
+    def update_one(self, filter_query, update, upsert=False):
+        session_id = filter_query.get("session_id")
+        current = self.docs.get(session_id, {})
+        if "$set" in update:
+            current.update(update["$set"])
+        if "$setOnInsert" in update:
+            current.setdefault("created_at", update["$setOnInsert"].get("created_at"))
+        self.docs[session_id] = current
+        return type("Result", (), {"matched_count": 1, "modified_count": 1})()
+
+
 class TaskOrchestratorTests(unittest.TestCase):
     def test_creates_task_through_the_orchestrator(self):
         service = FakeService()
-        orchestrator = TaskOrchestrator(service=service)
+        orchestrator = TaskOrchestrator(service=service, router=FakeCreateTaskRouter())
 
         response = orchestrator.handle_message("crear una tarea para estudiar")
 
@@ -57,7 +171,7 @@ class TaskOrchestratorTests(unittest.TestCase):
 
     def test_retries_once_when_a_specialist_fails(self):
         service = FlakyService()
-        orchestrator = TaskOrchestrator(service=service, max_retries=2)
+        orchestrator = TaskOrchestrator(service=service, router=FakeCreateTaskRouter(), max_retries=2)
 
         response = orchestrator.handle_message("crear una tarea para revisar")
 
@@ -84,6 +198,87 @@ class TaskOrchestratorTests(unittest.TestCase):
         self.assertTrue(response["success"])
         self.assertEqual(response["action"], "ask_knowledge_base")
         self.assertIn("Consulta de conocimiento", response["result"])
+
+    def test_follow_up_messages_are_not_exposed_with_internal_prompt_context(self):
+        service = FakeService()
+        orchestrator = TaskOrchestrator(service=service, router=FakeCreateTaskRouter())
+
+        orchestrator.handle_message("crear una tarea para estudiar")
+        follow_up = orchestrator.handle_message("¿qué tarea acabo de crear?")
+
+        self.assertNotIn("prompt", follow_up)
+        self.assertNotIn("context", follow_up)
+        self.assertIn("message", follow_up)
+
+    def test_short_term_memory_keeps_only_the_most_recent_turns(self):
+        fake_collection = FakeSessionCollection()
+        fake_db = type("FakeDb", (), {"conversation_sessions": fake_collection})()
+        repository = MongoSessionRepository(db_name="test_db", get_db_fn=lambda _db_name: fake_db)
+        memory = ShortTermMemory(repository=repository, max_turns=2, max_items=2)
+
+        memory.add_turn("crear una tarea para estudiar", "tarea creada", session_id="session-test")
+        memory.add_turn("crear una tarea para entrenar", "tarea creada", session_id="session-test")
+        memory.add_turn("crear una tarea para cocinar", "tarea creada", session_id="session-test")
+
+        self.assertEqual(len(memory.get_turns(session_id="session-test")), 2)
+        self.assertEqual(memory.get_turns(session_id="session-test")[0][0], "crear una tarea para entrenar")
+        self.assertEqual(memory.get_turns(session_id="session-test")[1][0], "crear una tarea para cocinar")
+
+    def test_session_repository_persists_turns_and_context(self):
+        fake_collection = FakeSessionCollection()
+        fake_db = type("FakeDb", (), {"conversation_sessions": fake_collection})()
+        repository = MongoSessionRepository(db_name="test_db", get_db_fn=lambda _db_name: fake_db)
+
+        repository.append_turn("session-a", "hola", "hola, ¿en qué te ayudo?")
+        repository.add_context_item("session-a", "name", "Ana")
+
+        summary = repository.get_context_summary("session-a", max_turns=3, max_items=3)
+
+        self.assertEqual(summary["turns"][0]["user_message"], "hola")
+        self.assertEqual(summary["items"][0]["value"], "Ana")
+
+    def test_orchestrator_persists_and_reuses_session_context_from_repository(self):
+        fake_collection = FakeSessionCollection()
+        fake_db = type("FakeDb", (), {"conversation_sessions": fake_collection})()
+        repository = MongoSessionRepository(db_name="test_db", get_db_fn=lambda _db_name: fake_db)
+        router = FakeContextRouter()
+        orchestrator = TaskOrchestrator(service=FakeService(), router=router, session_repository=repository)
+
+        first_response = orchestrator.handle_message("hola, soy Alexis")
+        second_response = orchestrator.handle_message("cuál es mi nombre")
+
+        self.assertTrue(first_response["success"])
+        self.assertEqual(second_response["message"], "Tu nombre es Alexis.")
+        self.assertGreaterEqual(len(repository.get_context_summary(orchestrator.session_id)["turns"]), 1)
+        self.assertTrue(any(context and "name=Alexis" in context for context in router.received_contexts))
+
+    def test_orchestrator_persists_generic_profile_facts_from_repository(self):
+        fake_collection = FakeSessionCollection()
+        fake_db = type("FakeDb", (), {"conversation_sessions": fake_collection})()
+        repository = MongoSessionRepository(db_name="test_db", get_db_fn=lambda _db_name: fake_db)
+        router = FakeGenericContextRouter()
+        orchestrator = TaskOrchestrator(service=FakeService(), router=router, session_repository=repository)
+
+        first_response = orchestrator.handle_message("mi color favorito es azul")
+        second_response = orchestrator.handle_message("cuál es mi color favorito")
+
+        self.assertTrue(first_response["success"])
+        self.assertEqual(second_response["message"], "Tu color favorito es Azul.")
+        self.assertTrue(any(context and "color_favorito=Azul" in context for context in router.received_contexts))
+
+    def test_orchestrator_persists_profile_facts_from_structured_extraction(self):
+        fake_collection = FakeSessionCollection()
+        fake_db = type("FakeDb", (), {"conversation_sessions": fake_collection})()
+        repository = MongoSessionRepository(db_name="test_db", get_db_fn=lambda _db_name: fake_db)
+        router = FakeStructuredProfileRouter()
+        orchestrator = TaskOrchestrator(service=FakeService(), router=router, session_repository=repository)
+
+        response = orchestrator.handle_message("Amo el sushi")
+
+        self.assertTrue(response["success"])
+        self.assertTrue(router.extract_calls)
+        context_summary = repository.get_context_summary(orchestrator.session_id)
+        self.assertTrue(any(item.get("key") == "color_favorito" and item.get("value") == "Azul" for item in context_summary["items"]))
 
 
 if __name__ == "__main__":

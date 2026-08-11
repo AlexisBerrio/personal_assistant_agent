@@ -12,5 +12,8 @@ class PromptBuilder:
             "Si una acción falla, intenta reintentos breves antes de informar el error."
         )
 
-    def build_user_prompt(self, message: str) -> str:
-        return f"Mensaje del usuario: {message}"
+    def build_user_prompt(self, message: str, context: str | None = None) -> str:
+        prompt = f"Mensaje del usuario: {message}"
+        if context:
+            prompt += f"\nContexto reciente: {context}"
+        return prompt

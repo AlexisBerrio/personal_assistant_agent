@@ -1,13 +1,13 @@
 import unittest
 
-from src.assistant_personal.domain.entities import IntentAction
-from src.assistant_personal.infrastructure.routers.openai_llm_client import OpenAILLMRouterClient
+from src.assistant_personal.domain.entities import ConversationRoute, IntentAction
+from src.assistant_personal.infrastructure.routers.openai_llm_client import OpenAIIntentClassifier
 
 
 class FakeChatCompletions:
     def create(self, **_kwargs):
         class FakeMessage:
-            content = '{"action": "small_talk", "confidence": 0.95, "reasoning": "saludo", "source": "llm", "payload": {"text": "hola"}}'
+            content = '{"route": "orchestrator", "intent": "create_task", "confidence": 0.95, "reasoning": "crear tarea", "source": "llm", "payload": {"title": "Comprar leche"}}'
 
         class FakeChoice:
             message = FakeMessage()
@@ -23,20 +23,21 @@ class FakeOpenAIClient:
         self.chat = type("Chat", (), {"completions": FakeChatCompletions()})()
 
 
-class OpenAILLMRouterClientTests(unittest.TestCase):
+class OpenAIIntentClassifierTests(unittest.TestCase):
     def test_classify_intent_uses_chat_completions_when_responses_api_is_unavailable(self):
-        client = OpenAILLMRouterClient.__new__(OpenAILLMRouterClient)
+        client = OpenAIIntentClassifier.__new__(OpenAIIntentClassifier)
         client.model = "gpt-test"
         client.client = FakeOpenAIClient()
 
-        decision = client.classify_intent("hola")
+        decision = client.classify_intent("crear tarea comprar leche")
 
-        self.assertEqual(decision.action, IntentAction.SMALL_TALK)
+        self.assertEqual(decision.route, ConversationRoute.ORCHESTRATOR)
+        self.assertEqual(decision.intent, IntentAction.CREATE_TASK)
         self.assertEqual(decision.source, "llm")
         self.assertGreaterEqual(decision.confidence, 0.9)
 
     def test_classify_intent_raises_when_no_supported_api_is_available(self):
-        client = OpenAILLMRouterClient.__new__(OpenAILLMRouterClient)
+        client = OpenAIIntentClassifier.__new__(OpenAIIntentClassifier)
         client.model = "gpt-test"
         client.client = object()
 

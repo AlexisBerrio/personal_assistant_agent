@@ -45,7 +45,8 @@ def _run_interactive_loop(service: TaskService) -> None:
             continue
 
         result = orchestrator.handle_message(message)
-        print(result)
+        public_message = result.get("message") or result.get("result") or result.get("reason") or "No se pudo procesar la solicitud."
+        print(public_message)
 
 
 def main(argv: Sequence[str] | None = None, service: TaskService | None = None) -> None:

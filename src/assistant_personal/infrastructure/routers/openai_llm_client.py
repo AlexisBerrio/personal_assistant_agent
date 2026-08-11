@@ -7,13 +7,13 @@ from typing import Any
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from src.assistant_personal.domain.entities import IntentAction, IntentDecision
+from src.assistant_personal.domain.entities import ConversationRoute, IntentAction, IntentClassification, UserProfileExtraction
 
 load_dotenv()
 
 
-class OpenAILLMRouterClient:
-    """Cliente LLM para clasificación de intenciones y respuestas generales del router."""
+class _OpenAITextClient:
+    """Cliente base para compartir invocación y parseo estructurado con OpenAI."""
 
     def __init__(self, model: str | None = None, api_key: str | None = None):
         self.model = model or os.getenv("OPENAI_MODEL")
@@ -29,25 +29,10 @@ class OpenAILLMRouterClient:
         except Exception as exc:
             raise RuntimeError("Unable to initialize OpenAI client") from exc
 
-    def classify_intent(self, text: str) -> IntentDecision:
-        self._ensure_ready()
-        system_prompt = (
-            "Eres un clasificador de intenciones para un asistente personal. "
-            "Tu tarea es decidir la acción más adecuada para el mensaje del usuario. "
-            "Devuelve únicamente un JSON válido con las claves action, confidence, reasoning, source y payload. "
-            "Las acciones permitidas son: list_tasks, create_task, complete_task, delete_task, ask_knowledge_base, small_talk, clarify."
-        )
-        payload = self._invoke_model(system_prompt, text)
-        parsed = self._parse_response(payload)
-        return self._build_decision(parsed)
-
-    def answer_general_knowledge(self, query: str) -> str:
-        self._ensure_ready()
-        system_prompt = (
-            "Responde de forma breve, directa y útil a preguntas generales de conocimiento. "
-            "No uses listas largas ni explicaciones innecesarias."
-        )
-        return self._invoke_model(system_prompt, query).strip()
+    def _build_user_prompt(self, message: str, context: str | None = None) -> str:
+        if context:
+            return f"Mensaje del usuario: {message}\nContexto reciente: {context}"
+        return f"Mensaje del usuario: {message}"
 
     def _ensure_ready(self) -> None:
         if self.client is None:
@@ -80,29 +65,6 @@ class OpenAILLMRouterClient:
 
         raise RuntimeError("OpenAI client does not expose a supported API interface")
 
-    def _build_decision(self, parsed: dict[str, Any]) -> IntentDecision:
-        action = parsed.get("action", "clarify")
-        payload = parsed.get("payload", {}) or {}
-        confidence = float(parsed.get("confidence", 0.5))
-        reasoning = parsed.get("reasoning")
-        source = parsed.get("source", "llm")
-
-        if isinstance(action, str):
-            try:
-                action_enum = IntentAction(action)
-            except ValueError:
-                action_enum = IntentAction.CLARIFY
-        else:
-            action_enum = IntentAction.CLARIFY
-
-        return IntentDecision(
-            action=action_enum,
-            payload=payload,
-            confidence=confidence,
-            reasoning=reasoning,
-            source=source,
-        )
-
     def _parse_response(self, content: str) -> dict[str, Any]:
         if not content:
             raise RuntimeError("OpenAI returned an empty response")
@@ -110,3 +72,101 @@ class OpenAILLMRouterClient:
             return json.loads(content)
         except json.JSONDecodeError as exc:
             raise RuntimeError("OpenAI returned invalid JSON") from exc
+
+
+class OpenAIIntentClassifier(_OpenAITextClient):
+    """Clasificador para enrutar la conversación."""
+
+    def classify_intent(self, text: str, context: str | None = None) -> IntentClassification:
+        self._ensure_ready()
+        system_prompt = (
+            "Eres un clasificador de intenciones para un asistente personal. "
+            "Tu tarea es enrutar la conversación con una salida estructurada. "
+            "Usa el contexto de memoria de corto plazo si está disponible para entender referencias al usuario o conversaciones previas. "
+            "Devuelve únicamente un JSON válido con las claves route, intent, confidence, reasoning, source y payload. "
+            "Rutas permitidas: general_knowledge, orchestrator, clarify. "
+            "Intenciones permitidas (cuando route sea orchestrator): list_tasks, create_task, complete_task, delete_task. "
+            "Si no hay suficiente información para ejecutar una acción concreta, usa route=clarify."
+        )
+        payload = self._invoke_model(system_prompt, self._build_user_prompt(text, context))
+        parsed = self._parse_response(payload)
+        return self._build_classification(parsed)
+
+    def _build_classification(self, parsed: dict[str, Any]) -> IntentClassification:
+        raw_route = parsed.get("route", ConversationRoute.CLARIFY.value)
+        raw_intent = parsed.get("intent")
+        confidence = float(parsed.get("confidence", 0.0))
+        reasoning = parsed.get("reasoning")
+        payload = parsed.get("payload", {}) or {}
+        source = parsed.get("source", "llm")
+
+        try:
+            route = ConversationRoute(raw_route)
+        except ValueError:
+            route = ConversationRoute.CLARIFY
+
+        intent: IntentAction | None = None
+        if isinstance(raw_intent, str):
+            try:
+                intent = IntentAction(raw_intent)
+            except ValueError:
+                intent = None
+
+        if route == ConversationRoute.ORCHESTRATOR and intent is None:
+            route = ConversationRoute.CLARIFY
+
+        return IntentClassification(
+            route=route,
+            intent=intent,
+            confidence=confidence,
+            reasoning=reasoning,
+            payload=payload,
+            source=source,
+        )
+
+
+class OpenAIGeneralKnowledgeResponder(_OpenAITextClient):
+    """Componente de respuesta para conocimiento general sin invocar al agente principal."""
+
+    def answer_general_knowledge(self, query: str, context: str | None = None) -> str:
+        self._ensure_ready()
+        system_prompt = (
+            "Responde de forma breve, directa y útil a preguntas generales de conocimiento. "
+            "Usa el contexto de memoria de corto plazo si está disponible para responder a referencias al usuario o conversaciones previas. "
+            "No uses listas largas ni explicaciones innecesarias."
+        )
+        return self._invoke_model(system_prompt, self._build_user_prompt(query, context)).strip()
+
+
+class OpenAIProfileFactExtractor(_OpenAITextClient):
+    """Extractor estructurado de hechos de perfil para memoria de corto plazo."""
+
+    def extract_profile_facts(self, text: str, context: str | None = None) -> UserProfileExtraction:
+        self._ensure_ready()
+        system_prompt = (
+            "Eres un extractor de memoria de perfil para un asistente personal. "
+            "Tu tarea es detectar hechos del usuario que puedan almacenarse como contexto persistente. "
+            "Devuelve únicamente un JSON válido con la clave profile_facts, donde cada elemento tiene key, value y confidence. "
+            "No uses reglas manuales ni expresiones regulares; infiere los hechos desde el lenguaje natural."
+        )
+        payload = self._invoke_model(system_prompt, self._build_user_prompt(text, context))
+        parsed = self._parse_response(payload)
+        return UserProfileExtraction.model_validate(parsed)
+
+
+class OpenAILLMRouterClient:
+    """Fachada de compatibilidad para el router híbrido."""
+
+    def __init__(self, model: str | None = None, api_key: str | None = None):
+        self.intent_classifier = OpenAIIntentClassifier(model=model, api_key=api_key)
+        self.knowledge_responder = OpenAIGeneralKnowledgeResponder(model=model, api_key=api_key)
+        self.profile_extractor = OpenAIProfileFactExtractor(model=model, api_key=api_key)
+
+    def classify_intent(self, text: str, context: str | None = None) -> IntentClassification:
+        return self.intent_classifier.classify_intent(text, context=context)
+
+    def answer_general_knowledge(self, query: str, context: str | None = None) -> str:
+        return self.knowledge_responder.answer_general_knowledge(query, context=context)
+
+    def extract_profile_facts(self, text: str, context: str | None = None) -> UserProfileExtraction:
+        return self.profile_extractor.extract_profile_facts(text, context=context)

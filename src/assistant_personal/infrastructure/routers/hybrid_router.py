@@ -1,29 +1,61 @@
 from __future__ import annotations
 
 import logging
-import re
 from typing import Optional, Protocol
 
-from src.assistant_personal.domain.entities import IntentAction, IntentDecision
-from src.assistant_personal.infrastructure.routers.openai_llm_client import OpenAILLMRouterClient
+from src.assistant_personal.domain.entities import (
+    ConversationRoute,
+    IntentAction,
+    IntentClassification,
+    IntentDecision,
+    UserProfileExtraction,
+)
+from src.assistant_personal.infrastructure.routers.openai_llm_client import (
+    OpenAIGeneralKnowledgeResponder,
+    OpenAIIntentClassifier,
+    OpenAIProfileFactExtractor,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class LLMStructuredClient(Protocol):
-    """Interfaz para clientes LLM que soportan salida estructurada."""
+class IntentClassifier(Protocol):
+    """Contrato de clasificación de intención y ruta de conversación."""
 
-    def classify_intent(self, text: str) -> IntentDecision:
+    def classify_intent(self, text: str, context: str | None = None) -> IntentClassification:
+        ...
+
+
+class GeneralKnowledgeResponder(Protocol):
+    """Contrato para resolver preguntas de conocimiento general."""
+
+    def answer_general_knowledge(self, query: str, context: str | None = None) -> str:
+        ...
+
+
+class ProfileFactExtractor(Protocol):
+    """Contrato para extracción estructurada de hechos de perfil."""
+
+    def extract_profile_facts(self, text: str, context: str | None = None) -> UserProfileExtraction:
         ...
 
 
 class ProductionIntentRouter:
     """Router híbrido para producción: reglas rápidas + LLM estructurado + fallback seguro."""
 
-    def __init__(self, llm_client: Optional[LLMStructuredClient] = None):
-        self._llm_client = llm_client or OpenAILLMRouterClient()
+    def __init__(
+        self,
+        llm_client: Optional[IntentClassifier] = None,
+        knowledge_responder: Optional[GeneralKnowledgeResponder] = None,
+        profile_extractor: Optional[ProfileFactExtractor] = None,
+        confidence_threshold: float = 0.7,
+    ):
+        self._intent_classifier = llm_client or OpenAIIntentClassifier()
+        self._knowledge_responder = knowledge_responder or OpenAIGeneralKnowledgeResponder()
+        self._profile_extractor = profile_extractor or OpenAIProfileFactExtractor()
+        self._confidence_threshold = confidence_threshold
 
-    def route(self, user_message: str) -> IntentDecision:
+    def route(self, user_message: str, context: str | None = None) -> IntentDecision:
         clean_text = (user_message or "").strip()
 
         if not clean_text:
@@ -40,21 +72,53 @@ class ProductionIntentRouter:
             logger.info("[Router] Intención resuelta vía Regla: %s", fast_decision.action)
             return fast_decision
 
-        if self._llm_client:
-            llm_decision = self._llm_client.classify_intent(clean_text)
-            if llm_decision.confidence >= 0.7:
-                logger.info("[Router] Intención resuelta vía LLM (%s) con confianza %.2f", llm_decision.action, llm_decision.confidence)
-                if llm_decision.action == IntentAction.ASK_KNOWLEDGE_BASE:
-                    answer = self._llm_client.answer_general_knowledge(clean_text)
-                    return IntentDecision(
-                        action=IntentAction.ASK_KNOWLEDGE_BASE,
-                        payload={"query": clean_text, "answer": answer},
-                        confidence=llm_decision.confidence,
-                        reasoning="Pregunta general detectada y respondida por el router.",
-                        source="llm",
-                    )
-                return llm_decision
-            logger.warning("[Router] LLM respondió con baja confianza (%.2f).", llm_decision.confidence)
+        try:
+            classification = self._intent_classifier.classify_intent(clean_text, context=context)
+        except Exception as exc:
+            logger.warning("[Router] El clasificador LLM falló: %s", exc)
+            return IntentDecision(
+                action=IntentAction.CLARIFY,
+                payload={"message": "No pude interpretar tu solicitud en este momento. ¿Podrías reformularla?"},
+                confidence=0.0,
+                source="fallback",
+                reasoning="Fallo técnico del clasificador; fallback seguro a clarify.",
+            )
+
+        if classification.confidence < self._confidence_threshold:
+            return IntentDecision(
+                action=IntentAction.CLARIFY,
+                payload={"message": "No tengo suficiente certeza para actuar. ¿Podrías dar más detalles?"},
+                confidence=classification.confidence,
+                source="llm",
+                reasoning="Clasificación con confianza baja.",
+            )
+
+        if classification.route == ConversationRoute.GENERAL_KNOWLEDGE:
+            answer = self._knowledge_responder.answer_general_knowledge(clean_text, context=context)
+            return IntentDecision(
+                action=IntentAction.ASK_KNOWLEDGE_BASE,
+                payload={"query": clean_text, "answer": answer},
+                confidence=classification.confidence,
+                source="llm",
+                reasoning=classification.reasoning or "Pregunta de conocimiento general.",
+            )
+
+        if classification.route == ConversationRoute.ORCHESTRATOR and classification.intent:
+            if self._needs_clarification(classification):
+                return IntentDecision(
+                    action=IntentAction.CLARIFY,
+                    payload={"message": "Entiendo la acción, pero me falta una referencia concreta. ¿Podrías especificarla?"},
+                    confidence=classification.confidence,
+                    source="llm",
+                    reasoning="La intención requiere más datos para ejecutarse.",
+                )
+            return IntentDecision(
+                action=classification.intent,
+                payload=classification.payload,
+                confidence=classification.confidence,
+                source="llm",
+                reasoning=classification.reasoning,
+            )
 
         return IntentDecision(
             action=IntentAction.CLARIFY,
@@ -75,7 +139,7 @@ class ProductionIntentRouter:
                 source="rule",
             )
 
-        if any(token in text_lower for token in ["hola", "gracias", "buenos", "buenas", "como estás", "como te va", "qué tal"]):
+        if self._is_pure_small_talk(text):
             return IntentDecision(
                 action=IntentAction.SMALL_TALK,
                 payload={"text": text, "reply": "¡Hola! Estoy bien, gracias. ¿En qué te puedo ayudar hoy?"},
@@ -83,26 +147,8 @@ class ProductionIntentRouter:
                 source="rule",
             )
 
-        if re.search(r"^\b(listar|ver|mostrar)\b", text_lower) and any(token in text_lower for token in ["tareas", "pendientes", "mis tareas", "qué tengo", "qué tareas"]):
-            return IntentDecision(
-                action=IntentAction.LIST_TASKS,
-                confidence=1.0,
-                source="rule",
-                reasoning="Comando de listado detectado por regex.",
-            )
-
-        if re.search(r"^\b(completar|terminar|marcar|finalizar|cerrar)\b", text_lower):
-            return IntentDecision(
-                action=IntentAction.COMPLETE_TASK,
-                payload={"task_id": None},
-                confidence=0.85,
-                source="rule",
-                reasoning="Comando de finalización detectado.",
-            )
-
-        match_create_colon = re.search(r"^(crear|nueva)\s+tarea\s*:\s*(.+)$", text_lower)
-        if match_create_colon:
-            title = match_create_colon.group(2).strip().capitalize()
+        if text_lower.startswith(("crear tarea:", "nueva tarea:")):
+            title = text_lower.split(":", 1)[1].strip().capitalize()
             return IntentDecision(
                 action=IntentAction.CREATE_TASK,
                 payload={"title": title},
@@ -111,40 +157,35 @@ class ProductionIntentRouter:
                 reasoning="Sintaxis de creación explícita detectada.",
             )
 
-        if re.search(r"^\b(crear|añadir|agregar|nueva|haz|hacer|recordar)\b", text_lower):
-            title = self._extract_title(text)
-            return IntentDecision(
-                action=IntentAction.CREATE_TASK,
-                payload={"title": title},
-                confidence=0.9,
-                source="rule",
-                reasoning="Patrón de creación detectado por reglas heurísticas.",
-            )
-
-        if re.search(r"^\b(borrar|eliminar|quitar)\b", text_lower):
-            return IntentDecision(
-                action=IntentAction.DELETE_TASK,
-                payload={"task_id": None},
-                confidence=0.8,
-                source="rule",
-                reasoning="Comando de eliminación detectado.",
-            )
-
         return None
 
-    def _extract_title(self, message: str) -> str:
-        cleaned = message.strip()
-        for prefix in ["crear ", "añadir ", "agregar ", "nueva tarea ", "haz ", "hacer ", "recordar "]:
-            if cleaned.lower().startswith(prefix):
-                cleaned = cleaned[len(prefix):]
-                break
+    def _is_pure_small_talk(self, text: str) -> bool:
+        # Normaliza signos comunes sin regex para reconocer solo saludos puros.
+        normalized = text.lower().strip()
+        for char in [",", ".", "!", "?", ";", ":", "¿", "¡"]:
+            normalized = normalized.replace(char, " ")
+        normalized = " ".join(normalized.split())
 
-        cleaned = re.sub(r"^(una|un|la|el|las|los)\s+", "", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r"^(tarea|actividad|recordatorio)\s*[:\-]?\s*", "", cleaned, flags=re.IGNORECASE)
-        cleaned = cleaned.strip()
+        return normalized in {"hola", "gracias", "buenos dias", "buen día", "buen dia", "buenas"}
 
-        if not cleaned:
-            return "Tarea nueva"
-        if cleaned.lower().startswith("tarea"):
-            return cleaned.capitalize()
-        return f"Tarea {cleaned}".capitalize()
+    def extract_profile_facts(self, text: str, context: str | None = None) -> UserProfileExtraction:
+        if not self._profile_extractor:
+            return UserProfileExtraction()
+        try:
+            return self._profile_extractor.extract_profile_facts(text, context=context)
+        except Exception as exc:
+            logger.warning("[Router] No se pudieron extraer hechos de perfil: %s", exc)
+            return UserProfileExtraction()
+
+    def _needs_clarification(self, classification: IntentClassification) -> bool:
+        if classification.route != ConversationRoute.ORCHESTRATOR:
+            return False
+        if classification.payload.get("needs_clarification") is True:
+            return True
+
+        if classification.intent in {IntentAction.DELETE_TASK, IntentAction.COMPLETE_TASK}:
+            task_ref = classification.payload.get("task_id") or classification.payload.get("task_title") or classification.payload.get("task_reference")
+            if not task_ref:
+                return True
+
+        return False
