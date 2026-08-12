@@ -97,6 +97,21 @@ Puntos de entrada del sistema.
 - CLI en src/assistant_personal/interfaces/cli.py,
 - futuras interfaces conversacionales como Alexa o agentes.
 
+### 4.5 Estado actual de la Fase 1
+
+La parte práctica de la Fase 1 ya quedó incorporada en la API y en el modelo de dominio:
+
+- `Task` ahora valida y normaliza sus datos de negocio a través de Pydantic v2.
+- La API FastAPI usa dependency injection real, middleware de request-id, manejo de excepciones centralizado, background tasks y `lifespan` para gestionar el ciclo de vida del servicio.
+- El servicio de aplicación se concentra en orquestar operaciones de negocio, mientras que la validación y la serialización quedan en la capa de dominio e infraestructura adecuada.
+
+#### DoD de la implementación actual de la Fase 1
+
+- [x] Los modelos de dominio validan status, categoría y prioridad.
+- [x] La API utiliza `Depends` para inyectar el servicio.
+- [x] Existe middleware y manejo centralizado de errores.
+- [x] La API integra background tasks y `lifespan`.
+
 ---
 
 ## 5. Flujo actual del sistema

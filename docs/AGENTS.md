@@ -40,10 +40,10 @@ Cuando hagas cambios en este repositorio, sigue estas reglas:
    - Mantén el sistema funcional después de cada cambio.
 
 5. Actualiza la documentación cuando cambie el diseño.
+   - Para futuras iteraciones, solo deben actualizarse los documentos ubicados en docs/.
+   - Los demás documentos de la raíz del proyecto son legado y no deben modificarse salvo instrucción explícita.
    - Si cambias arquitectura, comportamiento o alcance, actualiza:
-     - PRD.md
-     - ARQUITECTURA_PROFESIONAL.md
-     - plan_formacion_asistente_personal.md
+     - docs/arquitectura_y_prd.md
 
 ## Estructura del proyecto
 
