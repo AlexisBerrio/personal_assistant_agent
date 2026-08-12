@@ -69,7 +69,7 @@ class MongoTaskRepository:
     def create_task(self, payload: dict[str, Any]) -> dict[str, Any]:
         db = self._get_db()
         result = db.personal_tasks.insert_one(payload)
-        return {"inserted_id": str(result.inserted_id), "task_id": payload["task_id"]}
+        return {**payload, "inserted_id": str(result.inserted_id)}
 
     def update_task(self, task_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
         db = self._get_db()

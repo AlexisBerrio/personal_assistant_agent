@@ -71,7 +71,37 @@ class _OpenAITextClient:
         try:
             return json.loads(content)
         except json.JSONDecodeError as exc:
+            extracted = self._extract_json_object(content)
+            if extracted is not None:
+                return extracted
             raise RuntimeError("OpenAI returned invalid JSON") from exc
+
+    def _extract_json_object(self, content: str) -> dict[str, Any] | None:
+        cleaned = (content or "").strip()
+        if not cleaned:
+            return None
+
+        if cleaned.startswith("```"):
+            lines = cleaned.splitlines()
+            if len(lines) >= 3:
+                cleaned = "\n".join(lines[1:-1]).strip()
+                if cleaned.lower().startswith("json"):
+                    cleaned = cleaned[4:].strip()
+            try:
+                return json.loads(cleaned)
+            except json.JSONDecodeError:
+                pass
+
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return None
+
+        candidate = cleaned[start : end + 1]
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            return None
 
 
 class OpenAIIntentClassifier(_OpenAITextClient):
@@ -86,6 +116,8 @@ class OpenAIIntentClassifier(_OpenAITextClient):
             "Devuelve únicamente un JSON válido con las claves route, intent, confidence, reasoning, source y payload. "
             "Rutas permitidas: general_knowledge, orchestrator, clarify. "
             "Intenciones permitidas (cuando route sea orchestrator): list_tasks, create_task, complete_task, delete_task. "
+            "Si route=orchestrator e intent=create_task, payload.title es obligatorio y debe ser específico (sin valores genéricos como 'Tarea nueva'). "
+            "Si no puedes inferir un título específico incluso usando contexto reciente, usa route=clarify. "
             "Si no hay suficiente información para ejecutar una acción concreta, usa route=clarify."
         )
         payload = self._invoke_model(system_prompt, self._build_user_prompt(text, context))

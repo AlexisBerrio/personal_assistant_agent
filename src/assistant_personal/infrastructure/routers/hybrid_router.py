@@ -18,6 +18,43 @@ from src.assistant_personal.infrastructure.routers.openai_llm_client import (
 
 logger = logging.getLogger(__name__)
 
+EXACT_LIST_TASKS_COMMANDS = {
+    "lista mis tareas",
+    "lista mis tareas pendientes",
+    "listar mis tareas",
+    "listar mis tareas pendientes",
+    "muestra mis tareas",
+    "muestra mis tareas pendientes",
+    "mostrar mis tareas",
+    "mostrar mis tareas pendientes",
+    "ver mis tareas",
+    "ver mis tareas pendientes",
+    "mis tareas",
+    "mis tareas pendientes",
+    "que tareas tengo",
+    "qué tareas tengo",
+    "que tareas tengo pendientes",
+    "qué tareas tengo pendientes",
+    "cuales son mis tareas",
+    "cuáles son mis tareas",
+    "cuales son mis tareas pendientes",
+    "cuáles son mis tareas pendientes",
+    "hola lista mis tareas",
+    "hola lista mis tareas pendientes",
+    "hola mostrar mis tareas",
+    "hola mostrar mis tareas pendientes",
+    "hola que tareas tengo",
+    "hola qué tareas tengo",
+    "hola que tareas tengo pendientes",
+    "hola qué tareas tengo pendientes",
+    "buenas lista mis tareas",
+    "buenas lista mis tareas pendientes",
+    "buenas mostrar mis tareas",
+    "buenas mostrar mis tareas pendientes",
+}
+
+EXPLICIT_CREATE_TASK_PREFIXES = ("crear tarea:", "nueva tarea:")
+
 
 class IntentClassifier(Protocol):
     """Contrato de clasificación de intención y ruta de conversación."""
@@ -147,7 +184,24 @@ class ProductionIntentRouter:
                 source="rule",
             )
 
-        if text_lower.startswith(("crear tarea:", "nueva tarea:")):
+        if self._is_pure_farewell(text):
+            return IntentDecision(
+                action=IntentAction.SMALL_TALK,
+                payload={"text": text, "reply": "Hasta pronto."},
+                confidence=0.95,
+                source="rule",
+            )
+
+        if self._is_explicit_list_tasks_command(text):
+            return IntentDecision(
+                action=IntentAction.LIST_TASKS,
+                payload={},
+                confidence=0.99,
+                source="rule",
+                reasoning="Comando explícito de listar tareas detectado por regla de alta precisión.",
+            )
+
+        if self._match_explicit_create_task_command(text_lower):
             title = text_lower.split(":", 1)[1].strip().capitalize()
             return IntentDecision(
                 action=IntentAction.CREATE_TASK,
@@ -161,12 +215,29 @@ class ProductionIntentRouter:
 
     def _is_pure_small_talk(self, text: str) -> bool:
         # Normaliza signos comunes sin regex para reconocer solo saludos puros.
+        normalized = self._normalize_fast_rule_text(text)
+
+        return normalized in {"hola", "gracias", "buenos dias", "buen día", "buen dia", "buenas"}
+
+    def _is_pure_farewell(self, text: str) -> bool:
+        normalized = self._normalize_fast_rule_text(text)
+        return normalized in {"adios", "adiós", "hasta luego", "hasta pronto", "nos vemos", "chao", "chau", "bye"}
+
+    def _is_explicit_list_tasks_command(self, text: str) -> bool:
+        normalized = self._normalize_fast_rule_text(text)
+        return normalized in EXACT_LIST_TASKS_COMMANDS
+
+    def _match_explicit_create_task_command(self, normalized_text: str) -> bool:
+        if not normalized_text.startswith(EXPLICIT_CREATE_TASK_PREFIXES):
+            return False
+        title = normalized_text.split(":", 1)[1].strip() if ":" in normalized_text else ""
+        return bool(title)
+
+    def _normalize_fast_rule_text(self, text: str) -> str:
         normalized = text.lower().strip()
         for char in [",", ".", "!", "?", ";", ":", "¿", "¡"]:
             normalized = normalized.replace(char, " ")
-        normalized = " ".join(normalized.split())
-
-        return normalized in {"hola", "gracias", "buenos dias", "buen día", "buen dia", "buenas"}
+        return " ".join(normalized.split())
 
     def extract_profile_facts(self, text: str, context: str | None = None) -> UserProfileExtraction:
         if not self._profile_extractor:
@@ -186,6 +257,13 @@ class ProductionIntentRouter:
         if classification.intent in {IntentAction.DELETE_TASK, IntentAction.COMPLETE_TASK}:
             task_ref = classification.payload.get("task_id") or classification.payload.get("task_title") or classification.payload.get("task_reference")
             if not task_ref:
+                return True
+
+        if classification.intent == IntentAction.CREATE_TASK:
+            title = classification.payload.get("title")
+            if not isinstance(title, str) or not title.strip():
+                return True
+            if title.strip().lower() in {"tarea nueva", "nueva tarea", "task", "new task"}:
                 return True
 
         return False

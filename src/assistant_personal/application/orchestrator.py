@@ -1,24 +1,30 @@
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from src.assistant_personal.application.agent_context import AgentContext
-from src.assistant_personal.application.prompt_engineering import PromptBuilder
-from src.assistant_personal.infrastructure.persistence.mongo.session_repository import MongoSessionRepository
+from src.assistant_personal.domain.repositories.session_memory_repository import SessionMemoryRepository
 from src.assistant_personal.infrastructure.routers.hybrid_router import ProductionIntentRouter
 
 
 class TaskOrchestrator:
     """Orquesta una interacción simple entre router, guardrails y especialista."""
 
-    def __init__(self, service: Any, router: Any = None, max_retries: int = 1, session_repository: Any | None = None) -> None:
+    def __init__(
+        self,
+        service: Any,
+        router: Any = None,
+        max_retries: int = 1,
+        session_repository: SessionMemoryRepository | None = None,
+        session_id: str | None = None,
+    ) -> None:
         self.service = service
         self.router = router or ProductionIntentRouter()
         self.max_retries = max_retries
-        self.prompt_builder = PromptBuilder()
-        self.session_repository = session_repository or MongoSessionRepository()
+        self.session_repository = session_repository
         self.context = AgentContext(short_term_repository=self.session_repository)
-        self.session_id = "default"
+        self.session_id = session_id or f"session-{uuid.uuid4()}"
 
     def handle_message(self, message: str) -> dict[str, Any]:
         if not message or not message.strip():
@@ -31,7 +37,6 @@ class TaskOrchestrator:
 
         self.context.short_term_memory.add("user_message", message, session_id=self.session_id)
         context_summary = self.context.build_context_summary(session_id=self.session_id)
-        prompt = self.prompt_builder.build_user_prompt(message, context_summary)
 
         profile_facts = self._extract_profile_facts(message, context_summary)
         self._persist_profile_facts(profile_facts)
@@ -51,6 +56,8 @@ class TaskOrchestrator:
         if intent.action == "ask_knowledge_base":
             query = intent.payload.get("query") or message
             answer = intent.payload.get("answer") or self._answer_with_general_knowledge(query)
+            self.context.short_term_memory.add("last_knowledge_question", query, session_id=self.session_id)
+            self.context.short_term_memory.add("last_knowledge_answer", answer, session_id=self.session_id)
             self.context.short_term_memory.add_turn(message, answer, session_id=self.session_id)
             return {"success": True, "action": "ask_knowledge_base", "message": answer, "result": answer}
 
@@ -101,7 +108,6 @@ class TaskOrchestrator:
 
     def _persist_profile_facts(self, facts: list[dict[str, Any]]) -> None:
         for fact in facts:
-            self.session_repository.add_context_item(self.session_id, fact["key"], fact["value"])
             self.context.short_term_memory.add(fact["key"], fact["value"], session_id=self.session_id)
 
     def _answer_with_general_knowledge(self, query: str) -> str:
@@ -142,10 +148,10 @@ class TaskOrchestrator:
             return {"success": True, "action": intent.action, "result": tasks}
 
         if intent.action == "create_task":
-            title = intent.payload.get("title", "Tarea nueva")
+            title = intent.payload.get("title")
             task_payload = {"title": title}
             if not title or not title.strip():
-                raise ValueError("Guardrails: el título de la tarea es obligatorio")
+                raise ValueError("Entiendo que quieres crear una tarea, pero me falta el título. ¿Qué tarea deseas crear?")
             result = self.service.create_task(task_payload)
             return {"success": True, "action": intent.action, "result": result}
 

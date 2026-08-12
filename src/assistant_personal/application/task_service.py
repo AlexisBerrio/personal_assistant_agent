@@ -5,7 +5,7 @@ from typing import Any
 from src.assistant_personal.domain.task_models import Task
 from src.assistant_personal.domain.repositories.task_repository import TaskRepository
 from src.assistant_personal.infrastructure.persistence.mongo.client import get_db
-from src.assistant_personal.infrastructure.persistence.mongo.mongo_repository import MongoTaskRepository
+from src.assistant_personal.infrastructure.task_repository import build_default_task_repository
 
 
 class TaskService:
@@ -41,7 +41,7 @@ class TaskService:
     def __init__(self, db_name: str = "personal_management", repository: TaskRepository | None = None) -> None:
         # Guardamos el nombre de la base de datos que usaremos.
         self.db_name = db_name
-        self.repository = repository or MongoTaskRepository(db_name=db_name, get_db_fn=get_db)
+        self.repository = repository or build_default_task_repository(db_name=db_name, get_db_fn=get_db)
 
     def _to_dict(self, task: Task | dict[str, Any]) -> dict[str, Any]:
         """Convierte un objeto Task o un diccionario en un diccionario simple.

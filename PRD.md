@@ -1,5 +1,7 @@
 # PRD: Asistente personal con MongoDB, MCP, agentes y Alexa
 
+> Este documento ha sido consolidado en [docs/arquitectura_y_prd.md](docs/arquitectura_y_prd.md). El contenido aquí se mantiene solo como referencia histórica y debe actualizarse a través del documento consolidado.
+
 ## 1. Resumen del proyecto
 
 Se está construyendo un asistente personal orientado a la gestión de tareas y contexto del usuario, con una arquitectura modular que combina:
@@ -52,6 +54,7 @@ En esta etapa ya se ha consolidado la capa base de negocio y de interfaz:
 - CLI conversacional orientado a la interacción continua con el usuario.
 - Router de intenciones híbrido con reglas rápidas y LLM para clasificar mensajes.
 - Flujo de respuestas generales de conocimiento desde el propio router, sin depender de un agente principal.
+- Memoria conversacional breve persistida por sesión mediante un puerto de repositorio desacoplado de MongoDB.
 - Tests unitarios que validan el comportamiento del servicio y del router.
 
 ### No incluido todavía
@@ -75,12 +78,19 @@ El proyecto sigue una arquitectura por capas:
 - Infrastructure: integración con MongoDB y servicios externos.
 - Interfaces: API FastAPI, CLI y futuras experiencias conversacionales.
 
+Además, la memoria conversacional de sesión sigue el mismo criterio de desacoplamiento:
+
+- Domain: contrato SessionMemoryRepository.
+- Application: AgentContext y TaskOrchestrator consumen el puerto.
+- Infrastructure: MongoSessionRepository implementa la persistencia real.
+- Interfaces: la CLI decide cuándo usar la implementación Mongo.
+
 El flujo actual es:
 
 1. El usuario interactúa por CLI o por una futura interfaz conversacional.
 2. El router de intenciones clasifica el mensaje en acciones como tareas, conversación casual o conocimiento general.
 3. El orquestador decide cómo resolver la intención, delegando en servicios o en respuestas directas del router.
-4. La capa de infraestructura puede persistir datos en MongoDB cuando la intención lo requiere.
+4. La capa de infraestructura puede persistir datos en MongoDB cuando la intención o la memoria de sesión lo requieren.
 5. La respuesta se devuelve al usuario con contexto de la conversación.
 
 ---

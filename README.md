@@ -2,6 +2,8 @@
 
 Asistente personal agéntico con arquitectura modular, MongoDB y FastAPI.
 
+> Documento de referencia consolidado: [docs/arquitectura_y_prd.md](docs/arquitectura_y_prd.md)
+
 ## Qué incluye actualmente
 
 - modelo de dominio para tareas,
@@ -11,6 +13,8 @@ Asistente personal agéntico con arquitectura modular, MongoDB y FastAPI.
 - CLI simple para consultar tareas,
 - tests básicos del servicio,
 - una capa inicial de orquestación para un agente que interpreta mensajes en lenguaje natural.
+- un router híbrido con clasificación de intención y respuestas de conocimiento general,
+- memoria conversacional de sesión con puerto desacoplado de la implementación MongoDB.
 
 ## Avance reciente: orquestación de agente
 
@@ -23,6 +27,7 @@ Se añadió una primera capa de agente orientada a aprendizaje y evolución del 
 - se incorporaron guardrails para rechazar mensajes vacíos o ambiguos,
 - se añadieron reintentos simples para manejar fallos transitorios,
 - se creó una memoria de corto y largo plazo para conservar contexto entre interacciones.
+- se desacopló la memoria conversacional mediante un puerto de repositorio para no atar la capa de aplicación a MongoDB.
 
 ### Por qué se hizo
 
@@ -45,6 +50,7 @@ app.py
 src/
   assistant_personal/
     domain/
+      repositories/
     application/
     infrastructure/
     interfaces/
@@ -173,8 +179,8 @@ python -m src.assistant_personal.interfaces.cli
 
 ## Siguientes pasos
 
+- consolidar tests de integración del flujo conversacional completo,
 - integrar agentes y herramientas con MCP,
-- añadir más validaciones y tests,
 - preparar una interfaz por voz como Alexa.
 
 ## Conceptos clave de MCP

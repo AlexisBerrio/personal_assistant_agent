@@ -29,6 +29,7 @@ class CliExecutionTests(unittest.TestCase):
             [sys.executable, "cli.py"],
             cwd=cli_dir,
             capture_output=True,
+            input="salir\n",
             text=True,
             timeout=30,
         )
@@ -38,11 +39,11 @@ class CliExecutionTests(unittest.TestCase):
     def test_cli_accepts_a_direct_user_message(self) -> None:
         output = StringIO()
         with redirect_stdout(output):
-            main(["crear una tarea para estudiar"], service=FakeService())
+            main(["nueva tarea: estudiar"], service=FakeService())
 
         result = output.getvalue()
-        self.assertIn("create_task", result.lower())
-        self.assertIn("tarea para estudiar", result.lower())
+        self.assertIn("tarea creada", result.lower())
+        self.assertIn("estudiar", result.lower())
 
     def test_cli_enters_interactive_mode_when_requested(self) -> None:
         output = StringIO()

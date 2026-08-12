@@ -91,6 +91,30 @@ class FakeStructuredProfileRouter:
         )
 
 
+class FakeReadOnlyContextRouter:
+    def __init__(self):
+        self.received_contexts = []
+
+    def extract_profile_facts(self, _message, context=None):
+        return UserProfileExtraction()
+
+    def route(self, _message, context=None):
+        self.received_contexts.append(context)
+        if context and "name=Alexis" in context:
+            return IntentDecision(
+                action=IntentAction.ASK_KNOWLEDGE_BASE,
+                payload={"answer": "Tu nombre es Alexis."},
+                confidence=1.0,
+                source="rule",
+            )
+        return IntentDecision(
+            action=IntentAction.CLARIFY,
+            payload={"message": "No pude responder"},
+            confidence=0.0,
+            source="rule",
+        )
+
+
 class FakeService:
     def __init__(self):
         self.calls = []
@@ -124,6 +148,19 @@ class FakeCreateTaskRouter:
             payload={"title": title},
             confidence=1.0,
             source="rule",
+        )
+
+
+class FakeCreateWithoutTitleRouter:
+    def extract_profile_facts(self, _message, context=None):
+        return UserProfileExtraction()
+
+    def route(self, _message, context=None):
+        return IntentDecision(
+            action=IntentAction.CREATE_TASK,
+            payload={},
+            confidence=1.0,
+            source="llm",
         )
 
 
@@ -178,6 +215,17 @@ class TaskOrchestratorTests(unittest.TestCase):
         self.assertTrue(response["success"])
         self.assertEqual(service.failures, 2)
         self.assertEqual(response["result"]["title"], "Tarea para revisar")
+
+    def test_create_task_without_title_returns_clarify_instead_of_generic_task(self):
+        service = FakeService()
+        orchestrator = TaskOrchestrator(service=service, router=FakeCreateWithoutTitleRouter())
+
+        response = orchestrator.handle_message("crea una tarea para investigar mas sobre eso")
+
+        self.assertFalse(response["success"])
+        self.assertEqual(response["action"], "create_task")
+        self.assertIn("falta el título", response["message"].lower())
+        self.assertEqual(service.calls, [])
 
     def test_guardrails_block_empty_requests(self):
         service = FakeService()
@@ -279,6 +327,33 @@ class TaskOrchestratorTests(unittest.TestCase):
         self.assertTrue(router.extract_calls)
         context_summary = repository.get_context_summary(orchestrator.session_id)
         self.assertTrue(any(item.get("key") == "color_favorito" and item.get("value") == "Azul" for item in context_summary["items"]))
+
+    def test_orchestrator_does_not_reuse_context_from_other_session_ids(self):
+        fake_collection = FakeSessionCollection()
+        fake_db = type("FakeDb", (), {"conversation_sessions": fake_collection})()
+        repository = MongoSessionRepository(db_name="test_db", get_db_fn=lambda _db_name: fake_db)
+        first_router = FakeContextRouter()
+        second_router = FakeReadOnlyContextRouter()
+
+        first = TaskOrchestrator(
+            service=FakeService(),
+            router=first_router,
+            session_repository=repository,
+            session_id="session-a",
+        )
+        second = TaskOrchestrator(
+            service=FakeService(),
+            router=second_router,
+            session_repository=repository,
+            session_id="session-b",
+        )
+
+        first.handle_message("hola, soy Alexis")
+        second_response = second.handle_message("cuál es mi nombre")
+
+        self.assertFalse(second_response["success"])
+        self.assertEqual(second_response["action"], "clarify")
+        self.assertFalse(any(item.get("key") == "name" for item in repository.get_context_summary("session-b")["items"]))
 
 
 if __name__ == "__main__":

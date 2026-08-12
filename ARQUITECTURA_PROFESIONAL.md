@@ -1,5 +1,7 @@
 # Arquitectura profesional actual del proyecto
 
+> Este documento ha sido consolidado en [docs/arquitectura_y_prd.md](docs/arquitectura_y_prd.md). El contenido aquí se mantiene solo como referencia histórica y debe actualizarse a través del documento consolidado.
+
 ## Objetivo
 
 Mantener una arquitectura clara y pedagógica, con separación de responsabilidades entre negocio, infraestructura e interfaces, mientras el proyecto evoluciona desde un prototipo funcional hacia un sistema más completo.
@@ -46,9 +48,10 @@ Contiene los casos de uso del sistema.
 - Se encarga de convertir los datos a un payload compatible con MongoDB.
 - También serializa los resultados para devolver JSON limpio a la API.
 - TaskOrchestrator actúa como orquestador de alto nivel para interpretar mensajes y decidir qué especialista o servicio ejecutar.
-- IntentRouter clasifica la intención del usuario para convertir lenguaje natural en acciones concretas.
+- ProductionIntentRouter actúa como gateway híbrido: reglas deterministas de alta precisión, clasificador Mini LLM y respuesta directa para conocimiento general.
 - PromptBuilder y los guardrails ayudan a guiar el comportamiento del agente y a evitar ejecuciones peligrosas o vacías.
 - AgentContext añade memoria de corto y largo plazo para que el sistema conserve contexto entre turnos.
+- La aplicación depende de un puerto de memoria de sesión, no de MongoDB directamente.
 
 Esta capa se añadió para demostrar cómo un sistema de tareas puede evolucionar desde una API directa hacia un flujo más parecido a un asistente conversacional, sin perder la separación entre negocio e infraestructura.
 
@@ -59,6 +62,7 @@ Se encarga de integrar con servicios externos y capas técnicas.
 - mongo_client.py abre la conexión con MongoDB.
 - La base de datos usada actualmente es personal_management.
 - La colección principal es personal_tasks.
+- MongoSessionRepository implementa la persistencia de memoria conversacional por sesión.
 
 ### 4. Interfaces
 
@@ -76,7 +80,7 @@ Son los puntos de entrada del sistema.
 1. El usuario interactúa por CLI o por una futura interfaz conversacional.
 2. El router de intenciones clasifica el mensaje y decide si responde directamente, delega a tareas o requiere contexto.
 3. El orquestador coordina la ejecución y la respuesta.
-4. Cuando la intención implica persistencia, la capa de infraestructura opera sobre MongoDB.
+4. Cuando la intención implica persistencia o memoria de sesión, la capa de infraestructura opera sobre MongoDB.
 5. La respuesta vuelve al usuario con datos serializados o con contenido conversacional.
 
 ## Qué aporta esta arquitectura
@@ -91,7 +95,7 @@ Son los puntos de entrada del sistema.
 ### Fase A: consolidar la base
 
 - añadir validaciones más estrictas en la API,
-- separar aún más la lógica de acceso a datos,
+- reforzar puertos y adaptadores para memoria conversacional y herramientas,
 - mejorar los tests de integración.
 
 ### Fase B: conectar agentes y herramientas

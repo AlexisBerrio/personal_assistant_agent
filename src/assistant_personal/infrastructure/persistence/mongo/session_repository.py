@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from src.assistant_personal.domain.repositories.session_memory_repository import SessionMemoryRepository
 from src.assistant_personal.infrastructure.persistence.mongo.client import get_db
 
 
-class MongoSessionRepository:
+class MongoSessionRepository(SessionMemoryRepository):
     """Repositorio para almacenar memoria de corto plazo por sesión en MongoDB."""
 
     def __init__(self, db_name: str = "personal_management", get_db_fn: Any | None = None) -> None:
