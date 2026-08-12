@@ -1,6 +1,5 @@
 import inspect
 import uuid
-from datetime import datetime, timezone
 from typing import Any
 
 from src.assistant_personal.domain.task_models import Task
@@ -20,24 +19,6 @@ class TaskService:
     IN_PROGRESS_STATUS = "In Progress"
     COMPLETED_STATUS = "Completed"
     DELETED_STATUS = "Deleted"
-    ALLOWED_STATUS_VALUES = {
-        DEFAULT_STATUS,
-        IN_PROGRESS_STATUS,
-        COMPLETED_STATUS,
-        DELETED_STATUS,
-    }
-    ALLOWED_PRIORITY_VALUES = {
-        "Low",
-        "Medium",
-        "High",
-    }
-    ALLOWED_CATEGORY_VALUES = {
-        "Personal",
-        "Work",
-        "Study",
-        "Health",
-        "Home",
-    }
 
     def __init__(self, db_name: str = "personal_management", repository: TaskRepository | None = None) -> None:
         # Guardamos el nombre de la base de datos que usaremos.
@@ -45,95 +26,16 @@ class TaskService:
         self.repository = repository or build_default_task_repository(db_name=db_name, get_db_fn=get_db)
 
     def _to_dict(self, task: Task | dict[str, Any]) -> dict[str, Any]:
-        """Convierte un objeto Task o un diccionario en un diccionario simple.
-
-        La estructura oficial de la colección debe conservarse completa en el
-        payload para que el servicio sea consistente con los documentos reales.
-        """
+        """Convierte un objeto Task o un diccionario en un diccionario simple."""
         if isinstance(task, Task):
-            payload: dict[str, Any] = {
-                "title": task.title,
-                "task_id": task.task_id,
-                "description": task.description,
-                "status": task.status,
-                "category": task.category,
-                "tags": task.tags,
-                "priority": task.priority,
-                "dates": task.dates,
-                "recurrence": task.recurrence,
-                "context_metadata": task.context_metadata,
-                "steps": task.steps,
-                "agent_notes": task.agent_notes,
-            }
-            return payload
+            return task.to_payload()
         if isinstance(task, dict):
-            return dict(task)
+            return Task.model_validate(task).to_payload()
         raise TypeError("task debe ser un Task o un dict")
 
     def _serialize_value(self, value: Any) -> Any:
         """Convierte valores no JSON-serializables a tipos compatibles con FastAPI."""
-        if isinstance(value, datetime):
-            if value.tzinfo is not None:
-                value = value.astimezone(timezone.utc).replace(tzinfo=None)
-            return value.strftime("%Y-%m-%dT%H:%M:%S")
-        if isinstance(value, dict):
-            return {k: self._serialize_value(v) for k, v in value.items()}
-        if isinstance(value, list):
-            return [self._serialize_value(item) for item in value]
-        return value
-
-    def _validate_status(self, status: Any) -> str:
-        """Valida y normaliza el estado de una tarea."""
-        if status is None:
-            return self.DEFAULT_STATUS
-        if not isinstance(status, str) or not status.strip():
-            raise ValueError("El estado de la tarea no puede estar vacío")
-
-        normalized_status = status.strip()
-        if normalized_status not in self.ALLOWED_STATUS_VALUES:
-            allowed_values = ", ".join(sorted(self.ALLOWED_STATUS_VALUES))
-            raise ValueError(f"Estado no válido. Valores permitidos: {allowed_values}")
-        return normalized_status
-
-    def _validate_priority(self, priority: Any) -> dict[str, Any] | None:
-        """Valida y normaliza la prioridad de una tarea."""
-        if priority is None:
-            return None
-        if not isinstance(priority, dict):
-            raise ValueError("La prioridad debe ser un objeto con un campo level")
-
-        priority_level = priority.get("level")
-        if not isinstance(priority_level, str) or not priority_level.strip():
-            raise ValueError("La prioridad debe incluir un nivel válido")
-
-        normalized_priority = priority_level.strip()
-        if normalized_priority not in self.ALLOWED_PRIORITY_VALUES:
-            allowed_values = ", ".join(sorted(self.ALLOWED_PRIORITY_VALUES))
-            raise ValueError(f"Prioridad no válida. Valores permitidos: {allowed_values}")
-        return {**priority, "level": normalized_priority}
-
-    def _validate_category(self, category: Any) -> str | None:
-        """Valida y normaliza la categoría de una tarea."""
-        if category is None:
-            return None
-        if not isinstance(category, str) or not category.strip():
-            raise ValueError("La categoría de la tarea no puede estar vacía")
-
-        normalized_category = category.strip()
-        if normalized_category not in self.ALLOWED_CATEGORY_VALUES:
-            allowed_values = ", ".join(sorted(self.ALLOWED_CATEGORY_VALUES))
-            raise ValueError(f"Categoría no válida. Valores permitidos: {allowed_values}")
-        return normalized_category
-
-    def _validate_create_payload(self, payload: dict[str, Any]) -> None:
-        """Valida los datos básicos de una tarea antes de persistirla."""
-        title = payload.get("title")
-        if not isinstance(title, str) or not title.strip():
-            raise ValueError("El título de la tarea es obligatorio")
-
-        self._validate_status(payload.get("status"))
-        self._validate_priority(payload.get("priority"))
-        self._validate_category(payload.get("category"))
+        return Task._serialize_value(value)
 
     def _require_task_id(self, task_id: str) -> str:
         """Valida que el task_id sea un identificador útil para el negocio."""
@@ -141,36 +43,9 @@ class TaskService:
             raise ValueError("El task_id de la tarea es obligatorio")
         return task_id.strip()
 
-    def _validate_update_payload(self, updates: dict[str, Any]) -> dict[str, Any]:
-        """Valida los campos que se van a actualizar sin mutar el objeto original."""
-        normalized_updates = dict(updates)
-
-        if "title" in normalized_updates:
-            title = normalized_updates["title"]
-            if not isinstance(title, str) or not title.strip():
-                raise ValueError("El título de la tarea no puede estar vacío")
-            normalized_updates["title"] = title.strip()
-
-        if "status" in normalized_updates:
-            normalized_updates["status"] = self._validate_status(normalized_updates["status"])
-
-        if "priority" in normalized_updates:
-            normalized_updates["priority"] = self._validate_priority(normalized_updates["priority"])
-
-        if "category" in normalized_updates:
-            normalized_updates["category"] = self._validate_category(normalized_updates["category"])
-
-        return normalized_updates
-
     def _prepare_create_payload(self, task: Task | dict[str, Any]) -> dict[str, Any]:
         """Normaliza el payload de creación para que el flujo async sea el único punto de transformación."""
         payload = self._to_dict(task)
-        self._validate_create_payload(payload)
-
-        payload["title"] = payload["title"].strip()
-        payload["status"] = self._validate_status(payload.get("status"))
-        payload["priority"] = self._validate_priority(payload.get("priority"))
-        payload["category"] = self._validate_category(payload.get("category"))
         payload["task_id"] = payload.get("task_id") or str(uuid.uuid4())
         payload.setdefault("is_deleted", False)
         payload.setdefault("deleted_at", None)
@@ -178,15 +53,14 @@ class TaskService:
 
     def _prepare_update_payload(self, updates: dict[str, Any]) -> dict[str, Any]:
         """Normaliza el payload de actualización antes de delegar al repositorio."""
-        normalized_updates = self._validate_update_payload(updates)
+        if not isinstance(updates, dict):
+            raise ValueError("El cuerpo de la actualización debe ser un objeto")
+        if not updates:
+            raise ValueError("No se proporcionaron campos para actualizar")
 
-        task = Task(title="", status=self.DEFAULT_STATUS)
-        task.apply_updates(normalized_updates)
-        return {
-            field: getattr(task, field)
-            for field in normalized_updates
-            if hasattr(task, field)
-        }
+        task = Task.model_construct(title="", status=self.DEFAULT_STATUS)
+        changed_values = task.apply_updates(updates)
+        return changed_values
 
     async def _invoke_repository_async(self, method_name: str, *args: Any) -> Any:
         """Invoca un método del repositorio, soportando tanto versiones async como sync."""

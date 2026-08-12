@@ -4,6 +4,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from app import app
 from src.assistant_personal.application.task_service import TaskService
@@ -148,6 +149,22 @@ class TaskServiceTests(unittest.TestCase):
         self.assertEqual(result[0]["dates"]["created_at"], "2026-05-21T08:30:00")
         self.assertEqual(result[0]["dates"]["due_date"], "2026-05-24T18:00:00")
         self.assertEqual(result[0]["dates"]["completed_at"], None)
+
+    def test_task_model_validates_and_normalizes_domain_payload(self):
+        task = Task.model_validate({
+            "title": "  Comprar pan  ",
+            "status": " pending ",
+            "priority": {"level": " medium ", "score": 50},
+            "category": "  work  ",
+        })
+
+        self.assertEqual(task.title, "Comprar pan")
+        self.assertEqual(task.status, "Pending")
+        self.assertEqual(task.priority["level"], "Medium")
+        self.assertEqual(task.category, "Work")
+
+        with self.assertRaises(ValidationError):
+            Task.model_validate({"title": "   ", "priority": "Critical"})
 
     def test_service_can_use_an_injected_repository(self):
         class FakeRepository:
@@ -331,6 +348,25 @@ class TaskServiceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"task_id": "task-123", "deleted": True})
         mock_delete_task.assert_called_once_with("task-123")
+
+    def test_validation_errors_include_request_id_header(self):
+        client = TestClient(app)
+        response = client.post("/tasks", json={"title": ""})
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("X-Request-ID", response.headers)
+        self.assertTrue(response.headers["X-Request-ID"])
+
+    def test_create_task_runs_background_audit_task(self):
+        client = TestClient(app)
+        with patch("app._record_audit_event", create=True) as mock_record:
+            response = client.post(
+                "/tasks",
+                json={"title": "Demo", "status": "Pending"},
+            )
+
+        self.assertEqual(response.status_code, 201)
+        mock_record.assert_called_once()
 
 
 if __name__ == "__main__":
