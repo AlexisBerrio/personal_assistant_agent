@@ -8,9 +8,9 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from src.assistant_personal.application.agent_context import InMemorySessionRepository
 from src.assistant_personal.application.orchestrator import TaskOrchestrator
 from src.assistant_personal.application.task_service import TaskService
-from src.assistant_personal.infrastructure.persistence.mongo.session_repository import MongoSessionRepository
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -27,21 +27,24 @@ def _handle_interactive(service: TaskService, args: argparse.Namespace) -> None:
     _run_interactive_loop(service)
 
 
+def _format_result_message(result: dict[str, object]) -> str:
+    return result.get("message") or result.get("result") or result.get("reason") or "No se pudo procesar la solicitud."
+
+
 def _handle_single_message(service: TaskService, message: str) -> None:
     orchestrator = TaskOrchestrator(
         service=service,
-        session_repository=MongoSessionRepository(),
+        session_repository=InMemorySessionRepository(),
         session_id=f"cli-{uuid.uuid4()}",
     )
     result = orchestrator.handle_message(message)
-    public_message = result.get("message") or result.get("result") or result.get("reason") or "No se pudo procesar la solicitud."
-    print(public_message)
+    print(_format_result_message(result))
 
 
 def _run_interactive_loop(service: TaskService) -> None:
     orchestrator = TaskOrchestrator(
         service=service,
-        session_repository=MongoSessionRepository(),
+        session_repository=InMemorySessionRepository(),
         session_id=f"cli-{uuid.uuid4()}",
     )
     print("Asistente personal activo. Escribe 'salir' para terminar.")
@@ -62,8 +65,7 @@ def _run_interactive_loop(service: TaskService) -> None:
             continue
 
         result = orchestrator.handle_message(message)
-        public_message = result.get("message") or result.get("result") or result.get("reason") or "No se pudo procesar la solicitud."
-        print(public_message)
+        print(_format_result_message(result))
 
 
 def main(argv: Sequence[str] | None = None, service: TaskService | None = None) -> None:

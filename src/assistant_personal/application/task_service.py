@@ -1,3 +1,4 @@
+import inspect
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -66,7 +67,7 @@ class TaskService:
             }
             return payload
         if isinstance(task, dict):
-            return task
+            return dict(task)
         raise TypeError("task debe ser un Task o un dict")
 
     def _serialize_value(self, value: Any) -> Any:
@@ -140,48 +141,29 @@ class TaskService:
             raise ValueError("El task_id de la tarea es obligatorio")
         return task_id.strip()
 
-    def _validate_update_payload(self, updates: dict[str, Any]) -> None:
-        """Valida los campos que se van a actualizar."""
-        if "title" in updates:
-            title = updates["title"]
+    def _validate_update_payload(self, updates: dict[str, Any]) -> dict[str, Any]:
+        """Valida los campos que se van a actualizar sin mutar el objeto original."""
+        normalized_updates = dict(updates)
+
+        if "title" in normalized_updates:
+            title = normalized_updates["title"]
             if not isinstance(title, str) or not title.strip():
                 raise ValueError("El título de la tarea no puede estar vacío")
-            updates["title"] = title.strip()
+            normalized_updates["title"] = title.strip()
 
-        if "status" in updates:
-            updates["status"] = self._validate_status(updates["status"])
+        if "status" in normalized_updates:
+            normalized_updates["status"] = self._validate_status(normalized_updates["status"])
 
-        if "priority" in updates:
-            updates["priority"] = self._validate_priority(updates["priority"])
+        if "priority" in normalized_updates:
+            normalized_updates["priority"] = self._validate_priority(normalized_updates["priority"])
 
-        if "category" in updates:
-            updates["category"] = self._validate_category(updates["category"])
+        if "category" in normalized_updates:
+            normalized_updates["category"] = self._validate_category(normalized_updates["category"])
 
-    def list_tasks(self) -> list[dict[str, Any]]:
-        """Devuelve las tareas más recientes de la colección personal_tasks."""
-        raw_tasks = self.repository.list_active_tasks()
-        return [self._serialize_value(task) for task in raw_tasks]
+        return normalized_updates
 
-    def get_task(self, task_id: str) -> dict[str, Any] | None:
-        """Devuelve una tarea concreta por su task_id."""
-        normalized_task_id = self._require_task_id(task_id)
-        task = self.repository.get_task_by_id(normalized_task_id)
-        if task is None:
-            return None
-        return self._serialize_value(task)
-
-    def get_task_history(self, task_id: str) -> list[dict[str, Any]]:
-        """Devuelve el historial de cambios de una tarea."""
-        normalized_task_id = self._require_task_id(task_id)
-        history = self.repository.get_task_history(normalized_task_id)
-        return [self._serialize_value(entry) for entry in history]
-
-    def create_task(self, task: Task | dict[str, Any]) -> dict[str, Any]:
-        """Crea una nueva tarea en MongoDB.
-
-        Primero convierte la entrada a un diccionario, valida que tenga título
-        y luego la guarda en la colección correspondiente.
-        """
+    def _prepare_create_payload(self, task: Task | dict[str, Any]) -> dict[str, Any]:
+        """Normaliza el payload de creación para que el flujo async sea el único punto de transformación."""
         payload = self._to_dict(task)
         self._validate_create_payload(payload)
 
@@ -192,10 +174,57 @@ class TaskService:
         payload["task_id"] = payload.get("task_id") or str(uuid.uuid4())
         payload.setdefault("is_deleted", False)
         payload.setdefault("deleted_at", None)
+        return payload
 
-        return self.repository.create_task(payload)
+    def _prepare_update_payload(self, updates: dict[str, Any]) -> dict[str, Any]:
+        """Normaliza el payload de actualización antes de delegar al repositorio."""
+        normalized_updates = self._validate_update_payload(updates)
 
-    def update_task(self, task_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+        task = Task(title="", status=self.DEFAULT_STATUS)
+        task.apply_updates(normalized_updates)
+        return {
+            field: getattr(task, field)
+            for field in normalized_updates
+            if hasattr(task, field)
+        }
+
+    async def _invoke_repository_async(self, method_name: str, *args: Any) -> Any:
+        """Invoca un método del repositorio, soportando tanto versiones async como sync."""
+        for candidate_name in (f"{method_name}_async", method_name):
+            method = getattr(self.repository, candidate_name, None)
+            if callable(method):
+                result = method(*args)
+                if inspect.isawaitable(result):
+                    return await result
+                return result
+
+        raise AttributeError(f"El repositorio no implementa '{method_name}'")
+
+    async def list_tasks_async(self) -> list[dict[str, Any]]:
+        """Devuelve las tareas más recientes de la colección personal_tasks."""
+        raw_tasks = await self._invoke_repository_async("list_active_tasks")
+        return [self._serialize_value(task) for task in raw_tasks]
+
+    async def get_task_async(self, task_id: str) -> dict[str, Any] | None:
+        """Devuelve una tarea concreta por su task_id."""
+        normalized_task_id = self._require_task_id(task_id)
+        task = await self._invoke_repository_async("get_task_by_id", normalized_task_id)
+        if task is None:
+            return None
+        return self._serialize_value(task)
+
+    async def get_task_history_async(self, task_id: str) -> list[dict[str, Any]]:
+        """Devuelve el historial de cambios de una tarea."""
+        normalized_task_id = self._require_task_id(task_id)
+        history = await self._invoke_repository_async("get_task_history", normalized_task_id)
+        return [self._serialize_value(entry) for entry in history]
+
+    async def create_task_async(self, task: Task | dict[str, Any]) -> dict[str, Any]:
+        """Crea una nueva tarea en MongoDB."""
+        payload = self._prepare_create_payload(task)
+        return await self._invoke_repository_async("create_task", payload)
+
+    async def update_task_async(self, task_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
         """Actualiza campos de una tarea existente identificada por task_id."""
         if not isinstance(updates, dict):
             raise ValueError("El cuerpo de la actualización debe ser un objeto")
@@ -203,20 +232,16 @@ class TaskService:
             raise ValueError("No se proporcionaron campos para actualizar")
 
         normalized_task_id = self._require_task_id(task_id)
-        self._validate_update_payload(updates)
-
-        task = Task(title="", status=self.DEFAULT_STATUS)
-        task.apply_updates(updates)
-        updates = {key: value for key, value in task.__dict__.items() if key in updates or key == "status"}
-        updated_task = self.repository.update_task(normalized_task_id, updates)
+        normalized_updates = self._prepare_update_payload(updates)
+        updated_task = await self._invoke_repository_async("update_task", normalized_task_id, normalized_updates)
         return self._serialize_value(updated_task) if updated_task is not None else None
 
-    def complete_task(self, task_id: str) -> dict[str, Any]:
+    async def complete_task_async(self, task_id: str) -> dict[str, Any]:
         """Marca una tarea como completada en base a su task_id."""
         normalized_task_id = self._require_task_id(task_id)
-        return self.repository.complete_task(normalized_task_id)
+        return await self._invoke_repository_async("complete_task", normalized_task_id)
 
-    def delete_task(self, task_id: str) -> dict[str, Any] | None:
+    async def delete_task_async(self, task_id: str) -> dict[str, Any] | None:
         """Marca una tarea como eliminada sin borrarla de la base de datos."""
         normalized_task_id = self._require_task_id(task_id)
-        return self.repository.delete_task(normalized_task_id)
+        return await self._invoke_repository_async("delete_task", normalized_task_id)

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from typing import Any
 
-from pymongo import MongoClient
+from motor.motor_asyncio import AsyncIOMotorClient
 
 from src.assistant_personal.config import get_settings
 
@@ -22,23 +23,27 @@ class MongoConnection:
     def _connect(self) -> None:
         """Intenta conectar a MongoDB y validar la conexión."""
         try:
-            self.client = MongoClient(settings.mongo_uri, serverSelectionTimeoutMS=10000)
-            self.client.admin.command("ping")
-            self._ensure_task_indexes()
+            self.client = AsyncIOMotorClient(settings.mongo_uri, serverSelectionTimeoutMS=10000)
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                asyncio.run(self._ensure_task_indexes())
+            else:
+                asyncio.get_running_loop().create_task(self._ensure_task_indexes())
         except Exception as exc:  # pragma: no cover - fallback de conexión
             self.connection_error = str(exc)
             self.client = None
             print(f"[Mongo] No se pudo conectar: {exc}", file=sys.stderr)
 
-    def _ensure_task_indexes(self) -> None:
+    async def _ensure_task_indexes(self) -> None:
         """Crea índices de negocio necesarios para la colección de tareas."""
         if self.client is None:
             return
 
         db = self.client[settings.mongo_db_name]
-        db.personal_tasks.create_index([("task_id", 1)], unique=True)
+        await db.personal_tasks.create_index([("task_id", 1)], unique=True)
 
-    def get_db(self, db_name: str = settings.mongo_db_name):
+    async def get_db(self, db_name: str = settings.mongo_db_name):
         """Devuelve una base de datos si la conexión está disponible."""
         if self.connection_error or self.client is None:
             raise RuntimeError(
@@ -50,6 +55,6 @@ class MongoConnection:
 mongo_connection = MongoConnection()
 
 
-def get_db(db_name: str = settings.mongo_db_name):
+async def get_db(db_name: str = settings.mongo_db_name):
     """Función de conveniencia para obtener la base de datos desde otros módulos."""
-    return mongo_connection.get_db(db_name)
+    return await mongo_connection.get_db(db_name)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 
@@ -27,6 +28,9 @@ class TaskOrchestrator:
         self.session_id = session_id or f"session-{uuid.uuid4()}"
 
     def handle_message(self, message: str) -> dict[str, Any]:
+        return asyncio.run(self.handle_message_async(message))
+
+    async def handle_message_async(self, message: str) -> dict[str, Any]:
         if not message or not message.strip():
             return {
                 "success": False,
@@ -62,7 +66,7 @@ class TaskOrchestrator:
             return {"success": True, "action": "ask_knowledge_base", "message": answer, "result": answer}
 
         try:
-            result = self._execute_with_retries(intent)
+            result = await self._execute_with_retries(intent)
             assistant_response = self._format_public_message(intent.action, result)
             self.context.short_term_memory.add_turn(message, assistant_response, session_id=self.session_id)
             return {
@@ -131,20 +135,20 @@ class TaskOrchestrator:
 
         return str(result)
 
-    def _execute_with_retries(self, intent: Any) -> dict[str, Any]:
+    async def _execute_with_retries(self, intent: Any) -> dict[str, Any]:
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
-                return self._dispatch(intent)
+                return await self._dispatch(intent)
             except ValueError as exc:
                 last_error = exc
                 if attempt >= self.max_retries:
                     raise
         raise last_error or ValueError("No se pudo completar la acción")
 
-    def _dispatch(self, intent: Any) -> dict[str, Any]:
+    async def _dispatch(self, intent: Any) -> dict[str, Any]:
         if intent.action == "list_tasks":
-            tasks = self.service.list_tasks()
+            tasks = await self._invoke_service("list_tasks")
             return {"success": True, "action": intent.action, "result": tasks}
 
         if intent.action == "create_task":
@@ -152,14 +156,25 @@ class TaskOrchestrator:
             task_payload = {"title": title}
             if not title or not title.strip():
                 raise ValueError("Entiendo que quieres crear una tarea, pero me falta el título. ¿Qué tarea deseas crear?")
-            result = self.service.create_task(task_payload)
+            result = await self._invoke_service("create_task", task_payload)
             return {"success": True, "action": intent.action, "result": result}
 
         if intent.action == "complete_task":
             task_id = intent.payload.get("task_id")
             if not task_id:
                 raise ValueError("Guardrails: falta el identificador de tarea")
-            result = self.service.complete_task(task_id)
+            result = await self._invoke_service("complete_task", task_id)
             return {"success": True, "action": intent.action, "result": result}
 
         return {"success": False, "action": "clarify", "reason": "No se pudo ejecutar la acción"}
+
+    async def _invoke_service(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
+        async_method = getattr(self.service, f"{method_name}_async", None)
+        if callable(async_method):
+            return await async_method(*args, **kwargs)
+
+        sync_method = getattr(self.service, method_name, None)
+        if callable(sync_method):
+            return sync_method(*args, **kwargs)
+
+        raise AttributeError(f"El servicio no implementa '{method_name}'")

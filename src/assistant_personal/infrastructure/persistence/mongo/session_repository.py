@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 from datetime import datetime, timezone
 from typing import Any
 
@@ -14,13 +16,27 @@ class MongoSessionRepository(SessionMemoryRepository):
         self.db_name = db_name
         self._get_db_fn = get_db_fn or get_db
 
+    def _resolve_result(self, value: Any) -> Any:
+        if not inspect.isawaitable(value):
+            return value
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(value)
+
+        return None
+
+    def _build_timestamp(self) -> str:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
     def _get_collection(self) -> Any:
-        db = self._get_db_fn(self.db_name)
+        db = self._resolve_result(self._get_db_fn(self.db_name))
         return db.conversation_sessions
 
     def _get_session(self, session_id: str) -> dict[str, Any]:
         collection = self._get_collection()
-        session = collection.find_one({"session_id": session_id}) or {}
+        session = self._resolve_result(collection.find_one({"session_id": session_id})) or {}
         return {
             "session_id": session.get("session_id", session_id),
             "turns": session.get("turns", []),
@@ -31,12 +47,12 @@ class MongoSessionRepository(SessionMemoryRepository):
 
     def _upsert_session(self, session_id: str, updates: dict[str, Any]) -> None:
         collection = self._get_collection()
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        now = self._build_timestamp()
         payload = {
             "$set": {"session_id": session_id, **updates, "updated_at": now},
             "$setOnInsert": {"created_at": now},
         }
-        collection.update_one({"session_id": session_id}, payload, upsert=True)
+        self._resolve_result(collection.update_one({"session_id": session_id}, payload, upsert=True))
 
     def append_turn(self, session_id: str, user_message: str, assistant_response: str) -> None:
         session = self._get_session(session_id)
@@ -44,7 +60,7 @@ class MongoSessionRepository(SessionMemoryRepository):
         turns.append({
             "user_message": user_message,
             "assistant_response": assistant_response,
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            "timestamp": self._build_timestamp(),
         })
         self._upsert_session(session_id, {"turns": turns[-5:]})
 

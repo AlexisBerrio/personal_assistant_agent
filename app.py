@@ -40,6 +40,18 @@ class TaskUpdateRequest(BaseModel):
     steps: list[dict[str, Any]] | None = Field(default=None, description="Pasos de ejecución actualizados de la tarea.", json_schema_extra={"example": [{"step_id": 1, "text": "Revisar contenido", "is_completed": False}]})
 
 
+async def _invoke_service_method(method_name: str, *args: Any, **kwargs: Any) -> Any:
+    async_method = getattr(service, f"{method_name}_async", None)
+    if callable(async_method):
+        return await async_method(*args, **kwargs)
+
+    sync_method = getattr(service, method_name, None)
+    if callable(sync_method):
+        return sync_method(*args, **kwargs)
+
+    raise AttributeError(f"El servicio no implementa '{method_name}'")
+
+
 @app.get("/health")
 def health_check() -> dict[str, str]:
     """Endpoint simple para comprobar que la API responde."""
@@ -47,7 +59,7 @@ def health_check() -> dict[str, str]:
 
 
 @app.post("/tasks", status_code=201)
-def create_task(payload: TaskCreateRequest) -> dict[str, str]:
+async def create_task(payload: TaskCreateRequest) -> dict[str, str]:
     """Recibe una tarea desde el cliente y la guarda usando el servicio."""
     if not payload.title.strip():
         raise HTTPException(status_code=400, detail="El título de la tarea es obligatorio")
@@ -69,38 +81,38 @@ def create_task(payload: TaskCreateRequest) -> dict[str, str]:
         agent_notes=payload.agent_notes,
     )
     try:
-        return service.create_task(task)
+        return await _invoke_service_method("create_task", task)
     except ValueError as exc:
         # Si falta información, devolvemos un error claro al cliente.
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/tasks")
-def list_tasks() -> list[dict[str, object]]:
+async def list_tasks() -> list[dict[str, object]]:
     """Devuelve una lista de tareas almacenadas en MongoDB."""
-    return service.list_tasks()
+    return await _invoke_service_method("list_tasks")
 
 
 @app.get("/tasks/{task_id}")
-def get_task(task_id: str) -> dict[str, object] | None:
+async def get_task(task_id: str) -> dict[str, object] | None:
     """Devuelve una tarea concreta a partir de su task_id."""
-    task = service.get_task(task_id)
+    task = await _invoke_service_method("get_task", task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Tarea no encontrada")
     return task
 
 
 @app.get("/tasks/{task_id}/history")
-def get_task_history(task_id: str) -> list[dict[str, object]]:
+async def get_task_history(task_id: str) -> list[dict[str, object]]:
     """Devuelve el historial de cambios de una tarea."""
-    history = service.get_task_history(task_id)
+    history = await _invoke_service_method("get_task_history", task_id)
     if not history:
         raise HTTPException(status_code=404, detail="No se encontró historial para la tarea")
     return history
 
 
 @app.patch("/tasks/{task_id}")
-def update_task(task_id: str, payload: TaskUpdateRequest) -> dict[str, object]:
+async def update_task(task_id: str, payload: TaskUpdateRequest) -> dict[str, object]:
     """Actualiza una tarea existente identificada por task_id.
 
     Si el payload incluye un estado "Completed", la tarea se marca como
@@ -111,10 +123,10 @@ def update_task(task_id: str, payload: TaskUpdateRequest) -> dict[str, object]:
         raise HTTPException(status_code=400, detail="Se debe proporcionar al menos un campo para actualizar")
 
     if str(payload_data.get("status", "")).strip().lower() == "completed":
-        return service.complete_task(task_id)
+        return await _invoke_service_method("complete_task", task_id)
 
     try:
-        updated_task = service.update_task(task_id, payload_data)
+        updated_task = await _invoke_service_method("update_task", task_id, payload_data)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -124,9 +136,9 @@ def update_task(task_id: str, payload: TaskUpdateRequest) -> dict[str, object]:
 
 
 @app.delete("/tasks/{task_id}")
-def delete_task(task_id: str) -> dict[str, object]:
+async def delete_task(task_id: str) -> dict[str, object]:
     """Marca una tarea como eliminada sin borrarla de la base de datos."""
-    deleted_task = service.delete_task(task_id)
+    deleted_task = await _invoke_service_method("delete_task", task_id)
     if deleted_task is None:
         raise HTTPException(status_code=404, detail="Tarea no encontrada")
     return deleted_task

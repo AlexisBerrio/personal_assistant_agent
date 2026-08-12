@@ -1,6 +1,7 @@
+import asyncio
 import unittest
 from datetime import datetime
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -77,7 +78,7 @@ class TaskServiceTests(unittest.TestCase):
                 steps=[{"step_id": 1, "text": "Ir al supermercado", "is_completed": False}],
                 agent_notes=[{"timestamp": "2026-01-01T08:00:00", "note": "Tarea creada desde la prueba"}],
             )
-            result = service.create_task(task)
+            result = asyncio.run(service.create_task_async(task))
 
         self.assertEqual(result["inserted_id"], "abc123")
         self.assertTrue(result["task_id"])
@@ -142,7 +143,7 @@ class TaskServiceTests(unittest.TestCase):
 
         with patch("src.assistant_personal.application.task_service.get_db", return_value=fake_db):
             service = TaskService()
-            result = service.list_tasks()
+            result = asyncio.run(service.list_tasks_async())
 
         self.assertEqual(result[0]["dates"]["created_at"], "2026-05-21T08:30:00")
         self.assertEqual(result[0]["dates"]["due_date"], "2026-05-24T18:00:00")
@@ -160,7 +161,7 @@ class TaskServiceTests(unittest.TestCase):
         repository = FakeRepository()
         service = TaskService(repository=repository)
 
-        result = service.list_tasks()
+        result = asyncio.run(service.list_tasks_async())
 
         self.assertEqual(result[0]["title"], "Tarea desde repositorio")
         self.assertEqual(repository.calls, ["list"])
@@ -187,7 +188,7 @@ class TaskServiceTests(unittest.TestCase):
         mcp = FakeMCP()
         register_task_tools(mcp, FakeService())
 
-        result = mcp.tools["health_check"]()
+        result = asyncio.run(mcp.tools["health_check"]())
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["database"], "connected")
@@ -212,7 +213,7 @@ class TaskServiceTests(unittest.TestCase):
         self.assertEqual(filter_query, {"task_id": "task-123", "is_deleted": {"$ne": True}})
 
     def test_get_task_by_id_endpoint_calls_service(self):
-        with patch("app.service.get_task", return_value={"title": "Tarea demo", "task_id": "task-123"}) as mock_get_task:
+        with patch("app.service.get_task_async", new=AsyncMock(return_value={"title": "Tarea demo", "task_id": "task-123"})) as mock_get_task:
             client = TestClient(app)
             response = client.get("/tasks/task-123")
 
@@ -221,7 +222,7 @@ class TaskServiceTests(unittest.TestCase):
         mock_get_task.assert_called_once_with("task-123")
 
     def test_get_task_history_endpoint_calls_service(self):
-        with patch("app.service.get_task_history", return_value=[{"task_id": "task-123", "changes": []}]) as mock_get_history:
+        with patch("app.service.get_task_history_async", new=AsyncMock(return_value=[{"task_id": "task-123", "changes": []}])) as mock_get_history:
             client = TestClient(app)
             response = client.get("/tasks/task-123/history")
 
@@ -230,7 +231,7 @@ class TaskServiceTests(unittest.TestCase):
         mock_get_history.assert_called_once_with("task-123")
 
     def test_update_task_endpoint_calls_service(self):
-        with patch("app.service.update_task", return_value={"task_id": "task-123", "title": "Actualizada"}) as mock_update_task:
+        with patch("app.service.update_task_async", new=AsyncMock(return_value={"task_id": "task-123", "title": "Actualizada"})) as mock_update_task:
             client = TestClient(app)
             response = client.patch("/tasks/task-123", json={"title": "Actualizada"})
 
@@ -246,7 +247,7 @@ class TaskServiceTests(unittest.TestCase):
         self.assertEqual(task.status, "In Progress")
 
     def test_update_task_endpoint_accepts_steps_dates_and_recurrence(self):
-        with patch("app.service.update_task", return_value={"task_id": "task-123", "steps": [{"step_id": 1, "text": "Revisar", "is_completed": False}]}) as mock_update_task:
+        with patch("app.service.update_task_async", new=AsyncMock(return_value={"task_id": "task-123", "steps": [{"step_id": 1, "text": "Revisar", "is_completed": False}]})) as mock_update_task:
             client = TestClient(app)
             response = client.patch(
                 "/tasks/task-123",
@@ -268,7 +269,7 @@ class TaskServiceTests(unittest.TestCase):
         )
 
     def test_complete_task_endpoint_calls_service(self):
-        with patch("app.service.complete_task", return_value={"matched": 1, "modified": 1}) as mock_complete_task:
+        with patch("app.service.complete_task_async", new=AsyncMock(return_value={"matched": 1, "modified": 1})) as mock_complete_task:
             client = TestClient(app)
             response = client.patch("/tasks/task-123", json={"status": "Completed"})
 
@@ -279,7 +280,7 @@ class TaskServiceTests(unittest.TestCase):
     def test_create_task_rejects_blank_title(self):
         service = TaskService()
         with self.assertRaises(ValueError) as context:
-            service.create_task(Task(title="   "))
+            asyncio.run(service.create_task_async(Task(title="   ")))
 
         self.assertIn("título", str(context.exception).lower())
 
@@ -288,7 +289,7 @@ class TaskServiceTests(unittest.TestCase):
 
         with patch("src.assistant_personal.application.task_service.get_db", return_value=fake_db):
             service = TaskService()
-            service.create_task(Task(title="Nueva tarea"))
+            asyncio.run(service.create_task_async(Task(title="Nueva tarea")))
 
         self.assertEqual(fake_db.personal_tasks.last_insert_payload["status"], "Pending")
 
@@ -304,26 +305,26 @@ class TaskServiceTests(unittest.TestCase):
 
         with patch("src.assistant_personal.application.task_service.get_db", return_value=fake_db):
             service = TaskService()
-            service.update_task("task-123", {"description": "Actualizada"})
+            asyncio.run(service.update_task_async("task-123", {"description": "Actualizada"}))
 
         self.assertEqual(fake_db.personal_tasks.last_update_payload["$set"]["status"], "In Progress")
 
     def test_create_task_rejects_invalid_priority(self):
         service = TaskService()
         with self.assertRaises(ValueError) as context:
-            service.create_task({"title": "Tarea", "priority": "Critical"})
+            asyncio.run(service.create_task_async({"title": "Tarea", "priority": "Critical"}))
 
         self.assertIn("prioridad", str(context.exception).lower())
 
     def test_create_task_rejects_invalid_category(self):
         service = TaskService()
         with self.assertRaises(ValueError) as context:
-            service.create_task({"title": "Tarea", "category": "Unknown"})
+            asyncio.run(service.create_task_async({"title": "Tarea", "category": "Unknown"}))
 
         self.assertIn("categoría", str(context.exception).lower())
 
     def test_delete_task_endpoint_calls_service(self):
-        with patch("app.service.delete_task", return_value={"task_id": "task-123", "deleted": True}) as mock_delete_task:
+        with patch("app.service.delete_task_async", new=AsyncMock(return_value={"task_id": "task-123", "deleted": True})) as mock_delete_task:
             client = TestClient(app)
             response = client.delete("/tasks/task-123")
 

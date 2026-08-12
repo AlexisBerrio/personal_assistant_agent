@@ -78,10 +78,14 @@ class AgentContext:
         self.short_term_memory = ShortTermMemory(repository=short_term_repository or InMemorySessionRepository())
         self.long_term_memory = LongTermMemory()
 
-    def build_context_summary(self, session_id: str = "default") -> str:
+    def _collect_recent_context(self, session_id: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[tuple[str, str]]]:
         recent_items = self.short_term_memory.get_items(session_id=session_id)[-3:]
         recent_turns = self.short_term_memory.get_turns(session_id=session_id)[-3:]
         recent_facts = list(self.long_term_memory.get_facts().items())[-3:]
+        return recent_items, recent_turns, recent_facts
+
+    def build_context_summary(self, session_id: str = "default") -> str:
+        recent_items, recent_turns, recent_facts = self._collect_recent_context(session_id)
 
         items = "; ".join(f"{key}={value}" for key, value in recent_items)
         turns = "; ".join(f"user:{user_msg} | assistant:{assistant_msg}" for user_msg, assistant_msg in recent_turns)

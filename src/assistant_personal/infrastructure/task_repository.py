@@ -8,7 +8,7 @@ from src.assistant_personal.infrastructure.persistence.mongo.mongo_repository im
 
 
 def build_default_task_repository(db_name: str = "personal_management", get_db_fn: Any | None = None) -> TaskRepository:
-    """Construye el repositorio concreto por defecto para las tareas."""
+    """Construye el adaptador MongoDB por defecto para el puerto del dominio."""
     return MongoTaskRepository(db_name=db_name, get_db_fn=get_db_fn or get_db)
 
 

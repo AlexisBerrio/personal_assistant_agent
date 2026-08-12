@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from copy import deepcopy
 from unittest.mock import patch
@@ -14,23 +15,23 @@ class InMemoryTaskRepository:
     def check_connection(self):
         return True
 
-    def list_active_tasks(self):
+    async def list_active_tasks_async(self):
         return [deepcopy(task) for task in self.tasks if not task.get("is_deleted")]
 
-    def get_task_by_id(self, task_id):
+    async def get_task_by_id_async(self, task_id):
         for task in self.tasks:
             if task.get("task_id") == task_id and not task.get("is_deleted"):
                 return deepcopy(task)
         return None
 
-    def get_task_history(self, task_id):
+    async def get_task_history_async(self, task_id):
         return [deepcopy(entry) for entry in self.history if entry.get("task_id") == task_id]
 
-    def create_task(self, payload):
+    async def create_task_async(self, payload):
         self.tasks.append(deepcopy(payload))
         return deepcopy(payload)
 
-    def update_task(self, task_id, updates):
+    async def update_task_async(self, task_id, updates):
         for task in self.tasks:
             if task.get("task_id") == task_id and not task.get("is_deleted"):
                 previous = deepcopy(task)
@@ -39,7 +40,7 @@ class InMemoryTaskRepository:
                 return deepcopy(task)
         return None
 
-    def complete_task(self, task_id):
+    async def complete_task_async(self, task_id):
         for task in self.tasks:
             if task.get("task_id") == task_id and not task.get("is_deleted"):
                 previous = deepcopy(task)
@@ -48,7 +49,7 @@ class InMemoryTaskRepository:
                 return {"matched": 1, "modified": 1}
         return {"matched": 0, "modified": 0}
 
-    def delete_task(self, task_id):
+    async def delete_task_async(self, task_id):
         for task in self.tasks:
             if task.get("task_id") == task_id and not task.get("is_deleted"):
                 task["is_deleted"] = True
@@ -74,19 +75,19 @@ class Phase0CadenceTests(unittest.TestCase):
         repository = InMemoryTaskRepository()
         service = TaskService(repository=repository)
 
-        created = service.create_task({"title": "Revisar plan", "status": "Pending"})
+        created = asyncio.run(service.create_task_async({"title": "Revisar plan", "status": "Pending"}))
         self.assertEqual(created["title"], "Revisar plan")
 
-        listed = service.list_tasks()
+        listed = asyncio.run(service.list_tasks_async())
         self.assertEqual(len(listed), 1)
 
-        updated = service.update_task(created["task_id"], {"description": "Detalle actualizado"})
+        updated = asyncio.run(service.update_task_async(created["task_id"], {"description": "Detalle actualizado"}))
         self.assertEqual(updated["description"], "Detalle actualizado")
 
-        completed = service.complete_task(created["task_id"])
+        completed = asyncio.run(service.complete_task_async(created["task_id"]))
         self.assertEqual(completed["modified"], 1)
 
-        history = service.get_task_history(created["task_id"])
+        history = asyncio.run(service.get_task_history_async(created["task_id"]))
         self.assertGreaterEqual(len(history), 2)
 
         self.assertEqual(build_default_task_repository.__name__, "build_default_task_repository")

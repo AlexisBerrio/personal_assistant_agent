@@ -96,7 +96,7 @@ class ProductionIntentRouter:
         clean_text = (user_message or "").strip()
 
         if not clean_text:
-            return IntentDecision(
+            return self._build_decision(
                 action=IntentAction.CLARIFY,
                 payload={"message": "El mensaje está vacío."},
                 confidence=1.0,
@@ -113,7 +113,7 @@ class ProductionIntentRouter:
             classification = self._intent_classifier.classify_intent(clean_text, context=context)
         except Exception as exc:
             logger.warning("[Router] El clasificador LLM falló: %s", exc)
-            return IntentDecision(
+            return self._build_decision(
                 action=IntentAction.CLARIFY,
                 payload={"message": "No pude interpretar tu solicitud en este momento. ¿Podrías reformularla?"},
                 confidence=0.0,
@@ -122,7 +122,7 @@ class ProductionIntentRouter:
             )
 
         if classification.confidence < self._confidence_threshold:
-            return IntentDecision(
+            return self._build_decision(
                 action=IntentAction.CLARIFY,
                 payload={"message": "No tengo suficiente certeza para actuar. ¿Podrías dar más detalles?"},
                 confidence=classification.confidence,
@@ -142,14 +142,14 @@ class ProductionIntentRouter:
 
         if classification.route == ConversationRoute.ORCHESTRATOR and classification.intent:
             if self._needs_clarification(classification):
-                return IntentDecision(
+                return self._build_decision(
                     action=IntentAction.CLARIFY,
                     payload={"message": "Entiendo la acción, pero me falta una referencia concreta. ¿Podrías especificarla?"},
                     confidence=classification.confidence,
                     source="llm",
                     reasoning="La intención requiere más datos para ejecutarse.",
                 )
-            return IntentDecision(
+            return self._build_decision(
                 action=classification.intent,
                 payload=classification.payload,
                 confidence=classification.confidence,
@@ -157,12 +157,29 @@ class ProductionIntentRouter:
                 reasoning=classification.reasoning,
             )
 
-        return IntentDecision(
+        return self._build_decision(
             action=IntentAction.CLARIFY,
             payload={"message": "No pude entender tu solicitud con certeza. ¿Podrías ser más específico?"},
             confidence=0.0,
             source="fallback",
             reasoning="Ninguna regla coincidió y el LLM falló o devolvió baja confianza.",
+        )
+
+    def _build_decision(
+        self,
+        *,
+        action: IntentAction,
+        payload: dict[str, object],
+        confidence: float,
+        source: str,
+        reasoning: str | None = None,
+    ) -> IntentDecision:
+        return IntentDecision(
+            action=action,
+            payload=payload,
+            confidence=confidence,
+            source=source,
+            reasoning=reasoning,
         )
 
     def _check_fast_rules(self, text: str) -> Optional[IntentDecision]:
