@@ -875,7 +875,7 @@ Objetivo: **eliminar fallos silenciosos y desbloquear el resto de fases.**
 
 | # | Cambio | Nivel | Área | Estado |
 | --- | --- | --- | --- | --- |
-| 0.1 | Rotar clave de OpenAI, verificar `.gitignore`, añadir `gitleaks` | 🟢 | §A.11 | ❌ Pendiente — clave sigue expuesta en `.env` |
+| 0.1 | Rotar clave de OpenAI, verificar `.gitignore`, añadir `gitleaks` | 🟢 | §A.11 | 🟡 Parcial — `.gitignore` ya cubría `.env` y se confirmó que nunca se commiteó (`git log --all -p` sin coincidencias); se agregó `.github/workflows/gitleaks.yml`. Falta la rotación de la clave en el dashboard de OpenAI (acción manual del usuario) |
 | 0.2 | `pyproject.toml` + layout `src/`, instalable, sin `sys.path` | 🟢 | §A.3 | ❌ Pendiente |
 | 0.3 | Declarar `motor` y separar grupos de dependencias | 🟢 | §A.3 | ❌ Pendiente — `motor` no está en `requirements.txt` |
 | 0.4 | `Settings` único con `pydantic-settings`; eliminar el segundo mecanismo de entorno | 🟢 | §A.4 | ❌ Pendiente — sigue duplicado (`config.py` vs `openai_llm_client.py`) |
