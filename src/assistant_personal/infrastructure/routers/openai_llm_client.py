@@ -16,16 +16,27 @@ class _OpenAITextClient:
     """Cliente base para compartir invocación y parseo estructurado con OpenAI."""
 
     def __init__(self, model: str | None = None, api_key: str | None = None):
-        self.model = model or os.getenv("OPENAI_MODEL")
-        api_key_value = api_key or os.getenv("OPENAI_API_KEY")
+        provider = os.getenv("LLM_PROVIDER", "openai").strip().lower()
+        base_url: str | None = None
 
-        if not api_key_value:
-            raise RuntimeError("OPENAI_API_KEY is required")
-        if not self.model:
-            raise RuntimeError("OPENAI_MODEL is required")
+        self._use_responses_api = provider != "ollama"
+
+        if provider == "ollama":
+            self.model = model or os.getenv("OLLAMA_MODEL")
+            api_key_value = api_key or os.getenv("OLLAMA_API_KEY", "ollama")
+            base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+            if not self.model:
+                raise RuntimeError("OLLAMA_MODEL is required when LLM_PROVIDER=ollama")
+        else:
+            self.model = model or os.getenv("OPENAI_MODEL")
+            api_key_value = api_key or os.getenv("OPENAI_API_KEY")
+            if not api_key_value:
+                raise RuntimeError("OPENAI_API_KEY is required")
+            if not self.model:
+                raise RuntimeError("OPENAI_MODEL is required")
 
         try:
-            self.client = OpenAI(api_key=api_key_value)
+            self.client = OpenAI(api_key=api_key_value, base_url=base_url)
         except Exception as exc:
             raise RuntimeError("Unable to initialize OpenAI client") from exc
 
@@ -41,7 +52,7 @@ class _OpenAITextClient:
             raise RuntimeError("OPENAI_MODEL is required")
 
     def _invoke_model(self, system_prompt: str, user_prompt: str) -> str:
-        if hasattr(self.client, "responses"):
+        if getattr(self, "_use_responses_api", True) and hasattr(self.client, "responses"):
             response = self.client.responses.create(
                 model=self.model,
                 input=[
