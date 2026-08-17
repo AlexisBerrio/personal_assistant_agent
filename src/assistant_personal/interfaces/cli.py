@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import sys
 import uuid
 from pathlib import Path
@@ -42,6 +43,18 @@ def _handle_single_message(service: TaskService, message: str) -> None:
 
 
 def _run_interactive_loop(service: TaskService) -> None:
+    """Punto de entrada síncrono: abre un único event loop para toda la sesión.
+
+    Reutilizar `orchestrator.handle_message()` (que hace su propio `asyncio.run`)
+    en cada turno abriría y cerraría un loop distinto por mensaje. El cliente de
+    Motor queda ligado al primer loop en el que se usa; reutilizarlo desde un loop
+    nuevo en el siguiente turno rompe con `RuntimeError: Event loop is closed`.
+    Un único `asyncio.run` para toda la sesión evita ese cruce de loops.
+    """
+    asyncio.run(_run_interactive_loop_async(service))
+
+
+async def _run_interactive_loop_async(service: TaskService) -> None:
     orchestrator = TaskOrchestrator(
         service=service,
         session_repository=InMemorySessionRepository(),
@@ -64,7 +77,7 @@ def _run_interactive_loop(service: TaskService) -> None:
             print("Guardrails: el mensaje está vacío.")
             continue
 
-        result = orchestrator.handle_message(message)
+        result = await orchestrator.handle_message_async(message)
         print(_format_result_message(result))
 
 

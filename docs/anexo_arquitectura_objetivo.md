@@ -550,13 +550,27 @@ Plan:
    esta corrección. Sigue existiendo el default `"personal_management"` en varios sitios vs.
    `settings.mongo_db_name` (`"sample_mflix"` en `.env`).
 
-**Hallazgo nuevo durante la verificación (no corregido aún):** `infrastructure/persistence/mongo/client.py`
-crea `mongo_connection = MongoConnection()` a nivel de módulo y, si no hay loop corriendo en el momento del
-import, hace `asyncio.run(self._ensure_task_indexes())` para crear el índice de `personal_tasks`. Ese
-`asyncio.run` abre y cierra su propio loop, y dejar el cliente de Motor ligado a un loop ya cerrado provoca
-`RuntimeError: Event loop is closed` en usos posteriores dentro de otro loop (reproducido manualmente contra
-Mongo real). Es el mismo patrón de bridging que aquí se corrigió, pero en el bootstrap de conexión en vez de
-en el repositorio de sesión. Queda como pendiente separado.
+**Hallazgo nuevo durante la verificación: corregido.** `infrastructure/persistence/mongo/client.py` creaba
+`mongo_connection = MongoConnection()` a nivel de módulo y, si no había loop corriendo en el momento del
+import, hacía `asyncio.run(self._ensure_task_indexes())` para crear el índice de `personal_tasks`. Ese
+`asyncio.run` abría y cerraba su propio loop, dejando el cliente de Motor ligado a un loop ya cerrado.
+Al verificar el fix se descubrió que el problema era más profundo que solo el bootstrap de índices: Motor
+liga internamente su cliente (y el executor de hilos que usa) al loop que estaba activo la primera vez que
+se ejecutó una operación real. Cualquier reuso del mismo singleton desde un loop distinto — el patrón real
+del CLI interactivo, que antes abría un `asyncio.run` por turno — fallaba con
+`RuntimeError: Event loop is closed`, reproducido contra Mongo real.
+
+Corrección aplicada:
+- `MongoConnection.get_db()` ahora verifica en cada llamada si el loop activo cambió desde la última vez
+  que se creó el cliente, y si cambió, lo **recrea** (cerrando el anterior para no filtrar conexiones/hilos)
+  en vez de asumir que sigue siendo válido. Con un loop de vida larga (FastAPI/uvicorn) esto no cuesta nada
+  extra: el cliente se crea una sola vez, igual que antes.
+- El CLI interactivo (`interfaces/cli.py`) dejó de abrir un `asyncio.run` por mensaje; ahora
+  `_run_interactive_loop_async` corre dentro de un único `asyncio.run` para toda la sesión, evitando el
+  cruce de loops en el caso más común de uso real.
+- Test de regresión: `tests/test_mongo_connection_lifecycle.py`, que ejecuta dos operaciones reales contra
+  Mongo (vía `.env`) cada una en su propio `asyncio.run`, reproduciendo exactamente la condición que fallaba
+  antes. Se salta automáticamente si no hay conectividad a Mongo (no bloquea CI sin Mongo disponible).
 
 ### 🟡 Fase 2 — Memoria de largo plazo persistida
 
@@ -589,10 +603,11 @@ Hoy vive solo en memoria de proceso: se pierde en cada reinicio. Diseño objetiv
 
 - [~] Un test de integración prueba que un turno escrito en una petición se lee en la siguiente. Cubierto
       con un test async que reproduce la forma real de Motor dentro de un loop activo; falta el test contra
-      Mongo real en contenedor (0.8/0.9).
-- [~] No queda bridging sync/async en el camino de ejecución de FastAPI. Corregido en la memoria de sesión
-      (`session_repository.py`); pendiente el bootstrap de conexión en `client.py` (hallazgo nuevo, ver
-      arriba).
+      Mongo real en contenedor con datos de sesión (0.8/0.9) — sí existe ya un test contra Mongo real para
+      el ciclo de vida de la conexión (`tests/test_mongo_connection_lifecycle.py`, ítem 0.12).
+- [x] No queda bridging sync/async en el camino de ejecución de FastAPI. Corregido en la memoria de sesión
+      (`session_repository.py`) y en el bootstrap de conexión (`client.py`: rebind automático del cliente
+      Motor si el loop activo cambió, en vez de asumir que el cliente sigue siendo válido).
 - [ ] Ningún fallo de memoria se silencia; todos se registran con contexto.
 - [ ] (Fase 2) La memoria de largo plazo sobrevive a un reinicio, verificado por test.
 - [ ] (Fase 2) El contexto enviado al LLM respeta un presupuesto de tokens medible y registrado.
@@ -868,10 +883,10 @@ Objetivo: **eliminar fallos silenciosos y desbloquear el resto de fases.**
 | 0.6 | `.env.example` completo | 🟢 | §A.4 | ❌ Pendiente |
 | 0.7 | **Corregir el bridging sync/async de la memoria de sesión** | 🟢 | §A.9 | ✅ Hecho — `MongoSessionRepository` async de extremo a extremo, ver detalle en §A.9 |
 | 0.8 | `docker-compose.yml` solo con Mongo, para tests locales | 🟢 | §A.7 | ❌ Pendiente |
-| 0.9 | Primer integration test: memoria de sesión entre peticiones (prueba 0.7) | 🟢 | §A.12 | 🟡 Parcial — test async con fake de forma Motor real; falta contra Mongo real en contenedor (depende de 0.8) |
+| 0.9 | Primer integration test: memoria de sesión entre peticiones (prueba 0.7) | 🟢 | §A.12 | 🟡 Parcial — test async con fake de forma Motor real; falta contra Mongo real en contenedor (depende de 0.8). Sí existe ya `tests/test_mongo_connection_lifecycle.py` contra Mongo real (0.12) |
 | 0.10 | `structlog` en JSON, eliminar todos los `print` | 🟢 | §A.5 | ❌ Pendiente — `print()` en `client.py` y `app.py` |
 | 0.11 | Sanear mensajes de error hacia el cliente | 🟢 | §A.11 | ❌ Pendiente — `handle_value_error`/`handle_runtime_error` devuelven `str(exc)` crudo |
-| 0.12 | *(hallazgo nuevo)* Corregir bridging sync/async en el bootstrap de conexión (`client.py`: `asyncio.run` a nivel de módulo deja el cliente Motor ligado a un loop cerrado) | 🟢 | §A.9 | ❌ Pendiente — reproducido contra Mongo real, ver §A.9 |
+| 0.12 | *(hallazgo nuevo)* Corregir bridging sync/async en el bootstrap de conexión (`client.py`: cliente Motor rebindeado a un loop cerrado) | 🟢 | §A.9 | ✅ Hecho — `get_db()` rebindea el cliente si el loop activo cambió; CLI interactivo usa un único `asyncio.run` por sesión; test de regresión contra Mongo real en `tests/test_mongo_connection_lifecycle.py` |
 
 **DoD de fase:** clone → `uv sync` → tests (unitarios + integración) en verde en máquina limpia; la memoria
 de sesión persiste demostrablemente; ningún `print`; ningún secreto en el repo.
@@ -998,12 +1013,14 @@ nombres y comentarios en español; cambios pequeños e incrementales.
 **Los cinco cambios de mayor impacto, en orden:**
 
 1. **Corregir el bridging sync/async de la memoria de sesión** (Fase 0). ✅ **Hecho** (ver §A.9 y fila 0.7
-   de §A.14). Bug de fallo silencioso: el asistente no recordaba y nada avisaba. Sigue pendiente un hallazgo
-   relacionado en el bootstrap de conexión (`client.py`, fila 0.12).
+   de §A.14). Bug de fallo silencioso: el asistente no recordaba y nada avisaba. El hallazgo relacionado en
+   el bootstrap de conexión (`client.py`, fila 0.12) también quedó ✅ **hecho**.
 2. **`pyproject.toml` + `Settings` único** (Fase 0). Desbloquea CI, containerización y despliegue.
 3. **Integration tests contra Mongo real** (Fase 0–1). Es la única clase de test que detecta el bug
-   anterior y los que vendrán. 🟡 Parcial: existe test async equivalente en forma a Motor; falta contra
-   Mongo real en contenedor.
+   anterior y los que vendrán. 🟡 Parcial: hay test async equivalente en forma a Motor para memoria de
+   sesión, y ya existe un test contra Mongo real para el ciclo de vida de la conexión
+   (`tests/test_mongo_connection_lifecycle.py`); falta un integration test de sesión contra Mongo real en
+   contenedor (0.8).
 4. **Golden dataset del router** (Fase 2). Prerrequisito no negociable de Fase 4: sin medición no hay
    mejora, solo cambios.
 5. **Observabilidad estructurada con métricas de coste** (Fase 1). Convierte discusiones sobre coste y
