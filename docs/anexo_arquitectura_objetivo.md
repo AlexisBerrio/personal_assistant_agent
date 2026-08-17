@@ -516,7 +516,7 @@ asistente. Se separa en tres tipos con ciclos de vida distintos.
 
 | Tipo | Contenido | Almacén | Fase |
 | --- | --- | --- | --- |
-| **Corto plazo (sesión)** | Últimos N turnos de la conversación, estado de desambiguación | Mongo, TTL de horas/días | 0 (corregir) |
+| **Corto plazo (sesión)** | Últimos N turnos de la conversación, estado de desambiguación | Mongo, TTL de horas/días | 0 (✅ bridging corregido, ver abajo) |
 | **Largo plazo (perfil)** | Preferencias, hechos estables ("trabajo hasta las 18h", "prefiero mañanas") | Mongo, persistente | 2 |
 | **Episódica / semántica** | Historial largo consultable por significado | Solo si RAG aplica (§A.10) | 5 |
 
@@ -526,17 +526,37 @@ El repositorio de memoria de sesión hace bridging sync/async y, dentro del even
 probablemente no persiste y falla en silencio. Es el peor tipo de bug: los tests pasan (todo mockeado), la
 API responde 200, y el asistente simplemente no recuerda.
 
+**Estado: corregido.** `MongoSessionRepository` (`session_repository.py`) ya no usa `asyncio.run`/`_resolve_result`;
+expone `append_turn_async`, `add_context_item_async` y `get_context_summary_async` con `await` puro sobre
+Motor. `ShortTermMemory`/`AgentContext`/`TaskOrchestrator.handle_message_async` consumen estas variantes de
+extremo a extremo (dispatcher `_invoke_repository_async`, mismo patrón que `TaskService`). Las variantes
+síncronas de `ShortTermMemory`/`AgentContext` se conservan solo para `InMemorySessionRepository`
+(CLI/tests), y fallan de forma ruidosa (`AttributeError`) si alguien las invoca con un repositorio async,
+en vez de devolver `None` en silencio como antes.
+
 Plan:
 
-1. **Convertir el repositorio a `async` de extremo a extremo.** Eliminar cualquier
-   `asyncio.run` / `run_until_complete` / `nest_asyncio` dentro de código que corre en el loop de FastAPI.
-   Si algún adaptador debe permanecer síncrono, aislarlo con `asyncio.to_thread`, nunca reentrando en el
-   loop.
-2. **Prohibir el silencio.** Un fallo de escritura de memoria se registra siempre y, según política, se
-   propaga. Está prohibido `except Exception: pass`.
-3. **Test de integración contra Mongo real** que escriba un turno, lo lea en otra petición y lo compare.
-   Solo un test de integración detecta esta clase de bug; un mock nunca lo habría hecho.
-4. **Unificar el nombre de base de datos** con el `Settings` central (§A.4) — parte del mismo síntoma.
+1. ~~**Convertir el repositorio a `async` de extremo a extremo.**~~ ✅ Hecho para la memoria de sesión.
+   Eliminado `asyncio.run` / `run_until_complete` en `session_repository.py`.
+2. **Prohibir el silencio.** Pendiente: los métodos async todavía no registran ni propagan fallos de
+   escritura explícitamente (siguen sin `try/except` que oculte errores, pero tampoco hay logging
+   estructurado — depende de §A.5, aún no implementado).
+3. **Test de integración contra Mongo real.** Parcial: se agregó un test async (`tests/test_orchestrator.py`,
+   `tests/test_multi_turn_context.py`) que reproduce la forma real de Motor (colección con métodos
+   `async def`) y corre dentro de un event loop activo — la condición exacta que disparaba el bug. Sigue
+   pendiente un integration test contra un Mongo real en contenedor (bloqueado por 0.8/0.9 en §A.14: no
+   existe aún `docker-compose.yml`).
+4. **Unificar el nombre de base de datos** con el `Settings` central (§A.4) — **pendiente**, no tocado en
+   esta corrección. Sigue existiendo el default `"personal_management"` en varios sitios vs.
+   `settings.mongo_db_name` (`"sample_mflix"` en `.env`).
+
+**Hallazgo nuevo durante la verificación (no corregido aún):** `infrastructure/persistence/mongo/client.py`
+crea `mongo_connection = MongoConnection()` a nivel de módulo y, si no hay loop corriendo en el momento del
+import, hace `asyncio.run(self._ensure_task_indexes())` para crear el índice de `personal_tasks`. Ese
+`asyncio.run` abre y cierra su propio loop, y dejar el cliente de Motor ligado a un loop ya cerrado provoca
+`RuntimeError: Event loop is closed` en usos posteriores dentro de otro loop (reproducido manualmente contra
+Mongo real). Es el mismo patrón de bridging que aquí se corrigió, pero en el bootstrap de conexión en vez de
+en el repositorio de sesión. Queda como pendiente separado.
 
 ### 🟡 Fase 2 — Memoria de largo plazo persistida
 
@@ -567,8 +587,12 @@ Hoy vive solo en memoria de proceso: se pierde en cada reinicio. Diseño objetiv
 
 ### Definition of Done
 
-- [ ] Un test de integración prueba que un turno escrito en una petición se lee en la siguiente.
-- [ ] No queda bridging sync/async en el camino de ejecución de FastAPI.
+- [~] Un test de integración prueba que un turno escrito en una petición se lee en la siguiente. Cubierto
+      con un test async que reproduce la forma real de Motor dentro de un loop activo; falta el test contra
+      Mongo real en contenedor (0.8/0.9).
+- [~] No queda bridging sync/async en el camino de ejecución de FastAPI. Corregido en la memoria de sesión
+      (`session_repository.py`); pendiente el bootstrap de conexión en `client.py` (hallazgo nuevo, ver
+      arriba).
 - [ ] Ningún fallo de memoria se silencia; todos se registran con contexto.
 - [ ] (Fase 2) La memoria de largo plazo sobrevive a un reinicio, verificado por test.
 - [ ] (Fase 2) El contexto enviado al LLM respeta un presupuesto de tokens medible y registrado.
@@ -834,19 +858,20 @@ mantienen el significado de §A.0.
 
 Objetivo: **eliminar fallos silenciosos y desbloquear el resto de fases.**
 
-| # | Cambio | Nivel | Área |
-| --- | --- | --- | --- |
-| 0.1 | Rotar clave de OpenAI, verificar `.gitignore`, añadir `gitleaks` | 🟢 | §A.11 |
-| 0.2 | `pyproject.toml` + layout `src/`, instalable, sin `sys.path` | 🟢 | §A.3 |
-| 0.3 | Declarar `motor` y separar grupos de dependencias | 🟢 | §A.3 |
-| 0.4 | `Settings` único con `pydantic-settings`; eliminar el segundo mecanismo de entorno | 🟢 | §A.4 |
-| 0.5 | Unificar el nombre de base de datos | 🟢 | §A.4 |
-| 0.6 | `.env.example` completo | 🟢 | §A.4 |
-| 0.7 | **Corregir el bridging sync/async de la memoria de sesión** | 🟢 | §A.9 |
-| 0.8 | `docker-compose.yml` solo con Mongo, para tests locales | 🟢 | §A.7 |
-| 0.9 | Primer integration test: memoria de sesión entre peticiones (prueba 0.7) | 🟢 | §A.12 |
-| 0.10 | `structlog` en JSON, eliminar todos los `print` | 🟢 | §A.5 |
-| 0.11 | Sanear mensajes de error hacia el cliente | 🟢 | §A.11 |
+| # | Cambio | Nivel | Área | Estado |
+| --- | --- | --- | --- | --- |
+| 0.1 | Rotar clave de OpenAI, verificar `.gitignore`, añadir `gitleaks` | 🟢 | §A.11 | ❌ Pendiente — clave sigue expuesta en `.env` |
+| 0.2 | `pyproject.toml` + layout `src/`, instalable, sin `sys.path` | 🟢 | §A.3 | ❌ Pendiente |
+| 0.3 | Declarar `motor` y separar grupos de dependencias | 🟢 | §A.3 | ❌ Pendiente — `motor` no está en `requirements.txt` |
+| 0.4 | `Settings` único con `pydantic-settings`; eliminar el segundo mecanismo de entorno | 🟢 | §A.4 | ❌ Pendiente — sigue duplicado (`config.py` vs `openai_llm_client.py`) |
+| 0.5 | Unificar el nombre de base de datos | 🟢 | §A.4 | ❌ Pendiente — sigue inconsistente (`"personal_management"` vs `settings.mongo_db_name`) |
+| 0.6 | `.env.example` completo | 🟢 | §A.4 | ❌ Pendiente |
+| 0.7 | **Corregir el bridging sync/async de la memoria de sesión** | 🟢 | §A.9 | ✅ Hecho — `MongoSessionRepository` async de extremo a extremo, ver detalle en §A.9 |
+| 0.8 | `docker-compose.yml` solo con Mongo, para tests locales | 🟢 | §A.7 | ❌ Pendiente |
+| 0.9 | Primer integration test: memoria de sesión entre peticiones (prueba 0.7) | 🟢 | §A.12 | 🟡 Parcial — test async con fake de forma Motor real; falta contra Mongo real en contenedor (depende de 0.8) |
+| 0.10 | `structlog` en JSON, eliminar todos los `print` | 🟢 | §A.5 | ❌ Pendiente — `print()` en `client.py` y `app.py` |
+| 0.11 | Sanear mensajes de error hacia el cliente | 🟢 | §A.11 | ❌ Pendiente — `handle_value_error`/`handle_runtime_error` devuelven `str(exc)` crudo |
+| 0.12 | *(hallazgo nuevo)* Corregir bridging sync/async en el bootstrap de conexión (`client.py`: `asyncio.run` a nivel de módulo deja el cliente Motor ligado a un loop cerrado) | 🟢 | §A.9 | ❌ Pendiente — reproducido contra Mongo real, ver §A.9 |
 
 **DoD de fase:** clone → `uv sync` → tests (unitarios + integración) en verde en máquina limpia; la memoria
 de sesión persiste demostrablemente; ningún `print`; ningún secreto en el repo.
@@ -972,11 +997,13 @@ nombres y comentarios en español; cambios pequeños e incrementales.
 
 **Los cinco cambios de mayor impacto, en orden:**
 
-1. **Corregir el bridging sync/async de la memoria de sesión** (Fase 0). Bug de fallo silencioso: el
-   asistente no recuerda y nada avisa.
+1. **Corregir el bridging sync/async de la memoria de sesión** (Fase 0). ✅ **Hecho** (ver §A.9 y fila 0.7
+   de §A.14). Bug de fallo silencioso: el asistente no recordaba y nada avisaba. Sigue pendiente un hallazgo
+   relacionado en el bootstrap de conexión (`client.py`, fila 0.12).
 2. **`pyproject.toml` + `Settings` único** (Fase 0). Desbloquea CI, containerización y despliegue.
 3. **Integration tests contra Mongo real** (Fase 0–1). Es la única clase de test que detecta el bug
-   anterior y los que vendrán.
+   anterior y los que vendrán. 🟡 Parcial: existe test async equivalente en forma a Motor; falta contra
+   Mongo real en contenedor.
 4. **Golden dataset del router** (Fase 2). Prerrequisito no negociable de Fase 4: sin medición no hay
    mejora, solo cambios.
 5. **Observabilidad estructurada con métricas de coste** (Fase 1). Convierte discusiones sobre coste y

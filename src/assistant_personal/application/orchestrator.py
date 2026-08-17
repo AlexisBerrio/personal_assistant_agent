@@ -39,43 +39,43 @@ class TaskOrchestrator:
                 "reason": "Guardrails: el mensaje está vacío.",
             }
 
-        self.context.short_term_memory.add("user_message", message, session_id=self.session_id)
-        context_summary = self.context.build_context_summary(session_id=self.session_id)
+        await self.context.short_term_memory.add_async("user_message", message, session_id=self.session_id)
+        context_summary = await self.context.build_context_summary_async(session_id=self.session_id)
 
         profile_facts = self._extract_profile_facts(message, context_summary)
-        self._persist_profile_facts(profile_facts)
-        context_summary = self.context.build_context_summary(session_id=self.session_id)
+        await self._persist_profile_facts(profile_facts)
+        context_summary = await self.context.build_context_summary_async(session_id=self.session_id)
 
         intent = self.router.route(message, context=context_summary)
         if intent.action == "clarify":
             response_message = intent.payload.get("message", "No se pudo interpretar")
-            self.context.short_term_memory.add_turn(message, response_message, session_id=self.session_id)
+            await self.context.short_term_memory.add_turn_async(message, response_message, session_id=self.session_id)
             return {"success": False, "action": "clarify", "message": response_message, "reason": response_message}
 
         if intent.action == "small_talk":
             reply = intent.payload.get("reply") or "¡Hola! ¿En qué te puedo ayudar?"
-            self.context.short_term_memory.add_turn(message, reply, session_id=self.session_id)
+            await self.context.short_term_memory.add_turn_async(message, reply, session_id=self.session_id)
             return {"success": True, "action": "small_talk", "message": reply, "result": reply}
 
         if intent.action == "ask_knowledge_base":
             query = intent.payload.get("query") or message
             answer = intent.payload.get("answer") or self._answer_with_general_knowledge(query)
-            self.context.short_term_memory.add("last_knowledge_question", query, session_id=self.session_id)
-            self.context.short_term_memory.add("last_knowledge_answer", answer, session_id=self.session_id)
-            self.context.short_term_memory.add_turn(message, answer, session_id=self.session_id)
+            await self.context.short_term_memory.add_async("last_knowledge_question", query, session_id=self.session_id)
+            await self.context.short_term_memory.add_async("last_knowledge_answer", answer, session_id=self.session_id)
+            await self.context.short_term_memory.add_turn_async(message, answer, session_id=self.session_id)
             return {"success": True, "action": "ask_knowledge_base", "message": answer, "result": answer}
 
         try:
             result = await self._execute_with_retries(intent)
             assistant_response = self._format_public_message(intent.action, result)
-            self.context.short_term_memory.add_turn(message, assistant_response, session_id=self.session_id)
+            await self.context.short_term_memory.add_turn_async(message, assistant_response, session_id=self.session_id)
             return {
                 **result,
                 "message": assistant_response,
             }
         except ValueError as exc:
             assistant_response = str(exc)
-            self.context.short_term_memory.add_turn(message, assistant_response, session_id=self.session_id)
+            await self.context.short_term_memory.add_turn_async(message, assistant_response, session_id=self.session_id)
             return {"success": False, "action": intent.action, "message": assistant_response, "reason": str(exc)}
 
     def _extract_profile_facts(self, message: str, context_summary: str) -> list[dict[str, Any]]:
@@ -110,9 +110,9 @@ class TaskOrchestrator:
                     facts.append({"key": str(key), "value": str(value)})
         return facts
 
-    def _persist_profile_facts(self, facts: list[dict[str, Any]]) -> None:
+    async def _persist_profile_facts(self, facts: list[dict[str, Any]]) -> None:
         for fact in facts:
-            self.context.short_term_memory.add(fact["key"], fact["value"], session_id=self.session_id)
+            await self.context.short_term_memory.add_async(fact["key"], fact["value"], session_id=self.session_id)
 
     def _answer_with_general_knowledge(self, query: str) -> str:
         return f"Consulta de conocimiento: {query}"

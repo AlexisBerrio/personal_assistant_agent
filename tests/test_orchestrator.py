@@ -6,6 +6,13 @@ from src.assistant_personal.domain.entities import IntentAction, IntentDecision,
 from src.assistant_personal.infrastructure.persistence.mongo.session_repository import MongoSessionRepository
 
 
+def _make_async_get_db(fake_db):
+    """Simula la forma async real de `get_db` (Motor): una coroutine, no un valor plano."""
+    async def _get_db(_db_name):
+        return fake_db
+    return _get_db
+
+
 class FakeRouter:
     def route(self, _message, context=None):
         return IntentDecision(
@@ -177,13 +184,15 @@ class FlakyService(FakeService):
 
 
 class FakeSessionCollection:
+    """Simula la forma async real de una colección Motor: los métodos devuelven coroutines."""
+
     def __init__(self):
         self.docs = {}
 
-    def find_one(self, filter_query):
+    async def find_one(self, filter_query):
         return self.docs.get(filter_query.get("session_id"))
 
-    def update_one(self, filter_query, update, upsert=False):
+    async def update_one(self, filter_query, update, upsert=False):
         session_id = filter_query.get("session_id")
         current = self.docs.get(session_id, {})
         if "$set" in update:
@@ -194,7 +203,7 @@ class FakeSessionCollection:
         return type("Result", (), {"matched_count": 1, "modified_count": 1})()
 
 
-class TaskOrchestratorTests(unittest.TestCase):
+class TaskOrchestratorTests(unittest.IsolatedAsyncioTestCase):
     def test_creates_task_through_the_orchestrator(self):
         service = FakeService()
         orchestrator = TaskOrchestrator(service=service, router=FakeCreateTaskRouter())
@@ -258,80 +267,85 @@ class TaskOrchestratorTests(unittest.TestCase):
         self.assertNotIn("context", follow_up)
         self.assertIn("message", follow_up)
 
-    def test_short_term_memory_keeps_only_the_most_recent_turns(self):
+    async def test_short_term_memory_keeps_only_the_most_recent_turns(self):
         fake_collection = FakeSessionCollection()
         fake_db = type("FakeDb", (), {"conversation_sessions": fake_collection})()
-        repository = MongoSessionRepository(db_name="test_db", get_db_fn=lambda _db_name: fake_db)
+        repository = MongoSessionRepository(db_name="test_db", get_db_fn=_make_async_get_db(fake_db))
         memory = ShortTermMemory(repository=repository, max_turns=2, max_items=2)
 
-        memory.add_turn("crear una tarea para estudiar", "tarea creada", session_id="session-test")
-        memory.add_turn("crear una tarea para entrenar", "tarea creada", session_id="session-test")
-        memory.add_turn("crear una tarea para cocinar", "tarea creada", session_id="session-test")
+        await memory.add_turn_async("crear una tarea para estudiar", "tarea creada", session_id="session-test")
+        await memory.add_turn_async("crear una tarea para entrenar", "tarea creada", session_id="session-test")
+        await memory.add_turn_async("crear una tarea para cocinar", "tarea creada", session_id="session-test")
 
-        self.assertEqual(len(memory.get_turns(session_id="session-test")), 2)
-        self.assertEqual(memory.get_turns(session_id="session-test")[0][0], "crear una tarea para entrenar")
-        self.assertEqual(memory.get_turns(session_id="session-test")[1][0], "crear una tarea para cocinar")
+        turns = await memory.get_turns_async(session_id="session-test")
+        self.assertEqual(len(turns), 2)
+        self.assertEqual(turns[0][0], "crear una tarea para entrenar")
+        self.assertEqual(turns[1][0], "crear una tarea para cocinar")
 
-    def test_session_repository_persists_turns_and_context(self):
+    async def test_session_repository_persists_turns_and_context(self):
+        """Regresión del bug de bridging sync/async (docs/anexo §A.9): corre dentro
+        de un event loop real para asegurar que el repositorio nunca devuelve None
+        en silencio cuando ya hay un loop activo (el caso real de FastAPI)."""
         fake_collection = FakeSessionCollection()
         fake_db = type("FakeDb", (), {"conversation_sessions": fake_collection})()
-        repository = MongoSessionRepository(db_name="test_db", get_db_fn=lambda _db_name: fake_db)
+        repository = MongoSessionRepository(db_name="test_db", get_db_fn=_make_async_get_db(fake_db))
 
-        repository.append_turn("session-a", "hola", "hola, ¿en qué te ayudo?")
-        repository.add_context_item("session-a", "name", "Ana")
+        await repository.append_turn_async("session-a", "hola", "hola, ¿en qué te ayudo?")
+        await repository.add_context_item_async("session-a", "name", "Ana")
 
-        summary = repository.get_context_summary("session-a", max_turns=3, max_items=3)
+        summary = await repository.get_context_summary_async("session-a", max_turns=3, max_items=3)
 
         self.assertEqual(summary["turns"][0]["user_message"], "hola")
         self.assertEqual(summary["items"][0]["value"], "Ana")
 
-    def test_orchestrator_persists_and_reuses_session_context_from_repository(self):
+    async def test_orchestrator_persists_and_reuses_session_context_from_repository(self):
         fake_collection = FakeSessionCollection()
         fake_db = type("FakeDb", (), {"conversation_sessions": fake_collection})()
-        repository = MongoSessionRepository(db_name="test_db", get_db_fn=lambda _db_name: fake_db)
+        repository = MongoSessionRepository(db_name="test_db", get_db_fn=_make_async_get_db(fake_db))
         router = FakeContextRouter()
         orchestrator = TaskOrchestrator(service=FakeService(), router=router, session_repository=repository)
 
-        first_response = orchestrator.handle_message("hola, soy Alexis")
-        second_response = orchestrator.handle_message("cuál es mi nombre")
+        first_response = await orchestrator.handle_message_async("hola, soy Alexis")
+        second_response = await orchestrator.handle_message_async("cuál es mi nombre")
 
         self.assertTrue(first_response["success"])
         self.assertEqual(second_response["message"], "Tu nombre es Alexis.")
-        self.assertGreaterEqual(len(repository.get_context_summary(orchestrator.session_id)["turns"]), 1)
+        summary = await repository.get_context_summary_async(orchestrator.session_id)
+        self.assertGreaterEqual(len(summary["turns"]), 1)
         self.assertTrue(any(context and "name=Alexis" in context for context in router.received_contexts))
 
-    def test_orchestrator_persists_generic_profile_facts_from_repository(self):
+    async def test_orchestrator_persists_generic_profile_facts_from_repository(self):
         fake_collection = FakeSessionCollection()
         fake_db = type("FakeDb", (), {"conversation_sessions": fake_collection})()
-        repository = MongoSessionRepository(db_name="test_db", get_db_fn=lambda _db_name: fake_db)
+        repository = MongoSessionRepository(db_name="test_db", get_db_fn=_make_async_get_db(fake_db))
         router = FakeGenericContextRouter()
         orchestrator = TaskOrchestrator(service=FakeService(), router=router, session_repository=repository)
 
-        first_response = orchestrator.handle_message("mi color favorito es azul")
-        second_response = orchestrator.handle_message("cuál es mi color favorito")
+        first_response = await orchestrator.handle_message_async("mi color favorito es azul")
+        second_response = await orchestrator.handle_message_async("cuál es mi color favorito")
 
         self.assertTrue(first_response["success"])
         self.assertEqual(second_response["message"], "Tu color favorito es Azul.")
         self.assertTrue(any(context and "color_favorito=Azul" in context for context in router.received_contexts))
 
-    def test_orchestrator_persists_profile_facts_from_structured_extraction(self):
+    async def test_orchestrator_persists_profile_facts_from_structured_extraction(self):
         fake_collection = FakeSessionCollection()
         fake_db = type("FakeDb", (), {"conversation_sessions": fake_collection})()
-        repository = MongoSessionRepository(db_name="test_db", get_db_fn=lambda _db_name: fake_db)
+        repository = MongoSessionRepository(db_name="test_db", get_db_fn=_make_async_get_db(fake_db))
         router = FakeStructuredProfileRouter()
         orchestrator = TaskOrchestrator(service=FakeService(), router=router, session_repository=repository)
 
-        response = orchestrator.handle_message("Amo el sushi")
+        response = await orchestrator.handle_message_async("Amo el sushi")
 
         self.assertTrue(response["success"])
         self.assertTrue(router.extract_calls)
-        context_summary = repository.get_context_summary(orchestrator.session_id)
+        context_summary = await repository.get_context_summary_async(orchestrator.session_id)
         self.assertTrue(any(item.get("key") == "color_favorito" and item.get("value") == "Azul" for item in context_summary["items"]))
 
-    def test_orchestrator_does_not_reuse_context_from_other_session_ids(self):
+    async def test_orchestrator_does_not_reuse_context_from_other_session_ids(self):
         fake_collection = FakeSessionCollection()
         fake_db = type("FakeDb", (), {"conversation_sessions": fake_collection})()
-        repository = MongoSessionRepository(db_name="test_db", get_db_fn=lambda _db_name: fake_db)
+        repository = MongoSessionRepository(db_name="test_db", get_db_fn=_make_async_get_db(fake_db))
         first_router = FakeContextRouter()
         second_router = FakeReadOnlyContextRouter()
 
@@ -348,12 +362,13 @@ class TaskOrchestratorTests(unittest.TestCase):
             session_id="session-b",
         )
 
-        first.handle_message("hola, soy Alexis")
-        second_response = second.handle_message("cuál es mi nombre")
+        await first.handle_message_async("hola, soy Alexis")
+        second_response = await second.handle_message_async("cuál es mi nombre")
 
         self.assertFalse(second_response["success"])
         self.assertEqual(second_response["action"], "clarify")
-        self.assertFalse(any(item.get("key") == "name" for item in repository.get_context_summary("session-b")["items"]))
+        summary_b = await repository.get_context_summary_async("session-b")
+        self.assertFalse(any(item.get("key") == "name" for item in summary_b["items"]))
 
 
 if __name__ == "__main__":
