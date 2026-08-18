@@ -47,9 +47,8 @@ class CliExecutionTests(unittest.TestCase):
 
     def test_cli_enters_interactive_mode_when_requested(self) -> None:
         output = StringIO()
-        with patch("builtins.input", side_effect=["salir"]):
-            with redirect_stdout(output):
-                main(["interactive"], service=FakeService())
+        with patch("builtins.input", side_effect=["salir"]), redirect_stdout(output):
+            main(["interactive"], service=FakeService())
 
         result = output.getvalue()
         self.assertIn("asistente personal activo", result.lower())

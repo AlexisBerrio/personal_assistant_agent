@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -30,15 +29,15 @@ class Settings(BaseSettings):
     mongo_uri: str
     mongo_db_name: str = "personal_management"
 
-    openai_api_key: Optional[SecretStr] = None
-    openai_model: Optional[str] = None
+    openai_api_key: SecretStr | None = None
+    openai_model: str | None = None
 
     llm_provider: str = "openai"
     ollama_base_url: str = "http://localhost:11434/v1"
-    ollama_model: Optional[str] = None
+    ollama_model: str | None = None
 
     @property
-    def python_command(self) -> Optional[str]:
+    def python_command(self) -> str | None:
         venv_python = _REPO_ROOT / ".venv" / "Scripts" / "python.exe"
         return str(venv_python) if venv_python.exists() else None
 

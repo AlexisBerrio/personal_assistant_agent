@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -53,10 +54,8 @@ class MongoConnection:
             return
 
         if self.client is not None:
-            try:
+            with contextlib.suppress(Exception):  # cierre best-effort del cliente anterior
                 self.client.close()
-            except Exception:  # pragma: no cover - cierre best-effort del cliente anterior
-                pass
 
         try:
             self.client = AsyncIOMotorClient(self._mongo_uri, serverSelectionTimeoutMS=10000)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -30,7 +30,7 @@ class IntentDecision(BaseModel):
     action: IntentAction
     payload: dict[str, Any] = Field(default_factory=dict, description="Parámetros extraídos del mensaje")
     confidence: float = Field(ge=0.0, le=1.0, description="Nivel de confianza en la decisión [0.0 - 1.0]")
-    reasoning: Optional[str] = Field(default=None, description="Breve justificación de la elección")
+    reasoning: str | None = Field(default=None, description="Breve justificación de la elección")
     source: str = Field(description="Origen de la decisión: 'rule', 'llm', 'fallback'")
 
 
@@ -40,7 +40,7 @@ class IntentClassification(BaseModel):
     route: ConversationRoute
     intent: IntentAction | None = Field(default=None, description="Intención del dominio cuando aplica")
     confidence: float = Field(ge=0.0, le=1.0, description="Confianza de la clasificación")
-    reasoning: Optional[str] = Field(default=None, description="Justificación de la clasificación")
+    reasoning: str | None = Field(default=None, description="Justificación de la clasificación")
     payload: dict[str, Any] = Field(default_factory=dict, description="Datos estructurados extraídos del mensaje")
     source: str = Field(default="llm", description="Origen de la clasificación")
 

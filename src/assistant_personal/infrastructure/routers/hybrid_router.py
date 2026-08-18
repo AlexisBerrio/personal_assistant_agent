@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional, Protocol
+from typing import Any, Protocol
 
 from src.assistant_personal.domain.entities import (
     ConversationRoute,
@@ -86,9 +86,9 @@ class ProductionIntentRouter:
 
     def __init__(
         self,
-        llm_client: Optional[IntentClassifier] = None,
-        knowledge_responder: Optional[GeneralKnowledgeResponder] = None,
-        profile_extractor: Optional[ProfileFactExtractor] = None,
+        llm_client: IntentClassifier | None = None,
+        knowledge_responder: GeneralKnowledgeResponder | None = None,
+        profile_extractor: ProfileFactExtractor | None = None,
         confidence_threshold: float = 0.7,
     ):
         self._intent_classifier = llm_client or OpenAIIntentClassifier()
@@ -191,7 +191,7 @@ class ProductionIntentRouter:
             reasoning=reasoning,
         )
 
-    def _check_fast_rules(self, text: str) -> Optional[IntentDecision]:
+    def _check_fast_rules(self, text: str) -> IntentDecision | None:
         text_lower = text.lower().strip()
 
         if text_lower in ["/start", "/help", "ayuda"]:

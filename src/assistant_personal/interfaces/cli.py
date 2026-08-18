@@ -2,7 +2,7 @@ import argparse
 import asyncio
 import sys
 import uuid
-from typing import Sequence
+from collections.abc import Sequence
 
 from src.assistant_personal.application.agent_context import InMemorySessionRepository
 from src.assistant_personal.application.orchestrator import TaskOrchestrator

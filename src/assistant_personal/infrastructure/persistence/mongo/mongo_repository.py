@@ -45,7 +45,7 @@ class MongoTaskRepository:
         """Recoge documentos desde un cursor síncrono o asíncrono."""
         if hasattr(cursor, "__aiter__"):
             return [doc async for doc in cursor]
-        return [doc for doc in cursor]
+        return list(cursor)
 
     async def _record_history(
         self, db: Any, task_id: str, updates: dict[str, Any], previous_task: dict[str, Any] | None

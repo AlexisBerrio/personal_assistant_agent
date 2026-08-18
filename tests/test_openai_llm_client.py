@@ -1,4 +1,5 @@
 import unittest
+from typing import ClassVar
 
 from src.assistant_personal.domain.entities import ConversationRoute, IntentAction
 from src.assistant_personal.infrastructure.routers.openai_llm_client import OpenAIIntentClassifier
@@ -13,7 +14,7 @@ class FakeChatCompletions:
             message = FakeMessage()
 
         class FakeResponse:
-            choices = [FakeChoice()]
+            choices: ClassVar = [FakeChoice()]
             usage = None
 
         return FakeResponse()
@@ -33,7 +34,7 @@ class FakeMarkdownChatCompletions:
             message = FakeMessage()
 
         class FakeResponse:
-            choices = [FakeChoice()]
+            choices: ClassVar = [FakeChoice()]
             usage = None
 
         return FakeResponse()
@@ -48,7 +49,7 @@ class FakeWrappedTextChatCompletions:
             message = FakeMessage()
 
         class FakeResponse:
-            choices = [FakeChoice()]
+            choices: ClassVar = [FakeChoice()]
             usage = None
 
         return FakeResponse()

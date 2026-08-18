@@ -38,11 +38,25 @@ line-length = 120
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "I"]
+# E/F/I: pycodestyle errores + pyflakes + orden de imports (set original).
+# W: pycodestyle warnings (espacios en blanco al final de línea, etc.).
+# N: pep8-naming — nombres de clases/funciones/variables no estándar.
+# UP: pyupgrade — sintaxis moderna de Python (target-version arriba).
+# B: flake8-bugbear — patrones que suelen esconder bugs reales.
+# C4: flake8-comprehensions — comprensiones innecesariamente complejas.
+# SIM: flake8-simplify — simplificaciones de lógica condicional.
+# RUF: reglas propias de Ruff.
+# ERA: código comentado (código muerto dejado como comentario).
+# No se activa `preview`: reglas experimentales que cambian sin aviso entre versiones — mala
+# idea para un gate de CI (ej. E262/E265, espaciado de comentarios, viven ahí en esta versión).
+select = ["E", "F", "I", "W", "N", "UP", "B", "C4", "SIM", "RUF", "ERA"]
 
 [tool.ruff.lint.per-file-ignores]
 # Literales de fixtures/mocks en tests: partirlos no aporta claridad.
 "tests/*" = ["E501"]
+# `Depends(...)` en un valor por defecto es el patrón de inyección de dependencias que FastAPI
+# exige explícitamente — no es el antipatrón genérico que B008 detecta en el resto del código.
+"app.py" = ["B008"]
 
 [tool.mypy]
 python_version = "3.10"

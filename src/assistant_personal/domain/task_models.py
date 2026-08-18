@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -12,11 +12,11 @@ class Task(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     title: str
-    task_id: Optional[str] = None
+    task_id: str | None = None
     tenant_id: str = "default"
-    description: Optional[str] = None
+    description: str | None = None
     status: str = "Pending"
-    category: Optional[str] = None
+    category: str | None = None
     tags: list[str] = Field(default_factory=list)
     priority: dict[str, Any] | None = None
     dates: dict[str, Any] = Field(default_factory=dict)
@@ -25,7 +25,7 @@ class Task(BaseModel):
     steps: list[dict[str, Any]] = Field(default_factory=list)
     agent_notes: list[dict[str, Any]] = Field(default_factory=list)
     is_deleted: bool = False
-    deleted_at: Optional[str] = None
+    deleted_at: str | None = None
 
     @field_validator("title", mode="before")
     @classmethod
