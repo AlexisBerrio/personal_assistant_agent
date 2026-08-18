@@ -61,6 +61,10 @@ jobs:
           getent hosts api.openai.com || true
           echo "--- TLS/HTTP ---"
           curl -sS -o /dev/null -w "HTTP %{http_code}\n" https://api.openai.com/v1/models -H "Authorization: Bearer $OPENAI_API_KEY" --max-time 10
+          echo "--- Resolución completa (lo que ve httpx/Python) ---"
+          python3 -c "import socket; print(socket.getaddrinfo('api.openai.com', 443))"
+          echo "--- Conectividad IPv6 directa ---"
+          curl -6 -sS -o /dev/null -w "IPv6 HTTP %{http_code}\n" https://api.openai.com/v1/models -H "Authorization: Bearer $OPENAI_API_KEY" --max-time 10 || echo "IPv6 falló"
 
       - name: Evaluación del router contra el golden dataset
         # Bloqueante: test_eval_router.py falla si algún umbral de tests/eval/umbrales.yaml no
