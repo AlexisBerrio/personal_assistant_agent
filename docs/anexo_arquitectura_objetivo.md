@@ -284,16 +284,23 @@ diagnóstico principal, porque los fallos son probabilísticos y no reproducible
 
 ### 🟢 Higiene inmediata (Fase 0–1)
 
-- **Eliminar todos los `print`.** Logging estructurado en JSON con `structlog`, un solo configurador en
-  `infrastructure/observabilidad`.
-- **Propagar el `request_id` existente** a todos los logs de la petición vía context vars. Ya existe el
-  middleware; falta que el identificador llegue al log.
+- ✅ **Eliminar todos los `print`.** Logging estructurado en JSON con `structlog`, un solo configurador en
+  `infrastructure/observabilidad/logging.py` (`configure_logging`/`get_logger`, se autoconfigura al
+  importarse). Reemplazados los dos `print` usados como diagnóstico (`client.py`: fallo de conexión a
+  Mongo; `app.py`: evento de auditoría de creación de tarea). Los `print` de `interfaces/cli.py` se dejaron
+  intactos a propósito: son la salida real del producto (lo que el usuario lee en la terminal), no logging.
+- ✅ **Propagar el `request_id` existente** a todos los logs de la petición vía context vars. Se consolidó
+  además el middleware duplicado que existía (`RequestIdMiddleware` + `add_request_id_header` hacían lo
+  mismo, generando dos UUIDs independientes — se dejó solo uno) y se agregó
+  `structlog.contextvars.bind_contextvars(request_id=...)`/`clear_contextvars()` en su `dispatch`, así que
+  cualquier log emitido durante esa petición, en cualquier módulo, incluye `request_id` sin pasarlo a mano.
 - **Campos mínimos por interacción conversacional:** `request_id`, `session_id`, `tenant_id`, `intencion`,
   `confianza`, `uso_llm` (bool), `modelo`, `tokens_entrada`, `tokens_salida`, `latencia_ms_total`,
   `latencia_ms_llm`, `resultado`. Con estos doce campos ya se puede calcular coste por interacción y tasa
-  de `clarify` sin instrumentación adicional.
-- **Nunca registrar contenido sensible del usuario por defecto.** El texto del mensaje solo con
-  `log_prompts=true` activado explícitamente en desarrollo.
+  de `clarify` sin instrumentación adicional. **Pendiente** — el logging estructurado ya existe pero
+  ninguna interacción emite todavía estos campos (depende del router/orquestador, Fase 2+).
+- **Nunca registrar contenido sensible del usuario por defecto.** Pendiente de verificar con un test
+  explícito (mismo pendiente que `SecretStr`, ver §A.11).
 
 ### 🟡 Industrialización esperable (Fase 7, adelantable a Fase 4)
 
@@ -317,8 +324,9 @@ diagnóstico principal, porque los fallos son probabilísticos y no reproducible
 
 ### Definition of Done
 
-- [ ] Cero `print` en `src/`.
-- [ ] Todo log de una petición comparte `request_id`.
+- [x] Cero `print` usados como logging en `src/` (los de `interfaces/cli.py` son salida del producto, no
+      diagnóstico — ver nota arriba).
+- [x] Todo log de una petición comparte `request_id` (contextvars en `RequestIdMiddleware`).
 - [ ] Existe una consulta o script que devuelve coste estimado y tasa de `clarify` del último día.
 - [ ] Un test verifica que los secretos y los prompts no se registran con la configuración por defecto.
 
@@ -886,7 +894,7 @@ Objetivo: **eliminar fallos silenciosos y desbloquear el resto de fases.**
 | 0.7 | **Corregir el bridging sync/async de la memoria de sesión** | 🟢 | §A.9 | ✅ Hecho — `MongoSessionRepository` async de extremo a extremo, ver detalle en §A.9 |
 | 0.8 | `docker-compose.yml` solo con Mongo, para tests locales | 🟢 | §A.7 | ❌ Pendiente |
 | 0.9 | Primer integration test: memoria de sesión entre peticiones (prueba 0.7) | 🟢 | §A.12 | 🟡 Parcial — test async con fake de forma Motor real; falta contra Mongo real en contenedor (depende de 0.8). Sí existe ya `tests/test_mongo_connection_lifecycle.py` contra Mongo real (0.12) |
-| 0.10 | `structlog` en JSON, eliminar todos los `print` | 🟢 | §A.5 | ❌ Pendiente — `print()` en `client.py` y `app.py` |
+| 0.10 | `structlog` en JSON, eliminar todos los `print` | 🟢 | §A.5 | ✅ Hecho — `infrastructure/observabilidad/logging.py` centraliza la configuración; `client.py`/`app.py` usan `get_logger`; `request_id` propagado por contextvars; de paso se eliminó un middleware duplicado que generaba dos UUIDs distintos por petición |
 | 0.11 | Sanear mensajes de error hacia el cliente | 🟢 | §A.11 | ✅ Hecho — `handle_runtime_error` ya no devuelve `str(exc)`, responde un mensaje genérico + `request_id` y registra el detalle completo (con traceback) vía `logging`. Se agregó además un handler catch-all (`Exception`) como red de seguridad para errores no anticipados (antes se propagaban sin `request_id` ni registro). `handle_value_error`/`handle_http_exception` se dejaron igual a propósito: sus mensajes son texto de negocio escrito por nosotros mismos (ej. "El título de la tarea es obligatorio"), no detalle interno |
 | 0.12 | *(hallazgo nuevo)* Corregir bridging sync/async en el bootstrap de conexión (`client.py`: cliente Motor rebindeado a un loop cerrado) | 🟢 | §A.9 | ✅ Hecho — `get_db()` rebindea el cliente si el loop activo cambió; CLI interactivo usa un único `asyncio.run` por sesión; test de regresión contra Mongo real en `tests/test_mongo_connection_lifecycle.py` |
 

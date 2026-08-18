@@ -1,8 +1,8 @@
-import logging
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
+import structlog
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -11,8 +11,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.assistant_personal.application.task_service import TaskService
 from src.assistant_personal.domain.task_models import Task
+from src.assistant_personal.infrastructure.observabilidad import get_logger
 
-logger = logging.getLogger("assistant_personal.api")
+logger = get_logger(__name__)
 
 GENERIC_ERROR_MESSAGE = "Ocurrió un error interno. Comparte el request_id con soporte si el problema persiste."
 
@@ -30,21 +31,22 @@ app = FastAPI(title="Asistente Personal", version="0.1.0", lifespan=lifespan)
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
+    """Genera/propaga el request_id y lo ata a los logs de toda la petición.
+
+    `bind_contextvars` hace que cualquier `logger.info/error(...)` invocado
+    durante esta petición (en cualquier módulo) incluya `request_id`
+    automáticamente, sin tener que pasarlo explícitamente en cada log.
+    `clear_contextvars` evita que el valor se filtre a la siguiente petición.
+    """
+
     async def dispatch(self, request: Request, call_next: Any) -> Any:
+        structlog.contextvars.clear_contextvars()
         request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
         request.state.request_id = request_id
+        structlog.contextvars.bind_contextvars(request_id=request_id)
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
         return response
-
-
-@app.middleware("http")
-async def add_request_id_header(request: Request, call_next: Any) -> Any:
-    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
-    request.state.request_id = request_id
-    response = await call_next(request)
-    response.headers["X-Request-ID"] = request_id
-    return response
 
 
 @app.exception_handler(RequestValidationError)
@@ -71,7 +73,7 @@ async def handle_value_error(request: Request, exc: ValueError) -> JSONResponse:
 @app.exception_handler(RuntimeError)
 async def handle_runtime_error(request: Request, exc: RuntimeError) -> JSONResponse:
     request_id = getattr(request.state, "request_id", "") or "unknown"
-    logger.exception("RuntimeError no controlado [request_id=%s]", request_id, exc_info=exc)
+    logger.error("runtime_error_no_controlado", exc_info=exc)
     return JSONResponse(status_code=500, content={"detail": GENERIC_ERROR_MESSAGE, "request_id": request_id})
 
 
@@ -85,7 +87,7 @@ async def handle_unexpected_exception(request: Request, exc: Exception) -> JSONR
     sesión (docs/anexo_arquitectura_objetivo.md §A.9), aplicado aquí a nivel de API.
     """
     request_id = getattr(request.state, "request_id", "") or "unknown"
-    logger.exception("Excepción no controlada [request_id=%s]", request_id, exc_info=exc)
+    logger.error("excepcion_no_controlada", exc_info=exc)
     return JSONResponse(status_code=500, content={"detail": GENERIC_ERROR_MESSAGE, "request_id": request_id})
 
 
@@ -101,7 +103,7 @@ def get_service(request: Request) -> TaskService:
 
 
 def _record_audit_event(task_title: str, request_id: str) -> None:
-    print(f"AUDIT {request_id}: {task_title}")
+    logger.info("task_created_audit", task_title=task_title, request_id=request_id)
 
 
 async def _invoke_service_method(service: TaskService, method_name: str, *args: Any, **kwargs: Any) -> Any:

@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from src.assistant_personal.config import get_settings
+from src.assistant_personal.infrastructure.observabilidad import get_logger
 
 
 settings = get_settings()
+logger = get_logger(__name__)
 
 
 class MongoConnection:
@@ -61,7 +62,7 @@ class MongoConnection:
         except Exception as exc:  # pragma: no cover - fallback de conexión
             self.connection_error = str(exc)
             self.client = None
-            print(f"[Mongo] No se pudo conectar: {exc}", file=sys.stderr)
+            logger.error("mongo_connection_failed", error=str(exc))
 
     async def _ensure_task_indexes(self) -> None:
         """Crea índices de negocio necesarios para la colección de tareas."""
