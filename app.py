@@ -1,3 +1,4 @@
+import logging
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any
@@ -10,6 +11,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.assistant_personal.application.task_service import TaskService
 from src.assistant_personal.domain.task_models import Task
+
+logger = logging.getLogger("assistant_personal.api")
+
+GENERIC_ERROR_MESSAGE = "Ocurrió un error interno. Comparte el request_id con soporte si el problema persiste."
 
 
 @asynccontextmanager
@@ -66,7 +71,22 @@ async def handle_value_error(request: Request, exc: ValueError) -> JSONResponse:
 @app.exception_handler(RuntimeError)
 async def handle_runtime_error(request: Request, exc: RuntimeError) -> JSONResponse:
     request_id = getattr(request.state, "request_id", "") or "unknown"
-    return JSONResponse(status_code=500, content={"detail": str(exc), "request_id": request_id})
+    logger.exception("RuntimeError no controlado [request_id=%s]", request_id, exc_info=exc)
+    return JSONResponse(status_code=500, content={"detail": GENERIC_ERROR_MESSAGE, "request_id": request_id})
+
+
+@app.exception_handler(Exception)
+async def handle_unexpected_exception(request: Request, exc: Exception) -> JSONResponse:
+    """Red de seguridad para cualquier excepción no cubierta por los handlers anteriores.
+
+    Sin esto, un error inesperado (ej. de pymongo, del SDK de OpenAI, un
+    AttributeError) se propagaba sin request_id y sin quedar registrado: el
+    mismo patrón de fallo silencioso que ya se corrigió para la memoria de
+    sesión (docs/anexo_arquitectura_objetivo.md §A.9), aplicado aquí a nivel de API.
+    """
+    request_id = getattr(request.state, "request_id", "") or "unknown"
+    logger.exception("Excepción no controlada [request_id=%s]", request_id, exc_info=exc)
+    return JSONResponse(status_code=500, content={"detail": GENERIC_ERROR_MESSAGE, "request_id": request_id})
 
 
 app.add_middleware(RequestIdMiddleware)

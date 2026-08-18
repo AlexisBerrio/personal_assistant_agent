@@ -678,13 +678,15 @@ exposición pública, incluida la integración con Alexa (Fase 6).
 
 ### 🟢 Higiene inmediata (Fase 0)
 
-- Rotar la clave de OpenAI; `.env` en `.gitignore`; `gitleaks` en CI (§A.6).
-- `SecretStr` para todo secreto; test que verifique que no aparecen en logs ni en respuestas de error.
-- **Sanear los mensajes de error hacia el cliente.** Los exception handlers centralizados ya existen:
-  deben devolver un mensaje genérico con `request_id` y dejar el detalle solo en los logs. Un stacktrace en
-  la respuesta es filtración de arquitectura.
+- ✅ Rotar la clave de OpenAI; `.env` en `.gitignore`; `gitleaks` en CI (§A.6).
+- ✅ `SecretStr` para todo secreto (implementado en `config.py`, ver §A.4/0.4). Falta el test explícito que
+  verifique que no aparecen en logs ni en respuestas de error (queda pendiente, es rápido de agregar).
+- ✅ **Sanear los mensajes de error hacia el cliente.** `handle_runtime_error` y el nuevo handler catch-all
+  (`Exception`) devuelven mensaje genérico + `request_id`, y registran el detalle completo (con traceback)
+  vía `logging` — nunca en la respuesta. `handle_value_error`/`handle_http_exception` se dejaron sin tocar
+  a propósito: son mensajes de negocio escritos por nosotros, no detalle interno filtrado.
 - **Validación estricta de entrada** con Pydantic: longitud máxima de mensaje, tipos, límites en campos de
-  texto. Barato y corta abusos triviales.
+  texto. Barato y corta abusos triviales. Pendiente.
 
 ### 🟡 Industrialización esperable (Fase 6–7)
 
@@ -721,7 +723,7 @@ exposición pública, incluida la integración con Alexa (Fase 6).
 - [ ] Toda consulta a Mongo incluye `tenant_id`, verificado por test.
 - [ ] Cada tool MCP declara scopes y registra una entrada de auditoría por invocación.
 - [ ] `tenant_id` nunca es un parámetro que el LLM pueda fijar.
-- [ ] Las respuestas de error no contienen stacktraces ni nombres internos.
+- [x] Las respuestas de error no contienen stacktraces ni nombres internos (ítem 0.11, Fase 0).
 
 ---
 
@@ -885,7 +887,7 @@ Objetivo: **eliminar fallos silenciosos y desbloquear el resto de fases.**
 | 0.8 | `docker-compose.yml` solo con Mongo, para tests locales | 🟢 | §A.7 | ❌ Pendiente |
 | 0.9 | Primer integration test: memoria de sesión entre peticiones (prueba 0.7) | 🟢 | §A.12 | 🟡 Parcial — test async con fake de forma Motor real; falta contra Mongo real en contenedor (depende de 0.8). Sí existe ya `tests/test_mongo_connection_lifecycle.py` contra Mongo real (0.12) |
 | 0.10 | `structlog` en JSON, eliminar todos los `print` | 🟢 | §A.5 | ❌ Pendiente — `print()` en `client.py` y `app.py` |
-| 0.11 | Sanear mensajes de error hacia el cliente | 🟢 | §A.11 | ❌ Pendiente — `handle_value_error`/`handle_runtime_error` devuelven `str(exc)` crudo |
+| 0.11 | Sanear mensajes de error hacia el cliente | 🟢 | §A.11 | ✅ Hecho — `handle_runtime_error` ya no devuelve `str(exc)`, responde un mensaje genérico + `request_id` y registra el detalle completo (con traceback) vía `logging`. Se agregó además un handler catch-all (`Exception`) como red de seguridad para errores no anticipados (antes se propagaban sin `request_id` ni registro). `handle_value_error`/`handle_http_exception` se dejaron igual a propósito: sus mensajes son texto de negocio escrito por nosotros mismos (ej. "El título de la tarea es obligatorio"), no detalle interno |
 | 0.12 | *(hallazgo nuevo)* Corregir bridging sync/async en el bootstrap de conexión (`client.py`: cliente Motor rebindeado a un loop cerrado) | 🟢 | §A.9 | ✅ Hecho — `get_db()` rebindea el cliente si el loop activo cambió; CLI interactivo usa un único `asyncio.run` por sesión; test de regresión contra Mongo real en `tests/test_mongo_connection_lifecycle.py` |
 
 **DoD de fase:** clone → `uv sync` → tests (unitarios + integración) en verde en máquina limpia; la memoria
