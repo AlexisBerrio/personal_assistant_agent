@@ -92,7 +92,11 @@ class MongoTaskRepository:
     async def create_task_async(self, payload: dict[str, Any]) -> dict[str, Any]:
         db = await self._get_db()
         payload = {**payload, "tenant_id": self.tenant_id}
-        result = await self._maybe_await(db.personal_tasks.insert_one(payload))
+        # `insert_one` muta su argumento en el sitio, inyectándole `_id` (un `ObjectId`, no
+        # serializable a JSON). Se le pasa una copia para que el `payload` que devolvemos se
+        # quede limpio — bug real detectado por tests/test_api_e2e.py (§A.12, ítem 1.9): el
+        # primer test que serializa esta respuesta de verdad a través de FastAPI.
+        result = await self._maybe_await(db.personal_tasks.insert_one(dict(payload)))
         return {**payload, "inserted_id": str(result.inserted_id)}
 
     async def update_task_async(self, task_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:

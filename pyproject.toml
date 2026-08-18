@@ -27,6 +27,12 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.6", "mypy>=1.11"]
 where = ["."]
 include = ["src*"]
 
+[tool.pytest.ini_options]
+# Sin esto, pytest inserta `tests/` en sys.path (no la raíz del repo), y `from app import app`
+# falla con ModuleNotFoundError — `app.py` vive en la raíz, no bajo `src/`. `python -m unittest
+# discover` no tiene este problema porque ya corre con la raíz del repo como cwd.
+pythonpath = ["."]
+
 [tool.ruff]
 line-length = 120
 target-version = "py310"
