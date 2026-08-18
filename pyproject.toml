@@ -33,6 +33,9 @@ include = ["src*"]
 # falla con ModuleNotFoundError — `app.py` vive en la raíz, no bajo `src/`. `python -m unittest
 # discover` no tiene este problema porque ya corre con la raíz del repo como cwd.
 pythonpath = ["."]
+markers = [
+    "eval: llama al LLM real (golden dataset del router, §A.10 ítem 2.3); excluido del run por defecto con -m 'not eval'",
+]
 
 [tool.ruff]
 line-length = 120
