@@ -98,6 +98,14 @@ class FakeStructuredProfileRouter:
         )
 
 
+class FakeLowConfidenceProfileRouter:
+    def extract_profile_facts(self, _message, context=None):
+        return UserProfileExtraction(profile_facts=[UserProfileFact(key="color_favorito", value="Azul", confidence=0.3)])
+
+    def route(self, _message, context=None):
+        return IntentDecision(action=IntentAction.SMALL_TALK, payload={"reply": "ok"}, confidence=1.0, source="rule")
+
+
 class FakeReadOnlyContextRouter:
     def __init__(self):
         self.received_contexts = []
@@ -339,8 +347,24 @@ class TaskOrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(response["success"])
         self.assertTrue(router.extract_calls)
-        context_summary = await repository.get_context_summary_async(orchestrator.session_id)
-        self.assertTrue(any(item.get("key") == "color_favorito" and item.get("value") == "Azul" for item in context_summary["items"]))
+        # Los hechos de perfil se persisten en memoria de largo plazo (§A.9, ítem 2.5), no en la
+        # de sesión: sobreviven a un reinicio, la de sesión es de corta vida.
+        long_term_facts = await orchestrator.context.long_term_memory.get_facts_async()
+        self.assertEqual(long_term_facts.get("color_favorito"), "Azul")
+
+    async def test_low_confidence_profile_facts_are_not_persisted(self):
+        """Regresión de docs/anexo_arquitectura_objetivo.md §A.9 (ítem 2.5): escribir todo lo que
+        el usuario dice envenena el contexto. Un hecho con confianza por debajo del umbral
+        (default 0.7) no debe llegar a la memoria de largo plazo."""
+        orchestrator = TaskOrchestrator(
+            service=FakeService(), router=FakeLowConfidenceProfileRouter(), session_id="low-confidence-session"
+        )
+
+        response = await orchestrator.handle_message_async("me gusta el azul, creo")
+
+        self.assertTrue(response["success"])
+        long_term_facts = await orchestrator.context.long_term_memory.get_facts_async()
+        self.assertNotIn("color_favorito", long_term_facts)
 
     async def test_orchestrator_does_not_reuse_context_from_other_session_ids(self):
         fake_collection = FakeSessionCollection()

@@ -9,6 +9,7 @@ from typing import Any
 import structlog
 
 from src.assistant_personal.application.agent_context import AgentContext
+from src.assistant_personal.domain.repositories.long_term_memory_repository import LongTermMemoryRepository
 from src.assistant_personal.domain.repositories.session_memory_repository import SessionMemoryRepository
 from src.assistant_personal.infrastructure.observabilidad import get_logger
 from src.assistant_personal.infrastructure.routers.hybrid_router import ProductionIntentRouter
@@ -25,17 +26,28 @@ class TaskOrchestrator:
         router: Any = None,
         max_retries: int = 1,
         session_repository: SessionMemoryRepository | None = None,
+        long_term_repository: LongTermMemoryRepository | None = None,
         session_id: str | None = None,
         tenant_id: str | None = None,
+        user_id: str | None = None,
+        profile_confidence_threshold: float = 0.7,
     ) -> None:
         self.service = service
         self.router = router or ProductionIntentRouter()
         self.max_retries = max_retries
         self.session_repository = session_repository
-        self.context = AgentContext(short_term_repository=self.session_repository)
         self.session_id = session_id or f"session-{uuid.uuid4()}"
         # Fijo en "default" hasta que exista multi-tenant real (Fase 8) — ver §A.13, ítem 1.7.
         self.tenant_id = tenant_id or "default"
+        # Fijo en "default" hasta que exista identidad de usuario real (auth, Fase 6/8) — mismo
+        # criterio que `tenant_id`.
+        self.user_id = user_id or "default"
+        self.profile_confidence_threshold = profile_confidence_threshold
+        self.context = AgentContext(
+            short_term_repository=self.session_repository,
+            long_term_repository=long_term_repository,
+            user_id=self.user_id,
+        )
 
     def handle_message(self, message: str) -> dict[str, Any]:
         return asyncio.run(self.handle_message_async(message))
@@ -205,18 +217,26 @@ class TaskOrchestrator:
             if isinstance(item, dict):
                 key = item.get("key")
                 value = item.get("value")
-                if key and value is not None:
-                    facts.append({"key": str(key), "value": str(value)})
+                confidence = item.get("confidence", 0.8)
             else:
                 key = getattr(item, "key", None)
                 value = getattr(item, "value", None)
-                if key and value is not None:
-                    facts.append({"key": str(key), "value": str(value)})
+                confidence = getattr(item, "confidence", 0.8)
+            if key and value is not None:
+                facts.append({"key": str(key), "value": str(value), "confidence": float(confidence)})
         return facts
 
     async def _persist_profile_facts(self, facts: list[dict[str, Any]]) -> None:
+        """Persiste en memoria de largo plazo (§A.9, ítem 2.5) — no en la de sesión, que es de
+        corta vida y no es el almacén correcto para hechos de perfil estables. Solo se
+        persisten los hechos cuya confianza supera `profile_confidence_threshold`: escribir todo
+        lo que el usuario dice envenena el contexto de turnos futuros."""
         for fact in facts:
-            await self.context.short_term_memory.add_async(fact["key"], fact["value"], session_id=self.session_id)
+            if fact["confidence"] < self.profile_confidence_threshold:
+                continue
+            await self.context.long_term_memory.add_fact_async(
+                fact["key"], fact["value"], confidence=fact["confidence"], source="llm_extraction"
+            )
 
     def _answer_with_general_knowledge(self, query: str) -> str:
         return f"Consulta de conocimiento: {query}"

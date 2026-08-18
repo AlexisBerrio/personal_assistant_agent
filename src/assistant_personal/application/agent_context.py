@@ -3,6 +3,8 @@ from __future__ import annotations
 import inspect
 from typing import Any
 
+from src.assistant_personal.domain.entities import UserProfileFact
+from src.assistant_personal.domain.repositories.long_term_memory_repository import LongTermMemoryRepository
 from src.assistant_personal.domain.repositories.session_memory_repository import SessionMemoryRepository
 
 
@@ -108,17 +110,72 @@ class ShortTermMemory:
         return [(turn["user_message"], turn["assistant_response"]) for turn in summary.get("turns", [])]
 
 
-class LongTermMemory:
-    """Memoria persistente con hechos clave del usuario."""
+class InMemoryLongTermMemoryRepository:
+    """Repositorio en memoria para pruebas y uso local sin infraestructura externa."""
 
     def __init__(self) -> None:
-        self._facts: dict[str, str] = {}
+        self._facts: dict[str, dict[str, UserProfileFact]] = {}
 
-    def add_fact(self, key: str, value: str) -> None:
-        self._facts[key] = value
+    def upsert_fact(self, user_id: str, fact: UserProfileFact, source: str = "manual") -> None:
+        self._facts.setdefault(user_id, {})[fact.key] = fact
+
+    def get_facts(self, user_id: str, limit: int = 10) -> list[UserProfileFact]:
+        return list(self._facts.get(user_id, {}).values())[-limit:]
+
+    def delete_facts(self, user_id: str) -> int:
+        return len(self._facts.pop(user_id, {}))
+
+    async def upsert_fact_async(self, user_id: str, fact: UserProfileFact, source: str = "manual") -> None:
+        self.upsert_fact(user_id, fact, source)
+
+    async def get_facts_async(self, user_id: str, limit: int = 10) -> list[UserProfileFact]:
+        return self.get_facts(user_id, limit=limit)
+
+    async def delete_facts_async(self, user_id: str) -> int:
+        return self.delete_facts(user_id)
+
+
+class LongTermMemory:
+    """Memoria persistente con hechos de perfil del usuario, con presupuesto acotado (§A.9,
+    ítem 2.5) — sobrevive a un reinicio cuando el repositorio es `MongoLongTermMemoryRepository`.
+
+    Mismo patrón de despacho que `ShortTermMemory`: métodos síncronos válidos solo con
+    repositorios sin I/O real; `_async` para adaptadores con I/O real (ej. Mongo).
+    """
+
+    def __init__(self, repository: LongTermMemoryRepository, user_id: str = "default") -> None:
+        self.repository = repository
+        self.user_id = user_id
+
+    def add_fact(self, key: str, value: str, confidence: float = 1.0, source: str = "manual") -> None:
+        """Solo válido con repositorios sin I/O real (ej. InMemoryLongTermMemoryRepository)."""
+        self.repository.upsert_fact(self.user_id, UserProfileFact(key=key, value=value, confidence=confidence), source)
 
     def get_facts(self) -> dict[str, str]:
-        return dict(self._facts)
+        """Solo válido con repositorios sin I/O real (ej. InMemoryLongTermMemoryRepository)."""
+        return {fact.key: fact.value for fact in self.repository.get_facts(self.user_id)}
+
+    async def _invoke_repository_async(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
+        for candidate_name in (f"{method_name}_async", method_name):
+            method = getattr(self.repository, candidate_name, None)
+            if callable(method):
+                result = method(*args, **kwargs)
+                if inspect.isawaitable(result):
+                    return await result
+                return result
+
+        raise AttributeError(f"El repositorio de memoria de largo plazo no implementa '{method_name}'")
+
+    async def add_fact_async(self, key: str, value: str, confidence: float = 1.0, source: str = "manual") -> None:
+        fact = UserProfileFact(key=key, value=value, confidence=confidence)
+        await self._invoke_repository_async("upsert_fact", self.user_id, fact, source)
+
+    async def get_facts_async(self) -> dict[str, str]:
+        facts = await self._invoke_repository_async("get_facts", self.user_id)
+        return {fact.key: fact.value for fact in facts}
+
+    async def delete_facts_async(self) -> int:
+        return int(await self._invoke_repository_async("delete_facts", self.user_id))
 
 
 _RecentContext = tuple[list[tuple[str, str]], list[tuple[str, str]], list[tuple[str, str]]]
@@ -127,9 +184,16 @@ _RecentContext = tuple[list[tuple[str, str]], list[tuple[str, str]], list[tuple[
 class AgentContext:
     """Agrega contexto de corto y largo plazo para un agente simple."""
 
-    def __init__(self, short_term_repository: SessionMemoryRepository | None = None) -> None:
+    def __init__(
+        self,
+        short_term_repository: SessionMemoryRepository | None = None,
+        long_term_repository: LongTermMemoryRepository | None = None,
+        user_id: str = "default",
+    ) -> None:
         self.short_term_memory = ShortTermMemory(repository=short_term_repository or InMemorySessionRepository())
-        self.long_term_memory = LongTermMemory()
+        self.long_term_memory = LongTermMemory(
+            repository=long_term_repository or InMemoryLongTermMemoryRepository(), user_id=user_id
+        )
 
     def _collect_recent_context(self, session_id: str) -> _RecentContext:
         recent_items = self.short_term_memory.get_items(session_id=session_id)[-3:]
@@ -140,7 +204,7 @@ class AgentContext:
     async def _collect_recent_context_async(self, session_id: str) -> _RecentContext:
         recent_items = (await self.short_term_memory.get_items_async(session_id=session_id))[-3:]
         recent_turns = (await self.short_term_memory.get_turns_async(session_id=session_id))[-3:]
-        recent_facts = list(self.long_term_memory.get_facts().items())[-3:]
+        recent_facts = list((await self.long_term_memory.get_facts_async()).items())[-3:]
         return recent_items, recent_turns, recent_facts
 
     def _format_context_summary(

@@ -82,6 +82,9 @@ class MongoConnection:
         # bajo costo antes de considerar RAG vectorial. Un único índice de texto por colección es
         # el límite de Mongo, por eso title y description comparten este.
         await db.personal_tasks.create_index([("title", "text"), ("description", "text")])
+        # Memoria de largo plazo (§A.9, ítem 2.5): un hecho por `key` y usuario — un upsert
+        # repetido actualiza en vez de duplicar.
+        await db.user_profile_facts.create_index([("tenant_id", 1), ("user_id", 1), ("key", 1)], unique=True)
 
     async def _ensure_indexes_once(self) -> None:
         """Garantiza la creación de índices una sola vez por cliente, dentro del loop real que lo consume."""
