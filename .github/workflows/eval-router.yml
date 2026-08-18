@@ -1,28 +1,21 @@
 name: eval-router
 
 # Job separado del `ci.yml` principal (§A.10/A.12, ítem 2.4): hace llamadas reales a OpenAI
-# (costo + latencia), así que solo corre cuando cambia algo que puede afectar la calidad de
-# clasificación del router — nunca en cada push a cualquier rama. `workflow_dispatch` permite
-# dispararlo a mano cuando haga falta revalidar sin haber tocado estos archivos.
+# (costo + latencia), así que solo corre el eval de verdad cuando cambia algo que puede afectar
+# la calidad de clasificación del router.
+#
+# El workflow en sí SIEMPRE se dispara (push/pull_request a cualquier rama, sin `paths:`) —
+# necesario para poder marcarlo como *required status check* en la protección de `main`: si se
+# filtrara por `paths:` a nivel de trigger, un PR que no toque esos archivos nunca reportaría
+# este check, y GitHub bloquearía el merge indefinidamente esperando un estado que nunca llega.
+# En cambio, el job siempre corre y reporta, pero el step "Detectar cambios relevantes" decide
+# si el resto (sync + eval real) se ejecuta o se saltea — así el check es confiable sin quemar
+# tokens en cada push. `workflow_dispatch` sigue disponible para forzar una corrida completa.
 on:
   push:
     branches: ["**"]
-    paths:
-      - "src/assistant_personal/infrastructure/prompts/**"
-      - "src/assistant_personal/infrastructure/routers/**"
-      - "src/assistant_personal/domain/entities.py"
-      - "tests/eval/**"
-      - "tests/test_eval_router.py"
-      - ".github/workflows/eval-router.yml"
   pull_request:
     branches: ["**"]
-    paths:
-      - "src/assistant_personal/infrastructure/prompts/**"
-      - "src/assistant_personal/infrastructure/routers/**"
-      - "src/assistant_personal/domain/entities.py"
-      - "tests/eval/**"
-      - "tests/test_eval_router.py"
-      - ".github/workflows/eval-router.yml"
   workflow_dispatch: {}
 
 jobs:
@@ -39,19 +32,62 @@ jobs:
       OPENAI_MODEL: "gpt-4o-mini"
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Detectar cambios relevantes para el router/prompts
+        id: changes
+        # Compara contra el commit anterior (push) o la base del PR (pull_request). Si no hay
+        # una base válida para comparar (ej. primer push de una rama nueva, `before` en ceros) o
+        # el trigger es `workflow_dispatch`, se corre igual por seguridad — es mejor gastar
+        # tokens de más una vez que dejar pasar una regresión sin medir.
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "run_eval=true" >> "$GITHUB_OUTPUT"
+            echo "Disparado manualmente: se corre el eval completo."
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+          fi
+
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE" 2>/dev/null; then
+            echo "run_eval=true" >> "$GITHUB_OUTPUT"
+            echo "No hay base válida para diff (rama nueva u otro caso borde): se corre el eval por seguridad."
+            exit 0
+          fi
+
+          CHANGED=$(git diff --name-only "$BASE" "${{ github.sha }}")
+          echo "Archivos cambiados:"
+          echo "$CHANGED"
+
+          if echo "$CHANGED" | grep -Eq '^(src/assistant_personal/infrastructure/prompts/|src/assistant_personal/infrastructure/routers/|src/assistant_personal/domain/entities\.py|tests/eval/|tests/test_eval_router\.py|\.github/workflows/eval-router\.yml)'; then
+            echo "run_eval=true" >> "$GITHUB_OUTPUT"
+            echo "Hay cambios relevantes: se ejecuta el eval."
+          else
+            echo "run_eval=false" >> "$GITHUB_OUTPUT"
+            echo "Sin cambios relevantes: se saltea el eval."
+          fi
 
       - name: Instalar uv
+        if: steps.changes.outputs.run_eval == 'true'
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
 
       - name: Instalar Python 3.12
+        if: steps.changes.outputs.run_eval == 'true'
         run: uv python install 3.12
 
       - name: Sincronizar dependencias
+        if: steps.changes.outputs.run_eval == 'true'
         run: uv sync --extra dev --extra llm --extra mcp --python 3.12
 
       - name: Evaluación del router contra el golden dataset
+        if: steps.changes.outputs.run_eval == 'true'
         # Bloqueante: test_eval_router.py falla si algún umbral de tests/eval/umbrales.yaml no
         # se cumple (ver ejecutar_evaluacion en tests/eval/run_eval.py).
         run: uv run --python 3.12 pytest tests/test_eval_router.py -m eval -v
