@@ -144,7 +144,9 @@ class ProductionIntentRouter:
             if self._needs_clarification(classification):
                 return self._build_decision(
                     action=IntentAction.CLARIFY,
-                    payload={"message": "Entiendo la acción, pero me falta una referencia concreta. ¿Podrías especificarla?"},
+                    payload={
+                        "message": "Entiendo la acción, pero me falta una referencia concreta. ¿Podrías especificarla?"
+                    },
                     confidence=classification.confidence,
                     source="llm",
                     reasoning="La intención requiere más datos para ejecutarse.",
@@ -272,7 +274,11 @@ class ProductionIntentRouter:
             return True
 
         if classification.intent in {IntentAction.DELETE_TASK, IntentAction.COMPLETE_TASK}:
-            task_ref = classification.payload.get("task_id") or classification.payload.get("task_title") or classification.payload.get("task_reference")
+            task_ref = (
+                classification.payload.get("task_id")
+                or classification.payload.get("task_title")
+                or classification.payload.get("task_reference")
+            )
             if not task_ref:
                 return True
 

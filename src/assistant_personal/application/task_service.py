@@ -1,10 +1,10 @@
 import inspect
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from src.assistant_personal.config import get_settings
-from src.assistant_personal.domain.task_models import Task
 from src.assistant_personal.domain.repositories.task_repository import TaskRepository
+from src.assistant_personal.domain.task_models import Task
 from src.assistant_personal.infrastructure.persistence.mongo.client import get_db
 from src.assistant_personal.infrastructure.task_repository import build_default_task_repository
 
@@ -86,7 +86,7 @@ class TaskService:
         task = await self._invoke_repository_async("get_task_by_id", normalized_task_id)
         if task is None:
             return None
-        return self._serialize_value(task)
+        return cast(dict[str, Any], self._serialize_value(task))
 
     async def get_task_history_async(self, task_id: str) -> list[dict[str, Any]]:
         """Devuelve el historial de cambios de una tarea."""
@@ -97,7 +97,7 @@ class TaskService:
     async def create_task_async(self, task: Task | dict[str, Any]) -> dict[str, Any]:
         """Crea una nueva tarea en MongoDB."""
         payload = self._prepare_create_payload(task)
-        return await self._invoke_repository_async("create_task", payload)
+        return cast(dict[str, Any], await self._invoke_repository_async("create_task", payload))
 
     async def update_task_async(self, task_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
         """Actualiza campos de una tarea existente identificada por task_id."""
@@ -114,9 +114,12 @@ class TaskService:
     async def complete_task_async(self, task_id: str) -> dict[str, Any]:
         """Marca una tarea como completada en base a su task_id."""
         normalized_task_id = self._require_task_id(task_id)
-        return await self._invoke_repository_async("complete_task", normalized_task_id)
+        return cast(dict[str, Any], await self._invoke_repository_async("complete_task", normalized_task_id))
 
     async def delete_task_async(self, task_id: str) -> dict[str, Any] | None:
         """Marca una tarea como eliminada sin borrarla de la base de datos."""
         normalized_task_id = self._require_task_id(task_id)
-        return await self._invoke_repository_async("delete_task", normalized_task_id)
+        return cast(
+            "dict[str, Any] | None",
+            await self._invoke_repository_async("delete_task", normalized_task_id),
+        )

@@ -41,7 +41,9 @@ class InMemorySessionRepository:
     async def append_turn_async(self, session_id: str, user_message: str, assistant_response: str) -> None:
         self.append_turn(session_id, user_message, assistant_response)
 
-    async def get_context_summary_async(self, session_id: str, max_turns: int = 3, max_items: int = 5) -> dict[str, Any]:
+    async def get_context_summary_async(
+        self, session_id: str, max_turns: int = 3, max_items: int = 5
+    ) -> dict[str, Any]:
         return self.get_context_summary(session_id, max_turns=max_turns, max_items=max_items)
 
 
@@ -119,6 +121,9 @@ class LongTermMemory:
         return dict(self._facts)
 
 
+_RecentContext = tuple[list[tuple[str, str]], list[tuple[str, str]], list[tuple[str, str]]]
+
+
 class AgentContext:
     """Agrega contexto de corto y largo plazo para un agente simple."""
 
@@ -126,13 +131,13 @@ class AgentContext:
         self.short_term_memory = ShortTermMemory(repository=short_term_repository or InMemorySessionRepository())
         self.long_term_memory = LongTermMemory()
 
-    def _collect_recent_context(self, session_id: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[tuple[str, str]]]:
+    def _collect_recent_context(self, session_id: str) -> _RecentContext:
         recent_items = self.short_term_memory.get_items(session_id=session_id)[-3:]
         recent_turns = self.short_term_memory.get_turns(session_id=session_id)[-3:]
         recent_facts = list(self.long_term_memory.get_facts().items())[-3:]
         return recent_items, recent_turns, recent_facts
 
-    async def _collect_recent_context_async(self, session_id: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[tuple[str, str]]]:
+    async def _collect_recent_context_async(self, session_id: str) -> _RecentContext:
         recent_items = (await self.short_term_memory.get_items_async(session_id=session_id))[-3:]
         recent_turns = (await self.short_term_memory.get_turns_async(session_id=session_id))[-3:]
         recent_facts = list(self.long_term_memory.get_facts().items())[-3:]

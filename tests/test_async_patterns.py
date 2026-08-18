@@ -1,4 +1,3 @@
-import asyncio
 import unittest
 
 from src.assistant_personal.application.task_service import TaskService

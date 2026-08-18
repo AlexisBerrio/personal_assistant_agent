@@ -28,5 +28,7 @@ class SessionMemoryRepository(Protocol):
     async def append_turn_async(self, session_id: str, user_message: str, assistant_response: str) -> None:
         ...
 
-    async def get_context_summary_async(self, session_id: str, max_turns: int = 3, max_items: int = 5) -> dict[str, Any]:
+    async def get_context_summary_async(
+        self, session_id: str, max_turns: int = 3, max_items: int = 5
+    ) -> dict[str, Any]:
         ...

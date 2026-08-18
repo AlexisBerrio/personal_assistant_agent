@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from src.assistant_personal.infrastructure.mcp.server import mcp, register_tools, run_server
+from src.assistant_personal.infrastructure.mcp.server import run_server
 
 
 def main() -> None:

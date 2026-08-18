@@ -45,7 +45,9 @@ class MongoTaskRepository:
             return [doc async for doc in cursor]
         return [doc for doc in cursor]
 
-    async def _record_history(self, db: Any, task_id: str, updates: dict[str, Any], previous_task: dict[str, Any] | None) -> None:
+    async def _record_history(
+        self, db: Any, task_id: str, updates: dict[str, Any], previous_task: dict[str, Any] | None
+    ) -> None:
         if not updates:
             return
 

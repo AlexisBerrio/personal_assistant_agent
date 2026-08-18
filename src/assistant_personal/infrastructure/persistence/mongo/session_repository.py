@@ -70,7 +70,9 @@ class MongoSessionRepository(SessionMemoryRepository):
             items.append({"key": key, "value": value})
         await self._upsert_session(session_id, {"items": items[-5:]})
 
-    async def get_context_summary_async(self, session_id: str, max_turns: int = 3, max_items: int = 5) -> dict[str, Any]:
+    async def get_context_summary_async(
+        self, session_id: str, max_turns: int = 3, max_items: int = 5
+    ) -> dict[str, Any]:
         session = await self._get_session(session_id)
         turns = list(session.get("turns", []))[-max_turns:]
         items = list(session.get("items", []))[-max_items:]

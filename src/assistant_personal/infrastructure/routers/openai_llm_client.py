@@ -6,7 +6,12 @@ from typing import Any
 from openai import OpenAI
 
 from src.assistant_personal.config import get_settings
-from src.assistant_personal.domain.entities import ConversationRoute, IntentAction, IntentClassification, UserProfileExtraction
+from src.assistant_personal.domain.entities import (
+    ConversationRoute,
+    IntentAction,
+    IntentClassification,
+    UserProfileExtraction,
+)
 
 
 class _OpenAITextClient:
@@ -122,11 +127,15 @@ class OpenAIIntentClassifier(_OpenAITextClient):
         system_prompt = (
             "Eres un clasificador de intenciones para un asistente personal. "
             "Tu tarea es enrutar la conversación con una salida estructurada. "
-            "Usa el contexto de memoria de corto plazo si está disponible para entender referencias al usuario o conversaciones previas. "
-            "Devuelve únicamente un JSON válido con las claves route, intent, confidence, reasoning, source y payload. "
+            "Usa el contexto de memoria de corto plazo si está disponible para entender referencias "
+            "al usuario o conversaciones previas. "
+            "Devuelve únicamente un JSON válido con las claves route, intent, confidence, reasoning, "
+            "source y payload. "
             "Rutas permitidas: general_knowledge, orchestrator, clarify. "
-            "Intenciones permitidas (cuando route sea orchestrator): list_tasks, create_task, complete_task, delete_task. "
-            "Si route=orchestrator e intent=create_task, payload.title es obligatorio y debe ser específico (sin valores genéricos como 'Tarea nueva'). "
+            "Intenciones permitidas (cuando route sea orchestrator): list_tasks, create_task, "
+            "complete_task, delete_task. "
+            "Si route=orchestrator e intent=create_task, payload.title es obligatorio y debe ser "
+            "específico (sin valores genéricos como 'Tarea nueva'). "
             "Si no puedes inferir un título específico incluso usando contexto reciente, usa route=clarify. "
             "Si no hay suficiente información para ejecutar una acción concreta, usa route=clarify."
         )
@@ -174,7 +183,8 @@ class OpenAIGeneralKnowledgeResponder(_OpenAITextClient):
         self._ensure_ready()
         system_prompt = (
             "Responde de forma breve, directa y útil a preguntas generales de conocimiento. "
-            "Usa el contexto de memoria de corto plazo si está disponible para responder a referencias al usuario o conversaciones previas. "
+            "Usa el contexto de memoria de corto plazo si está disponible para responder a "
+            "referencias al usuario o conversaciones previas. "
             "No uses listas largas ni explicaciones innecesarias."
         )
         return self._invoke_model(system_prompt, self._build_user_prompt(query, context)).strip()
@@ -188,7 +198,8 @@ class OpenAIProfileFactExtractor(_OpenAITextClient):
         system_prompt = (
             "Eres un extractor de memoria de perfil para un asistente personal. "
             "Tu tarea es detectar hechos del usuario que puedan almacenarse como contexto persistente. "
-            "Devuelve únicamente un JSON válido con la clave profile_facts, donde cada elemento tiene key, value y confidence. "
+            "Devuelve únicamente un JSON válido con la clave profile_facts, donde cada elemento tiene "
+            "key, value y confidence. "
             "No uses reglas manuales ni expresiones regulares; infiere los hechos desde el lenguaje natural."
         )
         payload = self._invoke_model(system_prompt, self._build_user_prompt(text, context))

@@ -8,7 +8,6 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from src.assistant_personal.config import get_settings
 from src.assistant_personal.infrastructure.observabilidad import get_logger
 
-
 settings = get_settings()
 logger = get_logger(__name__)
 

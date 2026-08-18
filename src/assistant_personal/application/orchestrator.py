@@ -155,7 +155,9 @@ class TaskOrchestrator:
             title = intent.payload.get("title")
             task_payload = {"title": title}
             if not title or not title.strip():
-                raise ValueError("Entiendo que quieres crear una tarea, pero me falta el título. ¿Qué tarea deseas crear?")
+                raise ValueError(
+                    "Entiendo que quieres crear una tarea, pero me falta el título. ¿Qué tarea deseas crear?"
+                )
             result = await self._invoke_service("create_task", task_payload)
             return {"success": True, "action": intent.action, "result": result}
 

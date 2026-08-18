@@ -1,6 +1,11 @@
 import unittest
 
-from src.assistant_personal.domain.entities import ConversationRoute, IntentAction, IntentClassification, UserProfileExtraction
+from src.assistant_personal.domain.entities import (
+    ConversationRoute,
+    IntentAction,
+    IntentClassification,
+    UserProfileExtraction,
+)
 from src.assistant_personal.infrastructure.routers.hybrid_router import ProductionIntentRouter
 
 
