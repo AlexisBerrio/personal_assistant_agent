@@ -5,13 +5,25 @@ from src.assistant_personal.application.agent_context import InMemorySessionRepo
 from src.assistant_personal.application.orchestrator import TaskOrchestrator
 from src.assistant_personal.application.task_service import TaskService
 from src.assistant_personal.domain.entities import IntentAction, IntentDecision
-from src.assistant_personal.infrastructure.persistence.mongo.client import mongo_connection
+from src.assistant_personal.infrastructure.persistence.mongo.client import MongoConnection
+from src.assistant_personal.infrastructure.persistence.mongo.mongo_repository import MongoTaskRepository
+
+# Mongo local desechable de docker-compose.yml (puerto 27018, no el 27017 estándar —
+# ver comentario en docker-compose.yml). Nunca el Atlas real de `.env`: este test crea
+# tareas de verdad y no debe ensuciar datos productivos.
+LOCAL_MONGO_URI = "mongodb://localhost:27018"
+LOCAL_DB_NAME = "assistant_personal_test"
 
 
-def _mongo_is_reachable() -> bool:
+def _build_local_connection() -> MongoConnection:
+    return MongoConnection(mongo_uri=LOCAL_MONGO_URI, db_name=LOCAL_DB_NAME)
+
+
+def _local_mongo_is_reachable() -> bool:
     async def _ping() -> bool:
+        connection = _build_local_connection()
         try:
-            db = await mongo_connection.get_db()
+            db = await connection.get_db()
             await db.command("ping")
             return True
         except Exception:
@@ -39,7 +51,10 @@ class SequentialCreateTaskRouter:
         )
 
 
-@unittest.skipUnless(_mongo_is_reachable(), "Requiere conectividad real a MongoDB (MONGO_URI en .env)")
+@unittest.skipUnless(
+    _local_mongo_is_reachable(),
+    "Requiere el Mongo local desechable de docker-compose.yml: ejecuta `docker compose up -d mongo`",
+)
 class MongoConnectionLifecycleTests(unittest.TestCase):
     """Regresión de docs/anexo_arquitectura_objetivo.md §A.9 (ítem 0.12).
 
@@ -48,13 +63,30 @@ class MongoConnectionLifecycleTests(unittest.TestCase):
     ese cliente desde un loop distinto (el patrón real del CLI interactivo, que
     antes abría un `asyncio.run` por turno) fallaba con
     `RuntimeError: Event loop is closed`. Este test reproduce exactamente ese
-    patrón: dos operaciones reales de Mongo, cada una en su propio `asyncio.run`.
+    patrón: dos operaciones reales de Mongo, cada una en su propio `asyncio.run`,
+    reutilizando la misma instancia de `MongoConnection` — contra el Mongo local
+    desechable, nunca contra datos productivos.
     """
 
+    def setUp(self) -> None:
+        self.connection = _build_local_connection()
+
+        async def _get_db(db_name):
+            return await self.connection.get_db(db_name)
+
+        repository = MongoTaskRepository(db_name=LOCAL_DB_NAME, get_db_fn=_get_db)
+        self.service = TaskService(db_name=LOCAL_DB_NAME, repository=repository)
+
+    def tearDown(self) -> None:
+        async def _cleanup() -> None:
+            db = await self.connection.get_db()
+            await db.personal_tasks.delete_many({"title": {"$regex": "^tarea de regresion"}})
+
+        asyncio.run(_cleanup())
+
     def test_repository_survives_multiple_independent_event_loops(self):
-        service = TaskService()
         orchestrator = TaskOrchestrator(
-            service=service,
+            service=self.service,
             router=SequentialCreateTaskRouter(),
             session_repository=InMemorySessionRepository(),
         )

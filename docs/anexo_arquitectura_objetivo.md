@@ -769,6 +769,15 @@ exposición pública, incluida la integración con Alexa (Fase 6).
 pero **todo mockeado**. Esa es precisamente la razón por la que el bug de memoria de sesión (§A.9) pasa
 inadvertido: los mocks confirman que el código llama a lo que espera, no que el dato acabe en Mongo.
 
+**Regla no negociable, agregada tras un incidente real (ítem 0.13):** ningún test de integración toca el
+Mongo de `.env` (Atlas, productivo). Todo test contra Mongo real usa el contenedor desechable de
+`docker-compose.yml` (`mongodb://localhost:27018`, puerto no estándar para evitar chocar con un Mongo
+nativo local), con `tearDown` que limpia lo que escribió. Se encontraron y borraron 7 documentos de
+prueba (`"tarea de regresion N"`) que un test de integración había estado escribiendo en el Atlas real
+durante varias corridas, porque construía `TaskService()` sin inyectar un repositorio — quedaba conectado
+al singleton `mongo_connection`, que lee `Settings` (la URI real). `MongoConnection` ahora acepta
+`mongo_uri`/`db_name` explícitos para que un test pueda aislarse sin tocar el `Settings` global.
+
 ### Pirámide objetivo
 
 | Nivel | Qué prueba | Dependencias | Fase |
@@ -925,6 +934,7 @@ Objetivo: **eliminar fallos silenciosos y desbloquear el resto de fases.**
 | 0.10 | `structlog` en JSON, eliminar todos los `print` | 🟢 | §A.5 | ✅ Hecho — `infrastructure/observabilidad/logging.py` centraliza la configuración; `client.py`/`app.py` usan `get_logger`; `request_id` propagado por contextvars; de paso se eliminó un middleware duplicado que generaba dos UUIDs distintos por petición |
 | 0.11 | Sanear mensajes de error hacia el cliente | 🟢 | §A.11 | ✅ Hecho — `handle_runtime_error` ya no devuelve `str(exc)`, responde un mensaje genérico + `request_id` y registra el detalle completo (con traceback) vía `logging`. Se agregó además un handler catch-all (`Exception`) como red de seguridad para errores no anticipados (antes se propagaban sin `request_id` ni registro). `handle_value_error`/`handle_http_exception` se dejaron igual a propósito: sus mensajes son texto de negocio escrito por nosotros mismos (ej. "El título de la tarea es obligatorio"), no detalle interno |
 | 0.12 | *(hallazgo nuevo)* Corregir bridging sync/async en el bootstrap de conexión (`client.py`: cliente Motor rebindeado a un loop cerrado) | 🟢 | §A.9 | ✅ Hecho — `get_db()` rebindea el cliente si el loop activo cambió; CLI interactivo usa un único `asyncio.run` por sesión; test de regresión contra Mongo real en `tests/test_mongo_connection_lifecycle.py` |
+| 0.13 | *(hallazgo nuevo)* `tests/test_mongo_connection_lifecycle.py` escribía tareas reales en el **Atlas de producción** (`.env`), no en un Mongo desechable | 🟢 | §A.12 | ✅ Hecho — `MongoConnection` ahora acepta `mongo_uri`/`db_name` explícitos (antes solo leía el `Settings` global), lo que permite construir una conexión aislada. El test se reescribió para usar el Mongo local de `docker-compose.yml` (`assistant_personal_test`) con `tearDown` que limpia sus propios datos. Se detectaron y borraron 7 documentos de basura (`"tarea de regresion N"`) que habían quedado en Atlas de corridas anteriores de este mismo test antes del fix |
 
 **DoD de fase:** clone → `uv sync` → tests (unitarios + integración) en verde en máquina limpia; la memoria
 de sesión persiste demostrablemente; ningún `print`; ningún secreto en el repo.

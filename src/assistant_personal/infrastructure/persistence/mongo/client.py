@@ -27,7 +27,13 @@ class MongoConnection:
     FastAPI/uvicorn) esto no cuesta nada extra: el cliente se crea una sola vez.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, mongo_uri: str | None = None, db_name: str | None = None) -> None:
+        """`mongo_uri`/`db_name` son opcionales: por defecto usan `Settings` (la conexión real de la
+        app). Pasarlos explícitamente permite construir una `MongoConnection` aislada — por ejemplo,
+        para tests de integración contra el Mongo desechable de `docker-compose.yml` — sin tocar el
+        singleton `mongo_connection` ni el `Settings` global compartido por el resto del proceso."""
+        self._mongo_uri = mongo_uri or settings.mongo_uri
+        self._db_name = db_name or settings.mongo_db_name
         self.client: Any = None
         self.connection_error: str | None = None
         self._indexes_ready = False
@@ -54,7 +60,7 @@ class MongoConnection:
                 pass
 
         try:
-            self.client = AsyncIOMotorClient(settings.mongo_uri, serverSelectionTimeoutMS=10000)
+            self.client = AsyncIOMotorClient(self._mongo_uri, serverSelectionTimeoutMS=10000)
             self._client_loop = current_loop
             self._indexes_ready = False
             self._indexes_lock = asyncio.Lock()
@@ -66,7 +72,7 @@ class MongoConnection:
 
     async def _ensure_task_indexes(self) -> None:
         """Crea índices de negocio necesarios para la colección de tareas."""
-        db = self.client[settings.mongo_db_name]
+        db = self.client[self._db_name]
         await db.personal_tasks.create_index([("task_id", 1)], unique=True)
 
     async def _ensure_indexes_once(self) -> None:
@@ -79,7 +85,7 @@ class MongoConnection:
             await self._ensure_task_indexes()
             self._indexes_ready = True
 
-    async def get_db(self, db_name: str = settings.mongo_db_name):
+    async def get_db(self, db_name: str | None = None):
         """Devuelve una base de datos si la conexión está disponible."""
         self._ensure_client_bound_to_current_loop()
         if self.connection_error or self.client is None:
@@ -87,7 +93,7 @@ class MongoConnection:
                 "MongoDB no está disponible. Revisa la URI y la conectividad."
             )
         await self._ensure_indexes_once()
-        return self.client[db_name]
+        return self.client[db_name or self._db_name]
 
 
 mongo_connection = MongoConnection()
