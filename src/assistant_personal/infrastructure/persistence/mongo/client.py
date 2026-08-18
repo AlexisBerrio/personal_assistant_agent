@@ -79,6 +79,10 @@ class MongoConnection:
         db = self.client[self._db_name]
         await db.personal_tasks.create_index([("tenant_id", 1), ("task_id", 1)], unique=True)
         await db.conversation_sessions.create_index([("tenant_id", 1), ("session_id", 1)], unique=True)
+        # Índice de texto para el port DocumentSearchRepository (§A.10, ítem 1.8): precondición de
+        # bajo costo antes de considerar RAG vectorial. Un único índice de texto por colección es
+        # el límite de Mongo, por eso title y description comparten este.
+        await db.personal_tasks.create_index([("title", "text"), ("description", "text")])
 
     async def _ensure_indexes_once(self) -> None:
         """Garantiza la creación de índices una sola vez por cliente, dentro del loop real que lo consume."""
