@@ -971,15 +971,15 @@ coste por interacción.
 
 ### Fase 2 — IA generativa con criterio de ingeniería
 
-| # | Cambio | Nivel | Área |
-| --- | --- | --- | --- |
-| 2.1 | Salida estructurada validada con Pydantic en el router; política ante salida inválida | 🟢 | §A.8 |
-| 2.2 | Prompts versionados como ficheros con identificador | 🟢 | §A.8 |
-| 2.3 | **Golden dataset del router (≥100 casos) + umbrales** | 🟡 | §A.12 |
-| 2.4 | Job `eval-router` en CI, bloqueante ante regresión | 🟡 | §A.6 |
-| 2.5 | Memoria de largo plazo persistida en Mongo, con extracción explícita | 🟡 | §A.9 |
-| 2.6 | `ContextBuilder` con presupuesto de tokens + resumen incremental de sesión | 🟡 | §A.9 |
-| 2.7 | Reintentos con backoff y timeouts en el adaptador LLM | 🟢 | §A.1 |
+| # | Cambio | Nivel | Área | Estado |
+| --- | --- | --- | --- | --- |
+| 2.1 | Salida estructurada validada con Pydantic en el router; política ante salida inválida | 🟢 | §A.8 | ✅ Hecho — `OpenAIIntentClassifier._build_classification` ya no castea campos a mano (`try/except ValueError` por enum); ahora es `IntentClassification.model_validate(normalized)` directo, con una única tolerancia deliberada (`payload: null` → `{}`). Cualquier salida inválida del LLM (enum desconocido, `confidence` fuera de `[0,1]`, campo ausente) levanta `pydantic.ValidationError`, que sube sin capturar hasta `ProductionIntentRouter.route()` — el mismo `except Exception` que ya degradaba a `clarify`/`source="fallback"` para cualquier otro fallo del clasificador. Antes había dos comportamientos distintos (degradación silenciosa para enums, excepción no capturada para confianza fuera de rango); ahora es una sola política, probada explícitamente con dos tests nuevos (route inválido, confianza fuera de rango) más uno que confirma que un `ValidationError` real cae en el mismo fallback que cualquier otro error. 59/59 en verde, `ruff`/`mypy` limpios |
+| 2.2 | Prompts versionados como ficheros con identificador | 🟢 | §A.8 | |
+| 2.3 | **Golden dataset del router (≥100 casos) + umbrales** | 🟡 | §A.12 | |
+| 2.4 | Job `eval-router` en CI, bloqueante ante regresión | 🟡 | §A.6 | |
+| 2.5 | Memoria de largo plazo persistida en Mongo, con extracción explícita | 🟡 | §A.9 | |
+| 2.6 | `ContextBuilder` con presupuesto de tokens + resumen incremental de sesión | 🟡 | §A.9 | |
+| 2.7 | Reintentos con backoff y timeouts en el adaptador LLM | 🟢 | §A.1 | |
 
 **DoD de fase:** la calidad del router es medible y se vigila en CI; la memoria de largo plazo sobrevive a
 reinicios; el contexto enviado al LLM está acotado y registrado.

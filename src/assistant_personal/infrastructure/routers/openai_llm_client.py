@@ -7,12 +7,7 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from src.assistant_personal.config import get_settings
-from src.assistant_personal.domain.entities import (
-    ConversationRoute,
-    IntentAction,
-    IntentClassification,
-    UserProfileExtraction,
-)
+from src.assistant_personal.domain.entities import IntentClassification, UserProfileExtraction
 
 
 class _OpenAITextClient:
@@ -175,36 +170,22 @@ class OpenAIIntentClassifier(_OpenAITextClient):
         return self._build_classification(parsed)
 
     def _build_classification(self, parsed: dict[str, Any]) -> IntentClassification:
-        raw_route = parsed.get("route", ConversationRoute.CLARIFY.value)
-        raw_intent = parsed.get("intent")
-        confidence = float(parsed.get("confidence", 0.0))
-        reasoning = parsed.get("reasoning")
-        payload = parsed.get("payload", {}) or {}
-        source = parsed.get("source", "llm")
+        """Valida la salida cruda del LLM directamente con Pydantic (§A.8, ítem 2.1).
 
-        try:
-            route = ConversationRoute(raw_route)
-        except ValueError:
-            route = ConversationRoute.CLARIFY
+        Única tolerancia deliberada: `payload: null` se normaliza a `{}` (un capricho común
+        del LLM que el tipo `dict[str, Any]` no aceptaría tal cual). Todo lo demás —enums
+        desconocidos en `route`/`intent`, `confidence` fuera de `[0, 1]`, campos ausentes— se
+        deja en manos de `IntentClassification.model_validate`, que levanta `ValidationError`.
 
-        intent: IntentAction | None = None
-        if isinstance(raw_intent, str):
-            try:
-                intent = IntentAction(raw_intent)
-            except ValueError:
-                intent = None
-
-        if route == ConversationRoute.ORCHESTRATOR and intent is None:
-            route = ConversationRoute.CLARIFY
-
-        return IntentClassification(
-            route=route,
-            intent=intent,
-            confidence=confidence,
-            reasoning=reasoning,
-            payload=payload,
-            source=source,
-        )
+        Política única ante salida inválida: esa excepción no se captura aquí. Sube hasta
+        `ProductionIntentRouter.route()`, que ya tiene un `except Exception` que degrada a
+        `route=clarify, source="fallback"` — el mismo camino para JSON malformado, esquema
+        inválido o cualquier otro fallo de la respuesta del LLM. Una sola política, no dos.
+        """
+        normalized = dict(parsed)
+        if normalized.get("payload") is None:
+            normalized["payload"] = {}
+        return IntentClassification.model_validate(normalized)
 
 
 class OpenAIGeneralKnowledgeResponder(_OpenAITextClient):

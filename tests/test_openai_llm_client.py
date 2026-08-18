@@ -1,6 +1,8 @@
 import unittest
 from typing import ClassVar
 
+from pydantic import ValidationError
+
 from src.assistant_personal.domain.entities import ConversationRoute, IntentAction
 from src.assistant_personal.infrastructure.routers.openai_llm_client import OpenAIIntentClassifier
 
@@ -55,6 +57,46 @@ class FakeWrappedTextChatCompletions:
         return FakeResponse()
 
 
+class FakeUnknownRouteChatCompletions:
+    async def create(self, **_kwargs):
+        class FakeMessage:
+            content = '{"route": "no_existe", "intent": null, "confidence": 0.9, "reasoning": "", "source": "llm", "payload": {}}'
+
+        class FakeChoice:
+            message = FakeMessage()
+
+        class FakeResponse:
+            choices: ClassVar = [FakeChoice()]
+            usage = None
+
+        return FakeResponse()
+
+
+class FakeOutOfRangeConfidenceChatCompletions:
+    async def create(self, **_kwargs):
+        class FakeMessage:
+            content = '{"route": "orchestrator", "intent": "list_tasks", "confidence": 1.5, "reasoning": "", "source": "llm", "payload": {}}'
+
+        class FakeChoice:
+            message = FakeMessage()
+
+        class FakeResponse:
+            choices: ClassVar = [FakeChoice()]
+            usage = None
+
+        return FakeResponse()
+
+
+class FakeUnknownRouteOpenAIClient:
+    def __init__(self):
+        self.chat = type("Chat", (), {"completions": FakeUnknownRouteChatCompletions()})()
+
+
+class FakeOutOfRangeConfidenceOpenAIClient:
+    def __init__(self):
+        self.chat = type("Chat", (), {"completions": FakeOutOfRangeConfidenceChatCompletions()})()
+
+
 class FakeMarkdownOpenAIClient:
     def __init__(self):
         self.chat = type("Chat", (), {"completions": FakeMarkdownChatCompletions()})()
@@ -106,6 +148,25 @@ class OpenAIIntentClassifierTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(decision.route, ConversationRoute.ORCHESTRATOR)
         self.assertEqual(decision.intent, IntentAction.LIST_TASKS)
+
+    async def test_classify_intent_raises_validation_error_on_unknown_route(self):
+        """Regresión de docs/anexo_arquitectura_objetivo.md §A.8 (ítem 2.1): la salida cruda del
+        LLM se valida con Pydantic, no con casteos manuales — un `route` fuera del enum debe
+        levantar, no degradarse en silencio."""
+        client = OpenAIIntentClassifier.__new__(OpenAIIntentClassifier)
+        client.model = "gpt-test"
+        client.client = FakeUnknownRouteOpenAIClient()
+
+        with self.assertRaises(ValidationError):
+            await client.classify_intent("mensaje ambiguo")
+
+    async def test_classify_intent_raises_validation_error_on_out_of_range_confidence(self):
+        client = OpenAIIntentClassifier.__new__(OpenAIIntentClassifier)
+        client.model = "gpt-test"
+        client.client = FakeOutOfRangeConfidenceOpenAIClient()
+
+        with self.assertRaises(ValidationError):
+            await client.classify_intent("lista mis tareas")
 
 
 if __name__ == "__main__":

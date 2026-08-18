@@ -10,15 +10,21 @@ from src.assistant_personal.infrastructure.routers.hybrid_router import Producti
 
 
 class FakeIntentClassifier:
-    def __init__(self, response: IntentClassification | None = None, raise_error: bool = False):
+    def __init__(
+        self,
+        response: IntentClassification | None = None,
+        raise_error: bool = False,
+        error: Exception | None = None,
+    ):
         self.response = response
         self.raise_error = raise_error
+        self.error = error or RuntimeError("classifier down")
         self.calls: list[tuple[str, str | None]] = []
 
     async def classify_intent(self, text: str, context: str | None = None) -> IntentClassification:
         self.calls.append((text, context))
         if self.raise_error:
-            raise RuntimeError("classifier down")
+            raise self.error
         if self.response is None:
             return IntentClassification(route=ConversationRoute.CLARIFY, confidence=0.0, source="llm")
         return self.response
@@ -293,6 +299,28 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
         )
 
         result = await router.route("Añade a mis tareas comprar leche mañana")
+
+        self.assertEqual(result.action, IntentAction.CLARIFY)
+        self.assertEqual(result.source, "fallback")
+
+    async def test_validation_error_uses_the_same_safe_fallback_as_any_other_failure(self):
+        """Regresión de docs/anexo_arquitectura_objetivo.md §A.8 (ítem 2.1): un `ValidationError`
+        real de Pydantic (salida del LLM que no cumple el esquema) debe caer en la misma política
+        de fallback que cualquier otro fallo del clasificador — una sola política, no dos."""
+        from pydantic import ValidationError
+
+        try:
+            IntentClassification.model_validate({"route": "no_existe"})
+        except ValidationError as exc:
+            validation_error = exc
+
+        router = ProductionIntentRouter(
+            llm_client=FakeIntentClassifier(raise_error=True, error=validation_error),
+            knowledge_responder=FakeKnowledgeResponder(),
+            profile_extractor=FakeProfileExtractor(),
+        )
+
+        result = await router.route("mensaje cualquiera")
 
         self.assertEqual(result.action, IntentAction.CLARIFY)
         self.assertEqual(result.source, "fallback")
