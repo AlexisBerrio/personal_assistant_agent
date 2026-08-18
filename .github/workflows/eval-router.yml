@@ -1,0 +1,57 @@
+name: eval-router
+
+# Job separado del `ci.yml` principal (§A.10/A.12, ítem 2.4): hace llamadas reales a OpenAI
+# (costo + latencia), así que solo corre cuando cambia algo que puede afectar la calidad de
+# clasificación del router — nunca en cada push a cualquier rama. `workflow_dispatch` permite
+# dispararlo a mano cuando haga falta revalidar sin haber tocado estos archivos.
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "src/assistant_personal/infrastructure/prompts/**"
+      - "src/assistant_personal/infrastructure/routers/**"
+      - "src/assistant_personal/domain/entities.py"
+      - "tests/eval/**"
+      - "tests/test_eval_router.py"
+      - ".github/workflows/eval-router.yml"
+  pull_request:
+    branches: ["**"]
+    paths:
+      - "src/assistant_personal/infrastructure/prompts/**"
+      - "src/assistant_personal/infrastructure/routers/**"
+      - "src/assistant_personal/domain/entities.py"
+      - "tests/eval/**"
+      - "tests/test_eval_router.py"
+      - ".github/workflows/eval-router.yml"
+  workflow_dispatch: {}
+
+jobs:
+  eval-router:
+    runs-on: ubuntu-latest
+    env:
+      # `Settings` exige MONGO_URI para construirse aunque este job nunca toque Mongo — mismo
+      # valor dummy que en `ci.yml`. `OPENAI_API_KEY` acá SÍ es real: viene del secret del
+      # repositorio (Settings → Secrets and variables → Actions → Repository secrets), porque
+      # este job hace llamadas reales al golden dataset de tests/eval/golden_router.jsonl.
+      MONGO_URI: "mongodb://localhost:27017"
+      MONGO_DB_NAME: "personal_management"
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: "gpt-4o-mini"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Instalar uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Instalar Python 3.12
+        run: uv python install 3.12
+
+      - name: Sincronizar dependencias
+        run: uv sync --extra dev --extra llm --extra mcp --python 3.12
+
+      - name: Evaluación del router contra el golden dataset
+        # Bloqueante: test_eval_router.py falla si algún umbral de tests/eval/umbrales.yaml no
+        # se cumple (ver ejecutar_evaluacion en tests/eval/run_eval.py).
+        run: uv run --python 3.12 pytest tests/test_eval_router.py -m eval -v
