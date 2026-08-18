@@ -152,7 +152,9 @@ class TaskOrchestrator:
         Con estos campos se puede calcular coste por interacción y tasa de `clarify` sin
         instrumentación adicional. `tenant_id` queda fijo en "default" hasta el ítem 1.7
         (multi-tenant real); `modelo`/`tokens_*`/`latencia_ms_llm` quedan en None cuando la
-        decisión se resolvió por regla y nunca se invocó al LLM.
+        decisión se resolvió por regla y nunca se invocó al LLM. `prompt_version` (§A.8, ítem
+        2.2) identifica qué versión del prompt de sistema generó la decisión, para poder
+        filtrar estas métricas por versión cuando se cambie la redacción de un prompt.
         """
         metadata = llm_metadata or {}
         logger.info(
@@ -164,6 +166,7 @@ class TaskOrchestrator:
             confianza=confianza,
             uso_llm=uso_llm,
             modelo=metadata.get("modelo"),
+            prompt_version=metadata.get("prompt_version"),
             tokens_entrada=metadata.get("tokens_entrada"),
             tokens_salida=metadata.get("tokens_salida"),
             latencia_ms_total=int((time.monotonic() - started_at) * 1000),

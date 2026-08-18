@@ -8,6 +8,7 @@ from openai import AsyncOpenAI
 
 from src.assistant_personal.config import get_settings
 from src.assistant_personal.domain.entities import IntentClassification, UserProfileExtraction
+from src.assistant_personal.infrastructure.prompts.loader import LoadedPrompt, load_prompt
 
 
 class _OpenAITextClient:
@@ -52,19 +53,19 @@ class _OpenAITextClient:
         if not self.model:
             raise RuntimeError("OPENAI_MODEL is required")
 
-    async def _invoke_model(self, system_prompt: str, user_prompt: str) -> str:
+    async def _invoke_model(self, system_prompt: LoadedPrompt, user_prompt: str) -> str:
         """Invoca el modelo (async, vía `AsyncOpenAI`: no bloquea el event loop durante la
         llamada de red — ver domain/repositories/llm_client.py) y registra en
         `self.last_call_metadata` los campos de observabilidad de §A.5 (`modelo`,
-        `tokens_entrada`, `tokens_salida`, `latencia_ms_llm`) para que el llamador (el router)
-        los pueda leer después de cada invocación real al LLM."""
+        `tokens_entrada`, `tokens_salida`, `latencia_ms_llm`) más `prompt_version` (§A.8, ítem
+        2.2) para que el llamador (el router) los pueda leer después de cada invocación real."""
         started_at = time.monotonic()
 
         if getattr(self, "_use_responses_api", True) and hasattr(self.client, "responses"):
             response = await self.client.responses.create(
                 model=self.model,
                 input=[
-                    {"role": "system", "content": system_prompt},
+                    {"role": "system", "content": system_prompt.text},
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0,
@@ -72,6 +73,7 @@ class _OpenAITextClient:
             usage = getattr(response, "usage", None)
             self._record_call_metadata(
                 started_at,
+                prompt_version=system_prompt.identifier,
                 tokens_entrada=getattr(usage, "input_tokens", None),
                 tokens_salida=getattr(usage, "output_tokens", None),
             )
@@ -81,7 +83,7 @@ class _OpenAITextClient:
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": system_prompt},
+                    {"role": "system", "content": system_prompt.text},
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0,
@@ -89,6 +91,7 @@ class _OpenAITextClient:
             usage = getattr(response, "usage", None)
             self._record_call_metadata(
                 started_at,
+                prompt_version=system_prompt.identifier,
                 tokens_entrada=getattr(usage, "prompt_tokens", None),
                 tokens_salida=getattr(usage, "completion_tokens", None),
             )
@@ -97,10 +100,11 @@ class _OpenAITextClient:
         raise RuntimeError("OpenAI client does not expose a supported API interface")
 
     def _record_call_metadata(
-        self, started_at: float, *, tokens_entrada: int | None, tokens_salida: int | None
+        self, started_at: float, *, prompt_version: str, tokens_entrada: int | None, tokens_salida: int | None
     ) -> None:
         self.last_call_metadata = {
             "modelo": self.model,
+            "prompt_version": prompt_version,
             "tokens_entrada": tokens_entrada,
             "tokens_salida": tokens_salida,
             "latencia_ms_llm": int((time.monotonic() - started_at) * 1000),
@@ -150,21 +154,7 @@ class OpenAIIntentClassifier(_OpenAITextClient):
 
     async def classify_intent(self, text: str, context: str | None = None) -> IntentClassification:
         self._ensure_ready()
-        system_prompt = (
-            "Eres un clasificador de intenciones para un asistente personal. "
-            "Tu tarea es enrutar la conversación con una salida estructurada. "
-            "Usa el contexto de memoria de corto plazo si está disponible para entender referencias "
-            "al usuario o conversaciones previas. "
-            "Devuelve únicamente un JSON válido con las claves route, intent, confidence, reasoning, "
-            "source y payload. "
-            "Rutas permitidas: general_knowledge, orchestrator, clarify. "
-            "Intenciones permitidas (cuando route sea orchestrator): list_tasks, create_task, "
-            "complete_task, delete_task. "
-            "Si route=orchestrator e intent=create_task, payload.title es obligatorio y debe ser "
-            "específico (sin valores genéricos como 'Tarea nueva'). "
-            "Si no puedes inferir un título específico incluso usando contexto reciente, usa route=clarify. "
-            "Si no hay suficiente información para ejecutar una acción concreta, usa route=clarify."
-        )
+        system_prompt = load_prompt("router/classify_intent")
         payload = await self._invoke_model(system_prompt, self._build_user_prompt(text, context))
         parsed = self._parse_response(payload)
         return self._build_classification(parsed)
@@ -193,12 +183,7 @@ class OpenAIGeneralKnowledgeResponder(_OpenAITextClient):
 
     async def answer_general_knowledge(self, query: str, context: str | None = None) -> str:
         self._ensure_ready()
-        system_prompt = (
-            "Responde de forma breve, directa y útil a preguntas generales de conocimiento. "
-            "Usa el contexto de memoria de corto plazo si está disponible para responder a "
-            "referencias al usuario o conversaciones previas. "
-            "No uses listas largas ni explicaciones innecesarias."
-        )
+        system_prompt = load_prompt("router/general_knowledge")
         answer = await self._invoke_model(system_prompt, self._build_user_prompt(query, context))
         return answer.strip()
 
@@ -208,13 +193,7 @@ class OpenAIProfileFactExtractor(_OpenAITextClient):
 
     async def extract_profile_facts(self, text: str, context: str | None = None) -> UserProfileExtraction:
         self._ensure_ready()
-        system_prompt = (
-            "Eres un extractor de memoria de perfil para un asistente personal. "
-            "Tu tarea es detectar hechos del usuario que puedan almacenarse como contexto persistente. "
-            "Devuelve únicamente un JSON válido con la clave profile_facts, donde cada elemento tiene "
-            "key, value y confidence. "
-            "No uses reglas manuales ni expresiones regulares; infiere los hechos desde el lenguaje natural."
-        )
+        system_prompt = load_prompt("router/extract_profile_facts")
         payload = await self._invoke_model(system_prompt, self._build_user_prompt(text, context))
         parsed = self._parse_response(payload)
         return UserProfileExtraction.model_validate(parsed)
