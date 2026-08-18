@@ -61,15 +61,20 @@ tests/
 
 - Python 3.10 o superior
 - MongoDB accesible localmente o remoto
-- dependencias listadas en requirements.txt
+- dependencias declaradas en `pyproject.toml`
 
 ## Ejecución
 
-### 1. Instalar dependencias
+### 1. Instalar el proyecto (modo editable)
 
 ```powershell
-pip install -r requirements.txt
+pip install -e ".[dev,llm,mcp]"
 ```
+
+Instala el paquete en modo editable junto con los grupos opcionales: `llm` (SDK de OpenAI), `mcp`
+(servidor MCP) y `dev` (pytest). Con esto los imports funcionan igual sin importar desde qué
+directorio se invoque el CLI, la API o los tests — ya no depende de `sys.path` ni del directorio de
+trabajo actual.
 
 ### 2. Levantar la API
 

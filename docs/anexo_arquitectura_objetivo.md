@@ -201,15 +201,29 @@ reproducibles, y que desaparezcan los hacks de `sys.path`.
 
 ### 🟢 Higiene inmediata (Fase 0)
 
-- **`pyproject.toml` con layout `src/`.** Un único fichero declara metadatos, dependencias y configuración
-  de herramientas (`ruff`, `mypy`, `pytest`). Instalación editable: `pip install -e ".[dev]"`. Con esto
-  `sys.path` deja de tocarse y los imports son iguales en tests, CLI y API.
-- **Declarar `motor` explícitamente.** Hoy se usa por transitividad. Toda dependencia que se importa en el
-  código debe estar declarada, sin excepciones.
-- **Separar grupos de dependencias:** base (`fastapi`, `pydantic`, `motor`, `httpx`), `[dev]` (pytest,
-  ruff, mypy), `[llm]` (`openai`), `[mcp]` (`mcp`). Permite un contenedor de API sin herramientas de
-  desarrollo y hace visible qué parte del sistema arrastra qué peso.
-- **Fijar versiones con rangos conservadores** (`fastapi>=0.115,<0.120`) y un lockfile en el repo.
+- ✅ **`pyproject.toml` con layout `src/`.** Metadatos y dependencias en un único fichero. Instalación
+  editable: `pip install -e ".[dev,llm,mcp]"`. `sys.path` ya no se toca en ningún fichero del repo — se
+  eliminó el hack de `interfaces/cli.py` (insertaba la raíz del repo a mano para que el CLI funcionara
+  invocado desde su propia carpeta). Faltaron `__init__.py` en cinco paquetes (`assistant_personal/`,
+  `infrastructure/mcp/`, `infrastructure/mcp/tools/`, `infrastructure/persistence/`,
+  `infrastructure/routers/`) que "funcionaban" hoy solo por namespace packages implícitos (PEP 420) —
+  se agregaron para que el auto-discovery de `setuptools` los encuentre de forma estándar.
+  Configuración de `ruff`/`mypy` queda pendiente (no es bloqueante para el resto de Fase 0).
+- ✅ **Declarar `motor` explícitamente**, y de paso `pydantic-settings` y `structlog` (ver 0.4/0.10). Toda
+  dependencia importada en `src/` está declarada.
+- ✅ **Separar grupos de dependencias:** base (`fastapi`, `pydantic-settings`, `motor`, `httpx`,
+  `structlog`, `python-dotenv`), `[llm]` (`openai`), `[mcp]` (`mcp`), `[dev]` (`pytest`, `pytest-asyncio`).
+  `ruff`/`mypy` quedan fuera de `[dev]` por ahora (no estaban en uso en el repo; agregarlos sin
+  configurarlos sería ruido).
+- **Fijar versiones con rangos conservadores y lockfile** — pendiente (depende de adoptar `uv`, Fase 1).
+  **Hallazgo al migrar:** `requirements.txt` tenía dos inconsistencias reales sin detectar —
+  `starlette>=0.40.0,<0.47.0` era incompatible con `fastapi==0.115.0` (que en realidad exige
+  `starlette<0.39.0,>=0.37.2`), y `pymongo==4.8.0` era incompatible con `motor==3.7.1` (exige
+  `pymongo>=4.9,<5.0`, y el entorno ya corría con pymongo 4.17.0 en la práctica). `pip install -r
+  requirements.txt` nunca lo detectó porque instala línea por línea sin resolver dependencias de forma
+  cruzada; `pip install -e .` con `pyproject.toml` sí lo bloqueó de inmediato. Se resolvió dejando que
+  `fastapi`/`motor` gestionen esas dos como transitivas, sin pin explícito. `requirements.txt` se eliminó
+  (duplicaba `pyproject.toml` y fue la causa raíz del drift).
 
 ### 🟡 Industrialización esperable (Fase 1)
 
@@ -222,11 +236,14 @@ reproducibles, y que desaparezcan los hacks de `sys.path`.
 
 ### Definition of Done
 
-- [ ] `git clone && uv sync && uv run pytest` funciona en una máquina limpia sin pasos manuales.
-- [ ] Ningún fichero del repo manipula `sys.path`.
-- [ ] `pip check` / `uv lock --check` pasan sin avisos.
-- [ ] Toda librería importada en `src/` aparece en `pyproject.toml`.
-- [ ] Lockfile versionado y actualizado en el mismo commit que cualquier cambio de dependencias.
+- [ ] `git clone && uv sync && uv run pytest` funciona en una máquina limpia sin pasos manuales. Pendiente
+      — hoy es `git clone && pip install -e ".[dev,llm,mcp]" && python -m unittest discover -s tests`;
+      falta adoptar `uv` (Fase 1, ítem 1.1).
+- [x] Ningún fichero del repo manipula `sys.path` (verificado: `grep -rn "sys.path"` sin resultados fuera
+      de `venv/`).
+- [x] `pip check` pasa sin avisos. `uv lock --check` no aplica todavía (no se adoptó `uv`).
+- [x] Toda librería importada en `src/` aparece en `pyproject.toml`.
+- [ ] Lockfile versionado — pendiente, depende de `uv` (Fase 1).
 
 ---
 
@@ -887,8 +904,8 @@ Objetivo: **eliminar fallos silenciosos y desbloquear el resto de fases.**
 | # | Cambio | Nivel | Área | Estado |
 | --- | --- | --- | --- | --- |
 | 0.1 | Rotar clave de OpenAI, verificar `.gitignore`, añadir `gitleaks` | 🟢 | §A.11 | ✅ Hecho — `.gitignore` cubre `.env` (nunca se commiteó, verificado en todo el historial); clave rotada en el dashboard de OpenAI; `.github/workflows/gitleaks.yml` escaneando cada push/PR |
-| 0.2 | `pyproject.toml` + layout `src/`, instalable, sin `sys.path` | 🟢 | §A.3 | ❌ Pendiente |
-| 0.3 | Declarar `motor` y separar grupos de dependencias | 🟢 | §A.3 | 🟡 Parcial — `motor` y `pydantic-settings` ya están en `requirements.txt`; falta separar en grupos (`[dev]`/`[llm]`/`[mcp]`, depende de 0.2/`pyproject.toml`) |
+| 0.2 | `pyproject.toml` + layout `src/`, instalable, sin `sys.path` | 🟢 | §A.3 | ✅ Hecho — `pip install -e ".[dev,llm,mcp]"`; se agregaron 5 `__init__.py` faltantes y se eliminó el hack de `sys.path` en `cli.py`; `requirements.txt` eliminado (duplicaba `pyproject.toml`) |
+| 0.3 | Declarar `motor` y separar grupos de dependencias | 🟢 | §A.3 | ✅ Hecho — `motor`, `pydantic-settings`, `structlog` en dependencias base; `[llm]`/`[mcp]`/`[dev]` como grupos opcionales en `pyproject.toml`. De paso se corrigieron dos conflictos de versiones reales (`starlette` vs `fastapi`, `pymongo` vs `motor`) que `requirements.txt` nunca detectó |
 | 0.4 | `Settings` único con `pydantic-settings`; eliminar el segundo mecanismo de entorno | 🟢 | §A.4 | ✅ Hecho — `config.py` reescrito con `pydantic-settings` (`SecretStr` para la API key, falla ruidoso si falta `MONGO_URI`); `openai_llm_client.py` ya no llama `load_dotenv()` ni lee `os.getenv` directo, consume `get_settings()` |
 | 0.5 | Unificar el nombre de base de datos | 🟢 | §A.4 | ✅ Hecho — `TaskService`, `MongoTaskRepository`, `build_default_task_repository` y `MongoSessionRepository` ya no hardcodean `"personal_management"`: resuelven `db_name or get_settings().mongo_db_name`. Se corrigió `.env` (`MONGO_DB_NAME` apuntaba a `"sample_mflix"`, un dataset de ejemplo no relacionado — las tareas reales se estaban indexando en la base equivocada) |
 | 0.6 | `.env.example` completo | 🟢 | §A.4 | ✅ Hecho — cubre los 7 campos de `Settings`, con un comentario por variable |
@@ -1026,9 +1043,8 @@ nombres y comentarios en español; cambios pequeños e incrementales.
 1. **Corregir el bridging sync/async de la memoria de sesión** (Fase 0). ✅ **Hecho** (ver §A.9 y fila 0.7
    de §A.14). Bug de fallo silencioso: el asistente no recordaba y nada avisaba. El hallazgo relacionado en
    el bootstrap de conexión (`client.py`, fila 0.12) también quedó ✅ **hecho**.
-2. **`pyproject.toml` + `Settings` único** (Fase 0). Desbloquea CI, containerización y despliegue.
-   🟡 Parcial: `Settings` único con `pydantic-settings` ✅ hecho (fila 0.4); `pyproject.toml`/layout
-   instalable sigue pendiente (fila 0.2).
+2. **`pyproject.toml` + `Settings` único** (Fase 0). ✅ **Hecho** (filas 0.2 y 0.4). Desbloquea CI,
+   containerización y despliegue.
 3. **Integration tests contra Mongo real** (Fase 0–1). Es la única clase de test que detecta el bug
    anterior y los que vendrán. 🟡 Parcial: hay test async equivalente en forma a Motor para memoria de
    sesión, y ya existe un test contra Mongo real para el ciclo de vida de la conexión

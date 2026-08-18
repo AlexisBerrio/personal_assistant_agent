@@ -2,12 +2,7 @@ import argparse
 import asyncio
 import sys
 import uuid
-from pathlib import Path
 from typing import Sequence
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 from src.assistant_personal.application.agent_context import InMemorySessionRepository
 from src.assistant_personal.application.orchestrator import TaskOrchestrator
