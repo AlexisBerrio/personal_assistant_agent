@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -35,6 +35,16 @@ class Settings(BaseSettings):
     llm_provider: str = "openai"
     ollama_base_url: str = "http://localhost:11434/v1"
     ollama_model: str | None = None
+
+    @field_validator("openai_api_key", mode="before")
+    @classmethod
+    def _strip_openai_api_key(cls, value: str | None) -> str | None:
+        """Recorta espacios/saltos de línea colados al copiar la key (GitHub secrets, `.env`,
+        variables de entorno de CI). Sin esto, un `\\n` final rompe el header HTTP `Authorization`
+        con un error de bajo nivel (`httpcore.LocalProtocolError: Illegal header value`) que el
+        SDK de OpenAI reporta como el genérico `APIConnectionError: Connection error.` — un
+        síntoma que no delata su causa real. Ver docs/anexo_arquitectura_objetivo.md, ítem 2.4."""
+        return value.strip() if isinstance(value, str) else value
 
     @property
     def python_command(self) -> str | None:
