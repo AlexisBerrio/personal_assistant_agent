@@ -4,28 +4,33 @@ from typing import Any, Protocol
 
 
 class TaskRepository(Protocol):
-    """Puerto del dominio para persistir tareas y su historial."""
+    """Puerto del dominio para persistir tareas y su historial.
 
-    def check_connection(self) -> bool:
+    Async de punta a punta, con el sufijo `_async` que usa el resto de los ports del proyecto
+    (`SessionMemoryRepository`, `LLMClient`) — refleja la única implementación real que existe
+    (`MongoTaskRepository`), no una interfaz síncrona aspiracional que nadie implementa.
+    """
+
+    async def check_connection(self) -> bool:
         ...
 
-    def list_active_tasks(self) -> list[dict[str, Any]]:
+    async def list_active_tasks_async(self) -> list[dict[str, Any]]:
         ...
 
-    def get_task_by_id(self, task_id: str) -> dict[str, Any] | None:
+    async def get_task_by_id_async(self, task_id: str) -> dict[str, Any] | None:
         ...
 
-    def get_task_history(self, task_id: str) -> list[dict[str, Any]]:
+    async def get_task_history_async(self, task_id: str) -> list[dict[str, Any]]:
         ...
 
-    def create_task(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def create_task_async(self, payload: dict[str, Any]) -> dict[str, Any]:
         ...
 
-    def update_task(self, task_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+    async def update_task_async(self, task_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
         ...
 
-    def complete_task(self, task_id: str) -> dict[str, Any]:
+    async def complete_task_async(self, task_id: str) -> dict[str, Any]:
         ...
 
-    def delete_task(self, task_id: str) -> dict[str, Any] | None:
+    async def delete_task_async(self, task_id: str) -> dict[str, Any] | None:
         ...

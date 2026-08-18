@@ -15,15 +15,21 @@ async def health_handler(_: Any) -> JSONResponse:
 
 
 def register_tools() -> None:
-    """Registra las herramientas MCP en el servidor usando el servicio de la app."""
+    """Registra las herramientas MCP en el servidor con su propia instancia de `TaskService`.
+
+    Antes importaba `service` desde `app.py` (el entrypoint de FastAPI), que nunca lo expone a
+    nivel de módulo — además de ser un bug, era una violación de capas: infraestructura no debe
+    depender del script de arranque de otra interfaz. El servidor MCP construye su propio
+    `TaskService` con los adaptadores por defecto, igual que hace `app.py` en su `lifespan`.
+    """
     global _tools_registered
     if _tools_registered:
         return
 
-    from app import service as app_service
+    from src.assistant_personal.application.task_service import TaskService
     from src.assistant_personal.infrastructure.mcp.tools.task_tools import register_task_tools
 
-    register_task_tools(mcp, app_service)
+    register_task_tools(mcp, TaskService())
     _tools_registered = True
 
 

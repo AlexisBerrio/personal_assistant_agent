@@ -106,7 +106,126 @@ def _record_audit_event(task_title: str, request_id: str) -> None:
     logger.info("task_created_audit", task_title=task_title, request_id=request_id)
 
 
+class TaskCreateRequest(BaseModel):
+    """Modelo que define qué datos recibe la API para crear una tarea."""
+
+    title: str = Field(
+        min_length=1,
+        description="Título principal de la tarea.",
+        json_schema_extra={"example": "Revisar propuesta"},
+    )
+    description: str | None = Field(
+        default=None,
+        description="Descripción opcional de la tarea.",
+        json_schema_extra={"example": "Confirmar los últimos cambios antes de enviar"},
+    )
+    status: str = Field(
+        default="Pending",
+        min_length=1,
+        description="Estado de la tarea. Valores permitidos: Pending, In Progress, Completed, Deleted.",
+        json_schema_extra={"example": "Pending"},
+    )
+    category: str | None = Field(
+        default=None,
+        description="Categoría de la tarea. Valores permitidos: Personal, Work, Study, Health, Home.",
+        json_schema_extra={"example": "Work"},
+    )
+    tags: list[str] = Field(
+        default_factory=list,
+        description="Etiquetas de clasificación.",
+        json_schema_extra={"example": ["oficina", "urgente"]},
+    )
+    priority: dict[str, Any] | None = Field(
+        default=None,
+        description="Prioridad de la tarea. Debe incluir un campo level con uno de: Low, Medium, High.",
+        json_schema_extra={"example": {"level": "High", "score": 90}},
+    )
+    dates: dict[str, Any] | None = Field(
+        default=None,
+        description="Fechas asociadas a la tarea.",
+        json_schema_extra={"example": {"created_at": "2026-08-02T10:00:00", "due_date": "2026-08-05T12:00:00"}},
+    )
+    recurrence: dict[str, Any] | None = Field(
+        default=None,
+        description="Reglas de recurrencia si aplica.",
+        json_schema_extra={"example": {"is_recurring": False, "frequency": None}},
+    )
+    context_metadata: dict[str, Any] | None = Field(
+        default=None,
+        description="Metadatos de contexto adicionales.",
+        json_schema_extra={"example": {"source": "manual", "location": "home"}},
+    )
+    steps: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Pasos de ejecución de la tarea.",
+        json_schema_extra={"example": [{"step_id": 1, "text": "Revisar contenido", "is_completed": False}]},
+    )
+    agent_notes: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Notas del agente asociadas a la tarea.",
+        json_schema_extra={
+            "example": [{"timestamp": "2026-08-02T10:05:00", "note": "Tarea creada desde la API"}]
+        },
+    )
+
+
+class TaskUpdateRequest(BaseModel):
+    """Modelo que define qué datos admite la API para actualizar una tarea."""
+
+    title: str | None = Field(
+        default=None,
+        description="Nuevo título para la tarea.",
+        json_schema_extra={"example": "Revisar propuesta actualizada"},
+    )
+    description: str | None = Field(
+        default=None,
+        description="Nueva descripción de la tarea.",
+        json_schema_extra={"example": "Confirmar los últimos cambios antes de enviar"},
+    )
+    status: str | None = Field(
+        default=None,
+        description="Estado de la tarea. Valores permitidos: Pending, In Progress, Completed, Deleted.",
+        json_schema_extra={"example": "In Progress"},
+    )
+    category: str | None = Field(
+        default=None,
+        description="Categoría de la tarea. Valores permitidos: Personal, Work, Study, Health, Home.",
+        json_schema_extra={"example": "Work"},
+    )
+    tags: list[str] | None = Field(
+        default=None,
+        description="Etiquetas de clasificación actualizadas.",
+        json_schema_extra={"example": ["oficina", "urgente"]},
+    )
+    priority: dict[str, Any] | None = Field(
+        default=None,
+        description="Prioridad de la tarea. Debe incluir un campo level con uno de: Low, Medium, High.",
+        json_schema_extra={"example": {"level": "High", "score": 90}},
+    )
+    dates: dict[str, Any] | None = Field(
+        default=None,
+        description="Fechas actualizadas de la tarea, como la fecha límite.",
+        json_schema_extra={"example": {"due_date": "2026-08-05T12:00:00"}},
+    )
+    recurrence: dict[str, Any] | None = Field(
+        default=None,
+        description="Reglas de recurrencia actualizadas.",
+        json_schema_extra={"example": {"is_recurring": False, "frequency": None}},
+    )
+    context_metadata: dict[str, Any] | None = Field(
+        default=None,
+        description="Metadatos de contexto actualizados.",
+        json_schema_extra={"example": {"source": "manual", "location": "home"}},
+    )
+    steps: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="Pasos de ejecución actualizados de la tarea.",
+        json_schema_extra={"example": [{"step_id": 1, "text": "Revisar contenido", "is_completed": False}]},
+    )
+
+
 async def _invoke_service_method(service: TaskService, method_name: str, *args: Any, **kwargs: Any) -> Any:
+    """Invoca un método del servicio, prefiriendo su variante async si existe."""
     async_method = getattr(service, f"{method_name}_async", None)
     if callable(async_method):
         return await async_method(*args, **kwargs)
@@ -114,73 +233,6 @@ async def _invoke_service_method(service: TaskService, method_name: str, *args: 
     sync_method = getattr(service, method_name, None)
     if callable(sync_method):
         return sync_method(*args, **kwargs)
-
-    raise AttributeError(f"El servicio no implementa '{method_name}'")
-
-
-class TaskCreateRequest(BaseModel):
-    """Modelo que define qué datos recibe la API para crear una tarea."""
-    title: str = Field(min_length=1, description="Título principal de la tarea.",
-                       json_schema_extra={"example": "Revisar propuesta"})
-    description: str | None = Field(default=None, description="Descripción opcional de la tarea.", json_schema_extra={
-                                    "example": "Confirmar los últimos cambios antes de enviar"})
-    status: str = Field(default="Pending", min_length=1,
-                        description="Estado de la tarea. Valores permitidos: Pending, In Progress, Completed, Deleted.", json_schema_extra={"example": "Pending"})
-    category: str | None = Field(
-        default=None, description="Categoría de la tarea. Valores permitidos: Personal, Work, Study, Health, Home.", json_schema_extra={"example": "Work"})
-    tags: list[str] = Field(default_factory=list, description="Etiquetas de clasificación.",
-                            json_schema_extra={"example": ["oficina", "urgente"]})
-    priority: dict[str, Any] | None = Field(default=None, description="Prioridad de la tarea. Debe incluir un campo level con uno de: Low, Medium, High.", json_schema_extra={
-                                            "example": {"level": "High", "score": 90}})
-    dates: dict[str, Any] | None = Field(default=None, description="Fechas asociadas a la tarea.", json_schema_extra={
-                                         "example": {"created_at": "2026-08-02T10:00:00", "due_date": "2026-08-05T12:00:00"}})
-    recurrence: dict[str, Any] | None = Field(default=None, description="Reglas de recurrencia si aplica.", json_schema_extra={
-                                              "example": {"is_recurring": False, "frequency": None}})
-    context_metadata: dict[str, Any] | None = Field(default=None, description="Metadatos de contexto adicionales.", json_schema_extra={
-                                                    "example": {"source": "manual", "location": "home"}})
-    steps: list[dict[str, Any]] = Field(default_factory=list, description="Pasos de ejecución de la tarea.", json_schema_extra={
-                                        "example": [{"step_id": 1, "text": "Revisar contenido", "is_completed": False}]})
-    agent_notes: list[dict[str, Any]] = Field(default_factory=list, description="Notas del agente asociadas a la tarea.", json_schema_extra={
-                                              "example": [{"timestamp": "2026-08-02T10:05:00", "note": "Tarea creada desde la API"}]})
-
-
-class TaskUpdateRequest(BaseModel):
-    """Modelo que define qué datos admite la API para actualizar una tarea."""
-    title: str | None = Field(default=None, description="Nuevo título para la tarea.", json_schema_extra={
-                              "example": "Revisar propuesta actualizada"})
-    description: str | None = Field(default=None, description="Nueva descripción de la tarea.", json_schema_extra={
-                                    "example": "Confirmar los últimos cambios antes de enviar"})
-    status: str | None = Field(default=None, description="Estado de la tarea. Valores permitidos: Pending, In Progress, Completed, Deleted.", json_schema_extra={
-                               "example": "In Progress"})
-    category: str | None = Field(
-        default=None, description="Categoría de la tarea. Valores permitidos: Personal, Work, Study, Health, Home.", json_schema_extra={"example": "Work"})
-    tags: list[str] | None = Field(default=None, description="Etiquetas de clasificación actualizadas.", json_schema_extra={
-                                   "example": ["oficina", "urgente"]})
-    priority: dict[str, Any] | None = Field(default=None, description="Prioridad de la tarea. Debe incluir un campo level con uno de: Low, Medium, High.", json_schema_extra={
-                                            "example": {"level": "High", "score": 90}})
-    dates: dict[str, Any] | None = Field(default=None, description="Fechas actualizadas de la tarea, como la fecha límite.", json_schema_extra={
-                                         "example": {"due_date": "2026-08-05T12:00:00"}})
-    recurrence: dict[str, Any] | None = Field(default=None, description="Reglas de recurrencia actualizadas.", json_schema_extra={
-                                              "example": {"is_recurring": False, "frequency": None}})
-    context_metadata: dict[str, Any] | None = Field(default=None, description="Metadatos de contexto actualizados.", json_schema_extra={
-                                                    "example": {"source": "manual", "location": "home"}})
-    steps: list[dict[str, Any]] | None = Field(default=None, description="Pasos de ejecución actualizados de la tarea.", json_schema_extra={
-                                               "example": [{"step_id": 1, "text": "Revisar contenido", "is_completed": False}]})
-
-
-async def _invoke_service_method(service_instance: TaskService, method_name: str, *args: Any, **kwargs: Any) -> Any:
-    async_method = getattr(service_instance, f"{method_name}_async", None)
-    if callable(async_method):
-        return await async_method(*args, **kwargs)
-
-    sync_method = getattr(service_instance, method_name, None)
-    if callable(sync_method):
-        return sync_method(*args, **kwargs)
-
-    if hasattr(service_instance, "__dict__"):
-        fallback_method = service_instance.__dict__.get(method_name)
-        if callable(fallback_method):
-            return fallback_method(*args, **kwargs)
 
     raise AttributeError(f"El servicio no implementa '{method_name}'")
 
@@ -259,7 +311,9 @@ async def get_task_history(task_id: str, service: TaskService = Depends(get_serv
 
 
 @app.patch("/tasks/{task_id}")
-async def update_task(task_id: str, payload: TaskUpdateRequest, service: TaskService = Depends(get_service)) -> dict[str, object]:
+async def update_task(
+    task_id: str, payload: TaskUpdateRequest, service: TaskService = Depends(get_service)
+) -> dict[str, object]:
     """Actualiza una tarea existente identificada por task_id.
 
     Si el payload incluye un estado "Completed", la tarea se marca como

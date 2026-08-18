@@ -7,13 +7,13 @@ from pydantic import BaseModel, Field
 
 
 class IntentAction(str, Enum):
-    LIST_TASKS = "list_tasks" #Ver, consultar o listar tareas pendientes.
-    CREATE_TASK = "create_task" #Registrar una nueva tarea
-    COMPLETE_TASK = "complete_task" #Marcar una tarea como completada
-    DELETE_TASK = "delete_task" #Eliminar una tarea
-    ASK_KNOWLEDGE_BASE = "ask_knowledge_base" #Si el usuario pregunta información general
-    SMALL_TALK = "small_talk" #Conversación casual o saludo
-    CLARIFY = "clarify" #Si la solicitud es totalmente ambigua o incomprensible.
+    LIST_TASKS = "list_tasks"  # Ver, consultar o listar tareas pendientes.
+    CREATE_TASK = "create_task"  # Registrar una nueva tarea.
+    COMPLETE_TASK = "complete_task"  # Marcar una tarea como completada.
+    DELETE_TASK = "delete_task"  # Eliminar una tarea.
+    ASK_KNOWLEDGE_BASE = "ask_knowledge_base"  # El usuario pregunta información general.
+    SMALL_TALK = "small_talk"  # Conversación casual o saludo.
+    CLARIFY = "clarify"  # La solicitud es ambigua o incomprensible.
 
 
 class ConversationRoute(str, Enum):
