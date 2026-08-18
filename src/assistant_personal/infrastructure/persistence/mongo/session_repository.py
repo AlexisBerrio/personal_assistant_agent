@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from src.assistant_personal.config import get_settings
 from src.assistant_personal.domain.repositories.session_memory_repository import SessionMemoryRepository
 from src.assistant_personal.infrastructure.persistence.mongo.client import get_db
 
@@ -15,8 +16,8 @@ class MongoSessionRepository(SessionMemoryRepository):
     en el punto de entrada), nunca dentro de este repositorio.
     """
 
-    def __init__(self, db_name: str = "personal_management", get_db_fn: Any | None = None) -> None:
-        self.db_name = db_name
+    def __init__(self, db_name: str | None = None, get_db_fn: Any | None = None) -> None:
+        self.db_name = db_name or get_settings().mongo_db_name
         self._get_db_fn = get_db_fn or get_db
 
     def _build_timestamp(self) -> str:

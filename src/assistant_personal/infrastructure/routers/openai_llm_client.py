@@ -1,35 +1,33 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
 
-from dotenv import load_dotenv
 from openai import OpenAI
 
+from src.assistant_personal.config import get_settings
 from src.assistant_personal.domain.entities import ConversationRoute, IntentAction, IntentClassification, UserProfileExtraction
-
-load_dotenv()
 
 
 class _OpenAITextClient:
     """Cliente base para compartir invocación y parseo estructurado con OpenAI."""
 
     def __init__(self, model: str | None = None, api_key: str | None = None):
-        provider = os.getenv("LLM_PROVIDER", "openai").strip().lower()
+        settings = get_settings()
+        provider = (settings.llm_provider or "openai").strip().lower()
         base_url: str | None = None
 
         self._use_responses_api = provider != "ollama"
 
         if provider == "ollama":
-            self.model = model or os.getenv("OLLAMA_MODEL")
-            api_key_value = api_key or os.getenv("OLLAMA_API_KEY", "ollama")
-            base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+            self.model = model or settings.ollama_model
+            api_key_value = api_key or settings.ollama_api_key
+            base_url = settings.ollama_base_url
             if not self.model:
                 raise RuntimeError("OLLAMA_MODEL is required when LLM_PROVIDER=ollama")
         else:
-            self.model = model or os.getenv("OPENAI_MODEL")
-            api_key_value = api_key or os.getenv("OPENAI_API_KEY")
+            self.model = model or settings.openai_model
+            api_key_value = api_key or (settings.openai_api_key.get_secret_value() if settings.openai_api_key else None)
             if not api_key_value:
                 raise RuntimeError("OPENAI_API_KEY is required")
             if not self.model:

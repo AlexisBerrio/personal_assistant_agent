@@ -4,14 +4,15 @@ import inspect
 from datetime import datetime, timezone
 from typing import Any
 
+from src.assistant_personal.config import get_settings
 from src.assistant_personal.infrastructure.persistence.mongo.client import get_db
 
 
 class MongoTaskRepository:
     """Repositorio concreto para persistir tareas en MongoDB con Motor."""
 
-    def __init__(self, db_name: str = "personal_management", get_db_fn: Any | None = None) -> None:
-        self.db_name = db_name
+    def __init__(self, db_name: str | None = None, get_db_fn: Any | None = None) -> None:
+        self.db_name = db_name or get_settings().mongo_db_name
         self._get_db_fn = get_db_fn or get_db
 
     async def _get_db(self) -> Any:

@@ -875,11 +875,11 @@ Objetivo: **eliminar fallos silenciosos y desbloquear el resto de fases.**
 
 | # | Cambio | Nivel | Área | Estado |
 | --- | --- | --- | --- | --- |
-| 0.1 | Rotar clave de OpenAI, verificar `.gitignore`, añadir `gitleaks` | 🟢 | §A.11 | 🟡 Parcial — `.gitignore` ya cubría `.env` y se confirmó que nunca se commiteó (`git log --all -p` sin coincidencias); se agregó `.github/workflows/gitleaks.yml`. Falta la rotación de la clave en el dashboard de OpenAI (acción manual del usuario) |
+| 0.1 | Rotar clave de OpenAI, verificar `.gitignore`, añadir `gitleaks` | 🟢 | §A.11 | ✅ Hecho — `.gitignore` cubre `.env` (nunca se commiteó, verificado en todo el historial); clave rotada en el dashboard de OpenAI; `.github/workflows/gitleaks.yml` escaneando cada push/PR |
 | 0.2 | `pyproject.toml` + layout `src/`, instalable, sin `sys.path` | 🟢 | §A.3 | ❌ Pendiente |
-| 0.3 | Declarar `motor` y separar grupos de dependencias | 🟢 | §A.3 | ❌ Pendiente — `motor` no está en `requirements.txt` |
-| 0.4 | `Settings` único con `pydantic-settings`; eliminar el segundo mecanismo de entorno | 🟢 | §A.4 | ❌ Pendiente — sigue duplicado (`config.py` vs `openai_llm_client.py`) |
-| 0.5 | Unificar el nombre de base de datos | 🟢 | §A.4 | ❌ Pendiente — sigue inconsistente (`"personal_management"` vs `settings.mongo_db_name`) |
+| 0.3 | Declarar `motor` y separar grupos de dependencias | 🟢 | §A.3 | 🟡 Parcial — `motor` y `pydantic-settings` ya están en `requirements.txt`; falta separar en grupos (`[dev]`/`[llm]`/`[mcp]`, depende de 0.2/`pyproject.toml`) |
+| 0.4 | `Settings` único con `pydantic-settings`; eliminar el segundo mecanismo de entorno | 🟢 | §A.4 | ✅ Hecho — `config.py` reescrito con `pydantic-settings` (`SecretStr` para la API key, falla ruidoso si falta `MONGO_URI`); `openai_llm_client.py` ya no llama `load_dotenv()` ni lee `os.getenv` directo, consume `get_settings()` |
+| 0.5 | Unificar el nombre de base de datos | 🟢 | §A.4 | ✅ Hecho — `TaskService`, `MongoTaskRepository`, `build_default_task_repository` y `MongoSessionRepository` ya no hardcodean `"personal_management"`: resuelven `db_name or get_settings().mongo_db_name`. Se corrigió `.env` (`MONGO_DB_NAME` apuntaba a `"sample_mflix"`, un dataset de ejemplo no relacionado — las tareas reales se estaban indexando en la base equivocada) |
 | 0.6 | `.env.example` completo | 🟢 | §A.4 | ❌ Pendiente |
 | 0.7 | **Corregir el bridging sync/async de la memoria de sesión** | 🟢 | §A.9 | ✅ Hecho — `MongoSessionRepository` async de extremo a extremo, ver detalle en §A.9 |
 | 0.8 | `docker-compose.yml` solo con Mongo, para tests locales | 🟢 | §A.7 | ❌ Pendiente |
@@ -1016,6 +1016,8 @@ nombres y comentarios en español; cambios pequeños e incrementales.
    de §A.14). Bug de fallo silencioso: el asistente no recordaba y nada avisaba. El hallazgo relacionado en
    el bootstrap de conexión (`client.py`, fila 0.12) también quedó ✅ **hecho**.
 2. **`pyproject.toml` + `Settings` único** (Fase 0). Desbloquea CI, containerización y despliegue.
+   🟡 Parcial: `Settings` único con `pydantic-settings` ✅ hecho (fila 0.4); `pyproject.toml`/layout
+   instalable sigue pendiente (fila 0.2).
 3. **Integration tests contra Mongo real** (Fase 0–1). Es la única clase de test que detecta el bug
    anterior y los que vendrán. 🟡 Parcial: hay test async equivalente en forma a Motor para memoria de
    sesión, y ya existe un test contra Mongo real para el ciclo de vida de la conexión

@@ -1,39 +1,52 @@
-import os
-from dataclasses import dataclass
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
+from pydantic import SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-@dataclass(frozen=True)
-class Settings:
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_ENV_FILE = _REPO_ROOT / ".env"
+
+
+class Settings(BaseSettings):
+    """Configuración central de la aplicación.
+
+    Única fuente de verdad para variables de entorno (lee `.env` una sola vez).
+    Prohibido usar `os.getenv` fuera de este módulo — ver
+    docs/anexo_arquitectura_objetivo.md §A.4. Los secretos se tipan como
+    `SecretStr` para que nunca aparezcan en logs ni en un `repr()` accidental.
+
+    `.env` se ubica con una ruta absoluta anclada a la raíz del repo, no
+    relativa al directorio de trabajo del proceso: así el comportamiento es el
+    mismo sin importar desde dónde se invoque (CLI ejecutado desde su propia
+    carpeta, tests, FastAPI, etc.).
+    """
+
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_file_encoding="utf-8", extra="ignore")
+
     mongo_uri: str
-    mongo_db_name: str = "sample_mflix"
+    mongo_db_name: str = "personal_management"
+
+    openai_api_key: Optional[SecretStr] = None
     openai_model: Optional[str] = None
-    python_command: Optional[str] = None
+
+    llm_provider: str = "openai"
+    ollama_base_url: str = "http://localhost:11434/v1"
+    ollama_model: Optional[str] = None
+    ollama_api_key: str = "ollama"
+
+    @property
+    def python_command(self) -> Optional[str]:
+        venv_python = _REPO_ROOT / ".venv" / "Scripts" / "python.exe"
+        return str(venv_python) if venv_python.exists() else None
 
 
-def load_dotenv(env_path: str = ".env") -> None:
-    if not os.path.exists(env_path):
-        return
-    with open(env_path, "r", encoding="utf-8") as env_file:
-        for raw_line in env_file:
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            if key.strip() not in os.environ:
-                os.environ[key.strip()] = value.strip().strip('"').strip("'")
-
-
-load_dotenv()
-
-
+@lru_cache
 def get_settings() -> Settings:
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    venv_python = os.path.join(repo_root, ".venv", "Scripts", "python.exe")
-    python_command = venv_python if os.path.exists(venv_python) else None
-    return Settings(
-        mongo_uri=os.getenv("MONGO_URI"),
-        mongo_db_name=os.getenv("MONGO_DB_NAME"),
-        openai_model=os.getenv("OPENAI_MODEL"),
-        python_command=python_command,
-    )
+    return Settings()
+
+
+__all__ = ["Settings", "get_settings"]

@@ -2,6 +2,7 @@ import inspect
 import uuid
 from typing import Any
 
+from src.assistant_personal.config import get_settings
 from src.assistant_personal.domain.task_models import Task
 from src.assistant_personal.domain.repositories.task_repository import TaskRepository
 from src.assistant_personal.infrastructure.persistence.mongo.client import get_db
@@ -20,10 +21,10 @@ class TaskService:
     COMPLETED_STATUS = "Completed"
     DELETED_STATUS = "Deleted"
 
-    def __init__(self, db_name: str = "personal_management", repository: TaskRepository | None = None) -> None:
-        # Guardamos el nombre de la base de datos que usaremos.
-        self.db_name = db_name
-        self.repository = repository or build_default_task_repository(db_name=db_name, get_db_fn=get_db)
+    def __init__(self, db_name: str | None = None, repository: TaskRepository | None = None) -> None:
+        # Guardamos el nombre de la base de datos que usaremos (única fuente de verdad: Settings).
+        self.db_name = db_name or get_settings().mongo_db_name
+        self.repository = repository or build_default_task_repository(db_name=self.db_name, get_db_fn=get_db)
 
     def _to_dict(self, task: Task | dict[str, Any]) -> dict[str, Any]:
         """Convierte un objeto Task o un diccionario en un diccionario simple."""
