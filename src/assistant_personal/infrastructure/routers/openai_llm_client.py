@@ -21,7 +21,8 @@ class _OpenAITextClient:
 
         if provider == "ollama":
             self.model = model or settings.ollama_model
-            api_key_value = api_key or settings.ollama_api_key
+            # Ollama no valida la API key, pero el SDK de OpenAI exige que venga un string no vacío.
+            api_key_value = api_key or "ollama"
             base_url = settings.ollama_base_url
             if not self.model:
                 raise RuntimeError("OLLAMA_MODEL is required when LLM_PROVIDER=ollama")

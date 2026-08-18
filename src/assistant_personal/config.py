@@ -36,7 +36,6 @@ class Settings(BaseSettings):
     llm_provider: str = "openai"
     ollama_base_url: str = "http://localhost:11434/v1"
     ollama_model: Optional[str] = None
-    ollama_api_key: str = "ollama"
 
     @property
     def python_command(self) -> Optional[str]:
