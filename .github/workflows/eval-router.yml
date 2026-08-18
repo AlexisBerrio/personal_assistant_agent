@@ -66,6 +66,39 @@ jobs:
           echo "--- Conectividad IPv6 directa ---"
           curl -6 -sS -o /dev/null -w "IPv6 HTTP %{http_code}\n" https://api.openai.com/v1/models -H "Authorization: Bearer $OPENAI_API_KEY" --max-time 10 || echo "IPv6 falló"
 
+      - name: "Diagnóstico: la llamada real del SDK, con el traceback completo"
+        # `curl` a /v1/models funciona (GET simple), pero el router llama a POST /v1/responses
+        # vía AsyncOpenAI (ver openai_llm_client.py::_invoke_model). El SDK de OpenAI envuelve
+        # cualquier excepción de conexión de httpx en un genérico "Connection error." que oculta
+        # la causa real (SSL, timeout, proxy, lo que sea) — este paso la reproduce sin ese
+        # envoltorio, para ver la excepción original.
+        run: |
+          uv run --python 3.12 python - <<'EOF'
+          import asyncio
+          import traceback
+
+          from openai import AsyncOpenAI
+
+
+          async def main() -> None:
+              client = AsyncOpenAI()
+              try:
+                  response = await client.responses.create(
+                      model="gpt-4o-mini",
+                      input=[{"role": "user", "content": "di 'ok'"}],
+                      temperature=0,
+                  )
+                  print("OK:", response.output_text)
+              except Exception as exc:
+                  print("EXCEPTION TYPE:", type(exc))
+                  print("REPR:", repr(exc))
+                  print("CAUSE:", repr(exc.__cause__))
+                  traceback.print_exc()
+
+
+          asyncio.run(main())
+          EOF
+
       - name: Evaluación del router contra el golden dataset
         # Bloqueante: test_eval_router.py falla si algún umbral de tests/eval/umbrales.yaml no
         # se cumple (ver ejecutar_evaluacion en tests/eval/run_eval.py).
