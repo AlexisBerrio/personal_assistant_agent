@@ -3,7 +3,11 @@ services:
     image: mongo:7
     container_name: assistant_personal_mongo
     ports:
-      - "27017:27017"
+      # Host:contenedor. Se usa 27018 en el host (no el 27017 estándar) para no
+      # chocar con un MongoDB nativo que pueda estar corriendo como servicio de
+      # Windows — si ambos escuchan en 27017, "localhost:27017" pasa a ser
+      # ambiguo y no hay garantía de a cuál de los dos le estás hablando.
+      - "27018:27017"
     volumes:
       - mongo_data:/data/db
     healthcheck:

@@ -82,10 +82,11 @@ trabajo actual.
 docker compose up -d mongo
 ```
 
-Da un Mongo local en `localhost:27017`, aislado del cluster de Atlas configurado en `.env`. Útil para
-tests de integración sin depender de conectividad ni de credenciales reales. Para usarlo, apunta
-`MONGO_URI` en `.env` a `mongodb://localhost:27017/personal_management`. Para tirarlo:
-`docker compose down` (agrega `-v` si además quieres borrar los datos del volumen).
+Da un Mongo local en `localhost:27018` (no el 27017 estándar — evita chocar con un MongoDB nativo que
+puedas tener instalado como servicio, ver comentario en `docker-compose.yml`), aislado del cluster de
+Atlas configurado en `.env`. `tests/test_session_memory_integration.py` lo usa automáticamente si está
+disponible (se salta solo si no lo está). Para tirarlo: `docker compose down` (agrega `-v` si además
+quieres borrar los datos del volumen).
 
 ### 3. Levantar la API
 
