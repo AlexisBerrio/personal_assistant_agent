@@ -9,11 +9,21 @@ on:
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27018:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.adminCommand(\"ping\")' --quiet"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
-      # `Settings` exige MONGO_URI y no hay `.env` en el runner.
-      # Valor dummy: los tests unitarios instancian `Settings`/`MongoConnection` pero no
-      # conectan de verdad (Motor conecta perezosamente). Los tests de integración contra un
-      # Mongo real siguen saltándose aquí hasta que 1.3 agregue un service container.
+      # `Settings` exige MONGO_URI y no hay `.env` en el runner. Este valor solo respalda la
+      # construcción de `Settings`/`MongoConnection` a nivel de módulo; los tests unitarios no
+      # dependen de que sea alcanzable. Los tests de integración reales usan el service container
+      # `mongo` de arriba, mapeado a 27018 (mismo puerto que docker-compose.yml en local).
       MONGO_URI: "mongodb://localhost:27017"
       MONGO_DB_NAME: "personal_management"
       # Idem: algunos tests construyen el router por defecto (OpenAI) sin invocarlo realmente
