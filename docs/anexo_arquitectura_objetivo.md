@@ -441,7 +441,11 @@ líneas y no obliga a containerizar la aplicación.
 
 ### Definition of Done
 
-- [ ] `docker compose up mongo` deja un Mongo listo para integration tests locales.
+- [x] `docker compose up mongo` deja un Mongo listo para integration tests locales. Verificado de punta a
+      punta con Docker Desktop instalado: contenedor `assistant_personal_mongo` arriba y `(healthy)`,
+      puerto `27017` mapeado, y un ciclo real de escritura/lectura con `motor` contra
+      `mongodb://localhost:27017` confirmado. `docker compose down` deja el volumen
+      (`personal_assistant_agent_mongo_data`) sin borrar entre sesiones.
 - [ ] (Fase 7) `docker build` produce una imagen que arranca solo con variables de entorno.
 - [ ] (Fase 7) La imagen no contiene secretos ni dependencias de desarrollo.
 
@@ -910,7 +914,7 @@ Objetivo: **eliminar fallos silenciosos y desbloquear el resto de fases.**
 | 0.5 | Unificar el nombre de base de datos | 🟢 | §A.4 | ✅ Hecho — `TaskService`, `MongoTaskRepository`, `build_default_task_repository` y `MongoSessionRepository` ya no hardcodean `"personal_management"`: resuelven `db_name or get_settings().mongo_db_name`. Se corrigió `.env` (`MONGO_DB_NAME` apuntaba a `"sample_mflix"`, un dataset de ejemplo no relacionado — las tareas reales se estaban indexando en la base equivocada) |
 | 0.6 | `.env.example` completo | 🟢 | §A.4 | ✅ Hecho — cubre los 7 campos de `Settings`, con un comentario por variable |
 | 0.7 | **Corregir el bridging sync/async de la memoria de sesión** | 🟢 | §A.9 | ✅ Hecho — `MongoSessionRepository` async de extremo a extremo, ver detalle en §A.9 |
-| 0.8 | `docker-compose.yml` solo con Mongo, para tests locales | 🟢 | §A.7 | ❌ Pendiente |
+| 0.8 | `docker-compose.yml` solo con Mongo, para tests locales | 🟢 | §A.7 | ✅ Hecho — verificado con Docker Desktop: `docker compose up -d mongo` levanta un contenedor `(healthy)`, escritura/lectura real confirmada con `motor` contra `localhost:27017` |
 | 0.9 | Primer integration test: memoria de sesión entre peticiones (prueba 0.7) | 🟢 | §A.12 | 🟡 Parcial — test async con fake de forma Motor real; falta contra Mongo real en contenedor (depende de 0.8). Sí existe ya `tests/test_mongo_connection_lifecycle.py` contra Mongo real (0.12) |
 | 0.10 | `structlog` en JSON, eliminar todos los `print` | 🟢 | §A.5 | ✅ Hecho — `infrastructure/observabilidad/logging.py` centraliza la configuración; `client.py`/`app.py` usan `get_logger`; `request_id` propagado por contextvars; de paso se eliminó un middleware duplicado que generaba dos UUIDs distintos por petición |
 | 0.11 | Sanear mensajes de error hacia el cliente | 🟢 | §A.11 | ✅ Hecho — `handle_runtime_error` ya no devuelve `str(exc)`, responde un mensaje genérico + `request_id` y registra el detalle completo (con traceback) vía `logging`. Se agregó además un handler catch-all (`Exception`) como red de seguridad para errores no anticipados (antes se propagaban sin `request_id` ni registro). `handle_value_error`/`handle_http_exception` se dejaron igual a propósito: sus mensajes son texto de negocio escrito por nosotros mismos (ej. "El título de la tarea es obligatorio"), no detalle interno |

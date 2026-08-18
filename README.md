@@ -76,19 +76,30 @@ Instala el paquete en modo editable junto con los grupos opcionales: `llm` (SDK 
 directorio se invoque el CLI, la API o los tests — ya no depende de `sys.path` ni del directorio de
 trabajo actual.
 
-### 2. Levantar la API
+### 2. (Opcional) Levantar un MongoDB local desechable para tests
+
+```powershell
+docker compose up -d mongo
+```
+
+Da un Mongo local en `localhost:27017`, aislado del cluster de Atlas configurado en `.env`. Útil para
+tests de integración sin depender de conectividad ni de credenciales reales. Para usarlo, apunta
+`MONGO_URI` en `.env` a `mongodb://localhost:27017/personal_management`. Para tirarlo:
+`docker compose down` (agrega `-v` si además quieres borrar los datos del volumen).
+
+### 3. Levantar la API
 
 ```powershell
 uvicorn app:app --host 127.0.0.1 --port 8000
 ```
 
-### 3. Probar la API
+### 4. Probar la API
 
 - Health check: http://127.0.0.1:8000/health
 - Listar tareas: http://127.0.0.1:8000/tasks
 - Consultar una tarea: http://127.0.0.1:8000/tasks/{task_id}
 
-### 4. Crear una tarea
+### 5. Crear una tarea
 
 Envío JSON a POST /tasks con un cuerpo como este:
 
@@ -119,7 +130,7 @@ Valores permitidos:
 }
 ```
 
-### 5. Actualizar una tarea
+### 6. Actualizar una tarea
 
 Envío JSON a PATCH /tasks/{task_id} con solo los campos que quieras modificar:
 
@@ -135,7 +146,7 @@ Envío JSON a PATCH /tasks/{task_id} con solo los campos que quieras modificar:
 }
 ```
 
-### 6. Completar una tarea
+### 7. Completar una tarea
 
 Envío JSON a PATCH /tasks/{task_id} con el estado de la tarea:
 
@@ -145,7 +156,7 @@ Envío JSON a PATCH /tasks/{task_id} con el estado de la tarea:
 }
 ```
 
-### 7. Historial de cambios
+### 8. Historial de cambios
 
 El proyecto también puede registrar cambios en una colección separada llamada `task_history` para no saturar la colección principal de tareas.
 
@@ -176,7 +187,7 @@ Ejemplo de documento para MongoDB:
 }
 ```
 
-### 8. Ejecutar el CLI
+### 9. Ejecutar el CLI
 
 ```powershell
 python -m src.assistant_personal.interfaces.cli
