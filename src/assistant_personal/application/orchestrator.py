@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from typing import Any
 
+import structlog
+
 from src.assistant_personal.application.agent_context import AgentContext
 from src.assistant_personal.domain.repositories.session_memory_repository import SessionMemoryRepository
+from src.assistant_personal.infrastructure.observabilidad import get_logger
 from src.assistant_personal.infrastructure.routers.hybrid_router import ProductionIntentRouter
+
+logger = get_logger(__name__)
 
 
 class TaskOrchestrator:
@@ -31,7 +37,27 @@ class TaskOrchestrator:
         return asyncio.run(self.handle_message_async(message))
 
     async def handle_message_async(self, message: str) -> dict[str, Any]:
+        started_at = time.monotonic()
+        # Cada turno es su propia "interacción" a efectos de observabilidad (ver §A.5): un
+        # request_id nuevo por turno, no reutilizado entre turnos del mismo CLI interactivo.
+        # Si en el futuro esto se invoca dentro de una petición FastAPI ya instrumentada, esto
+        # sobreescribe el request_id de la petición para los logs de la interacción — aceptable
+        # hoy porque `TaskOrchestrator` no se usa todavía desde `app.py`.
+        request_id = str(uuid.uuid4())
+        structlog.contextvars.clear_contextvars()
+        structlog.contextvars.bind_contextvars(request_id=request_id)
+        try:
+            return await self._handle_message(message, request_id=request_id, started_at=started_at)
+        finally:
+            structlog.contextvars.clear_contextvars()
+
+    async def _handle_message(self, message: str, *, request_id: str, started_at: float) -> dict[str, Any]:
         if not message or not message.strip():
+            self._log_interaction(
+                request_id=request_id, started_at=started_at,
+                intencion="clarify", confianza=None, uso_llm=False, llm_metadata=None,
+                resultado="guardrails_mensaje_vacio",
+            )
             return {
                 "success": False,
                 "action": "clarify",
@@ -47,14 +73,27 @@ class TaskOrchestrator:
         context_summary = await self.context.build_context_summary_async(session_id=self.session_id)
 
         intent = self.router.route(message, context=context_summary)
+        llm_metadata = getattr(self.router, "last_llm_metadata", None)
+        uso_llm = intent.source == "llm"
+
         if intent.action == "clarify":
             response_message = intent.payload.get("message", "No se pudo interpretar")
             await self.context.short_term_memory.add_turn_async(message, response_message, session_id=self.session_id)
+            self._log_interaction(
+                request_id=request_id, started_at=started_at,
+                intencion="clarify", confianza=intent.confidence, uso_llm=uso_llm, llm_metadata=llm_metadata,
+                resultado="clarify",
+            )
             return {"success": False, "action": "clarify", "message": response_message, "reason": response_message}
 
         if intent.action == "small_talk":
             reply = intent.payload.get("reply") or "¡Hola! ¿En qué te puedo ayudar?"
             await self.context.short_term_memory.add_turn_async(message, reply, session_id=self.session_id)
+            self._log_interaction(
+                request_id=request_id, started_at=started_at,
+                intencion=intent.action, confianza=intent.confidence, uso_llm=uso_llm, llm_metadata=llm_metadata,
+                resultado="success",
+            )
             return {"success": True, "action": "small_talk", "message": reply, "result": reply}
 
         if intent.action == "ask_knowledge_base":
@@ -63,12 +102,22 @@ class TaskOrchestrator:
             await self.context.short_term_memory.add_async("last_knowledge_question", query, session_id=self.session_id)
             await self.context.short_term_memory.add_async("last_knowledge_answer", answer, session_id=self.session_id)
             await self.context.short_term_memory.add_turn_async(message, answer, session_id=self.session_id)
+            self._log_interaction(
+                request_id=request_id, started_at=started_at,
+                intencion=intent.action, confianza=intent.confidence, uso_llm=uso_llm, llm_metadata=llm_metadata,
+                resultado="success",
+            )
             return {"success": True, "action": "ask_knowledge_base", "message": answer, "result": answer}
 
         try:
             result = await self._execute_with_retries(intent)
             assistant_response = self._format_public_message(intent.action, result)
             await self.context.short_term_memory.add_turn_async(message, assistant_response, session_id=self.session_id)
+            self._log_interaction(
+                request_id=request_id, started_at=started_at,
+                intencion=intent.action, confianza=intent.confidence, uso_llm=uso_llm, llm_metadata=llm_metadata,
+                resultado="success",
+            )
             return {
                 **result,
                 "message": assistant_response,
@@ -76,7 +125,47 @@ class TaskOrchestrator:
         except ValueError as exc:
             assistant_response = str(exc)
             await self.context.short_term_memory.add_turn_async(message, assistant_response, session_id=self.session_id)
+            self._log_interaction(
+                request_id=request_id, started_at=started_at,
+                intencion=intent.action, confianza=intent.confidence, uso_llm=uso_llm, llm_metadata=llm_metadata,
+                resultado="error_negocio",
+            )
             return {"success": False, "action": intent.action, "message": assistant_response, "reason": str(exc)}
+
+    def _log_interaction(
+        self,
+        *,
+        request_id: str,
+        started_at: float,
+        intencion: str,
+        confianza: float | None,
+        uso_llm: bool,
+        llm_metadata: dict[str, Any] | None,
+        resultado: str,
+    ) -> None:
+        """Emite el log de cierre de una interacción con los 12 campos mínimos de §A.5.
+
+        Con estos campos se puede calcular coste por interacción y tasa de `clarify` sin
+        instrumentación adicional. `tenant_id` queda fijo en "default" hasta el ítem 1.7
+        (multi-tenant real); `modelo`/`tokens_*`/`latencia_ms_llm` quedan en None cuando la
+        decisión se resolvió por regla y nunca se invocó al LLM.
+        """
+        metadata = llm_metadata or {}
+        logger.info(
+            "interaccion_completada",
+            request_id=request_id,
+            session_id=self.session_id,
+            tenant_id="default",
+            intencion=intencion,
+            confianza=confianza,
+            uso_llm=uso_llm,
+            modelo=metadata.get("modelo"),
+            tokens_entrada=metadata.get("tokens_entrada"),
+            tokens_salida=metadata.get("tokens_salida"),
+            latencia_ms_total=int((time.monotonic() - started_at) * 1000),
+            latencia_ms_llm=metadata.get("latencia_ms_llm"),
+            resultado=resultado,
+        )
 
     def _extract_profile_facts(self, message: str, context_summary: str) -> list[dict[str, Any]]:
         if not hasattr(self.router, "extract_profile_facts"):

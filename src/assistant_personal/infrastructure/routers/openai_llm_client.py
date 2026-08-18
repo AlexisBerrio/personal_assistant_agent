@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 from openai import OpenAI
@@ -23,6 +24,7 @@ class _OpenAITextClient:
         base_url: str | None = None
 
         self._use_responses_api = provider != "ollama"
+        self.last_call_metadata: dict[str, Any] | None = None
 
         if provider == "ollama":
             self.model = model or settings.ollama_model
@@ -56,6 +58,11 @@ class _OpenAITextClient:
             raise RuntimeError("OPENAI_MODEL is required")
 
     def _invoke_model(self, system_prompt: str, user_prompt: str) -> str:
+        """Invoca el modelo y registra en `self.last_call_metadata` los campos de observabilidad
+        de §A.5 (`modelo`, `tokens_entrada`, `tokens_salida`, `latencia_ms_llm`) para que el
+        llamador (el router) los pueda leer después de cada invocación real al LLM."""
+        started_at = time.monotonic()
+
         if getattr(self, "_use_responses_api", True) and hasattr(self.client, "responses"):
             response = self.client.responses.create(
                 model=self.model,
@@ -64,6 +71,12 @@ class _OpenAITextClient:
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0,
+            )
+            usage = getattr(response, "usage", None)
+            self._record_call_metadata(
+                started_at,
+                tokens_entrada=getattr(usage, "input_tokens", None),
+                tokens_salida=getattr(usage, "output_tokens", None),
             )
             return getattr(response, "output_text", "") or ""
 
@@ -76,9 +89,25 @@ class _OpenAITextClient:
                 ],
                 temperature=0,
             )
+            usage = getattr(response, "usage", None)
+            self._record_call_metadata(
+                started_at,
+                tokens_entrada=getattr(usage, "prompt_tokens", None),
+                tokens_salida=getattr(usage, "completion_tokens", None),
+            )
             return response.choices[0].message.content or ""
 
         raise RuntimeError("OpenAI client does not expose a supported API interface")
+
+    def _record_call_metadata(
+        self, started_at: float, *, tokens_entrada: int | None, tokens_salida: int | None
+    ) -> None:
+        self.last_call_metadata = {
+            "modelo": self.model,
+            "tokens_entrada": tokens_entrada,
+            "tokens_salida": tokens_salida,
+            "latencia_ms_llm": int((time.monotonic() - started_at) * 1000),
+        }
 
     def _parse_response(self, content: str) -> dict[str, Any]:
         if not content:

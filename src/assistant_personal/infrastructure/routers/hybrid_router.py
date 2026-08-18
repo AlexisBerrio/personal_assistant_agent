@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import logging
-from typing import Optional, Protocol
+from typing import Any, Optional, Protocol
 
 from src.assistant_personal.domain.entities import (
     ConversationRoute,
@@ -10,13 +9,14 @@ from src.assistant_personal.domain.entities import (
     IntentDecision,
     UserProfileExtraction,
 )
+from src.assistant_personal.infrastructure.observabilidad import get_logger
 from src.assistant_personal.infrastructure.routers.openai_llm_client import (
     OpenAIGeneralKnowledgeResponder,
     OpenAIIntentClassifier,
     OpenAIProfileFactExtractor,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 EXACT_LIST_TASKS_COMMANDS = {
     "lista mis tareas",
@@ -91,9 +91,11 @@ class ProductionIntentRouter:
         self._knowledge_responder = knowledge_responder or OpenAIGeneralKnowledgeResponder()
         self._profile_extractor = profile_extractor or OpenAIProfileFactExtractor()
         self._confidence_threshold = confidence_threshold
+        self.last_llm_metadata: dict[str, Any] | None = None
 
     def route(self, user_message: str, context: str | None = None) -> IntentDecision:
         clean_text = (user_message or "").strip()
+        self.last_llm_metadata = None
 
         if not clean_text:
             return self._build_decision(
@@ -106,13 +108,14 @@ class ProductionIntentRouter:
 
         fast_decision = self._check_fast_rules(clean_text)
         if fast_decision:
-            logger.info("[Router] Intención resuelta vía Regla: %s", fast_decision.action)
+            logger.info("router_intencion_resuelta_por_regla", accion=fast_decision.action)
             return fast_decision
 
         try:
             classification = self._intent_classifier.classify_intent(clean_text, context=context)
+            self.last_llm_metadata = getattr(self._intent_classifier, "last_call_metadata", None)
         except Exception as exc:
-            logger.warning("[Router] El clasificador LLM falló: %s", exc)
+            logger.warning("router_clasificador_llm_fallo", error=str(exc))
             return self._build_decision(
                 action=IntentAction.CLARIFY,
                 payload={"message": "No pude interpretar tu solicitud en este momento. ¿Podrías reformularla?"},
@@ -264,7 +267,7 @@ class ProductionIntentRouter:
         try:
             return self._profile_extractor.extract_profile_facts(text, context=context)
         except Exception as exc:
-            logger.warning("[Router] No se pudieron extraer hechos de perfil: %s", exc)
+            logger.warning("router_extraccion_perfil_fallo", error=str(exc))
             return UserProfileExtraction()
 
     def _needs_clarification(self, classification: IntentClassification) -> bool:
