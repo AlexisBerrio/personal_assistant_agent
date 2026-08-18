@@ -4,7 +4,7 @@ import json
 import time
 from typing import Any
 
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 from src.assistant_personal.config import get_settings
 from src.assistant_personal.domain.entities import (
@@ -42,7 +42,7 @@ class _OpenAITextClient:
                 raise RuntimeError("OPENAI_MODEL is required")
 
         try:
-            self.client = OpenAI(api_key=api_key_value, base_url=base_url)
+            self.client = AsyncOpenAI(api_key=api_key_value, base_url=base_url)
         except Exception as exc:
             raise RuntimeError("Unable to initialize OpenAI client") from exc
 
@@ -57,14 +57,16 @@ class _OpenAITextClient:
         if not self.model:
             raise RuntimeError("OPENAI_MODEL is required")
 
-    def _invoke_model(self, system_prompt: str, user_prompt: str) -> str:
-        """Invoca el modelo y registra en `self.last_call_metadata` los campos de observabilidad
-        de §A.5 (`modelo`, `tokens_entrada`, `tokens_salida`, `latencia_ms_llm`) para que el
-        llamador (el router) los pueda leer después de cada invocación real al LLM."""
+    async def _invoke_model(self, system_prompt: str, user_prompt: str) -> str:
+        """Invoca el modelo (async, vía `AsyncOpenAI`: no bloquea el event loop durante la
+        llamada de red — ver domain/repositories/llm_client.py) y registra en
+        `self.last_call_metadata` los campos de observabilidad de §A.5 (`modelo`,
+        `tokens_entrada`, `tokens_salida`, `latencia_ms_llm`) para que el llamador (el router)
+        los pueda leer después de cada invocación real al LLM."""
         started_at = time.monotonic()
 
         if getattr(self, "_use_responses_api", True) and hasattr(self.client, "responses"):
-            response = self.client.responses.create(
+            response = await self.client.responses.create(
                 model=self.model,
                 input=[
                     {"role": "system", "content": system_prompt},
@@ -81,7 +83,7 @@ class _OpenAITextClient:
             return getattr(response, "output_text", "") or ""
 
         if hasattr(self.client, "chat") and hasattr(self.client.chat, "completions"):
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -151,7 +153,7 @@ class _OpenAITextClient:
 class OpenAIIntentClassifier(_OpenAITextClient):
     """Clasificador para enrutar la conversación."""
 
-    def classify_intent(self, text: str, context: str | None = None) -> IntentClassification:
+    async def classify_intent(self, text: str, context: str | None = None) -> IntentClassification:
         self._ensure_ready()
         system_prompt = (
             "Eres un clasificador de intenciones para un asistente personal. "
@@ -168,7 +170,7 @@ class OpenAIIntentClassifier(_OpenAITextClient):
             "Si no puedes inferir un título específico incluso usando contexto reciente, usa route=clarify. "
             "Si no hay suficiente información para ejecutar una acción concreta, usa route=clarify."
         )
-        payload = self._invoke_model(system_prompt, self._build_user_prompt(text, context))
+        payload = await self._invoke_model(system_prompt, self._build_user_prompt(text, context))
         parsed = self._parse_response(payload)
         return self._build_classification(parsed)
 
@@ -208,7 +210,7 @@ class OpenAIIntentClassifier(_OpenAITextClient):
 class OpenAIGeneralKnowledgeResponder(_OpenAITextClient):
     """Componente de respuesta para conocimiento general sin invocar al agente principal."""
 
-    def answer_general_knowledge(self, query: str, context: str | None = None) -> str:
+    async def answer_general_knowledge(self, query: str, context: str | None = None) -> str:
         self._ensure_ready()
         system_prompt = (
             "Responde de forma breve, directa y útil a preguntas generales de conocimiento. "
@@ -216,13 +218,14 @@ class OpenAIGeneralKnowledgeResponder(_OpenAITextClient):
             "referencias al usuario o conversaciones previas. "
             "No uses listas largas ni explicaciones innecesarias."
         )
-        return self._invoke_model(system_prompt, self._build_user_prompt(query, context)).strip()
+        answer = await self._invoke_model(system_prompt, self._build_user_prompt(query, context))
+        return answer.strip()
 
 
 class OpenAIProfileFactExtractor(_OpenAITextClient):
     """Extractor estructurado de hechos de perfil para memoria de corto plazo."""
 
-    def extract_profile_facts(self, text: str, context: str | None = None) -> UserProfileExtraction:
+    async def extract_profile_facts(self, text: str, context: str | None = None) -> UserProfileExtraction:
         self._ensure_ready()
         system_prompt = (
             "Eres un extractor de memoria de perfil para un asistente personal. "
@@ -231,24 +234,26 @@ class OpenAIProfileFactExtractor(_OpenAITextClient):
             "key, value y confidence. "
             "No uses reglas manuales ni expresiones regulares; infiere los hechos desde el lenguaje natural."
         )
-        payload = self._invoke_model(system_prompt, self._build_user_prompt(text, context))
+        payload = await self._invoke_model(system_prompt, self._build_user_prompt(text, context))
         parsed = self._parse_response(payload)
         return UserProfileExtraction.model_validate(parsed)
 
 
 class OpenAILLMRouterClient:
-    """Fachada de compatibilidad para el router híbrido."""
+    """Implementación del port `LLMClient` (domain/repositories/llm_client.py) que unifica los
+    tres componentes en un único cliente, para consumidores que prefieren una sola dependencia
+    en vez de las tres separadas que usa `ProductionIntentRouter`."""
 
     def __init__(self, model: str | None = None, api_key: str | None = None):
         self.intent_classifier = OpenAIIntentClassifier(model=model, api_key=api_key)
         self.knowledge_responder = OpenAIGeneralKnowledgeResponder(model=model, api_key=api_key)
         self.profile_extractor = OpenAIProfileFactExtractor(model=model, api_key=api_key)
 
-    def classify_intent(self, text: str, context: str | None = None) -> IntentClassification:
-        return self.intent_classifier.classify_intent(text, context=context)
+    async def classify_intent(self, text: str, context: str | None = None) -> IntentClassification:
+        return await self.intent_classifier.classify_intent(text, context=context)
 
-    def answer_general_knowledge(self, query: str, context: str | None = None) -> str:
-        return self.knowledge_responder.answer_general_knowledge(query, context=context)
+    async def answer_general_knowledge(self, query: str, context: str | None = None) -> str:
+        return await self.knowledge_responder.answer_general_knowledge(query, context=context)
 
-    def extract_profile_facts(self, text: str, context: str | None = None) -> UserProfileExtraction:
-        return self.profile_extractor.extract_profile_facts(text, context=context)
+    async def extract_profile_facts(self, text: str, context: str | None = None) -> UserProfileExtraction:
+        return await self.profile_extractor.extract_profile_facts(text, context=context)

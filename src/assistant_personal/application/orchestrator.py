@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 import uuid
 from typing import Any
@@ -68,11 +69,11 @@ class TaskOrchestrator:
         await self.context.short_term_memory.add_async("user_message", message, session_id=self.session_id)
         context_summary = await self.context.build_context_summary_async(session_id=self.session_id)
 
-        profile_facts = self._extract_profile_facts(message, context_summary)
+        profile_facts = await self._extract_profile_facts(message, context_summary)
         await self._persist_profile_facts(profile_facts)
         context_summary = await self.context.build_context_summary_async(session_id=self.session_id)
 
-        intent = self.router.route(message, context=context_summary)
+        intent = await self._maybe_await(self.router.route(message, context=context_summary))
         llm_metadata = getattr(self.router, "last_llm_metadata", None)
         uso_llm = intent.source == "llm"
 
@@ -167,12 +168,20 @@ class TaskOrchestrator:
             resultado=resultado,
         )
 
-    def _extract_profile_facts(self, message: str, context_summary: str) -> list[dict[str, Any]]:
+    async def _maybe_await(self, value: Any) -> Any:
+        """Soporta routers síncronos y async: el port `LLMClient` (§A.1, ítem 1.6) es async de
+        punta a punta en producción, pero muchos dobles de test siguen siendo síncronos —
+        mismo patrón de despacho que `TaskService._invoke_repository_async`."""
+        if inspect.isawaitable(value):
+            return await value
+        return value
+
+    async def _extract_profile_facts(self, message: str, context_summary: str) -> list[dict[str, Any]]:
         if not hasattr(self.router, "extract_profile_facts"):
             return []
 
         try:
-            extracted = self.router.extract_profile_facts(message, context=context_summary)
+            extracted = await self._maybe_await(self.router.extract_profile_facts(message, context=context_summary))
         except Exception:
             return []
 

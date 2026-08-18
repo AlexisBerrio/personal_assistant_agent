@@ -57,23 +57,27 @@ EXPLICIT_CREATE_TASK_PREFIXES = ("crear tarea:", "nueva tarea:")
 
 
 class IntentClassifier(Protocol):
-    """Contrato de clasificación de intención y ruta de conversación."""
+    """Contrato de clasificación de intención y ruta de conversación.
 
-    def classify_intent(self, text: str, context: str | None = None) -> IntentClassification:
+    Subconjunto async del port `LLMClient` (domain/repositories/llm_client.py) — ver §A.1,
+    ítem 1.6: async para no bloquear el event loop durante la llamada de red al LLM.
+    """
+
+    async def classify_intent(self, text: str, context: str | None = None) -> IntentClassification:
         ...
 
 
 class GeneralKnowledgeResponder(Protocol):
-    """Contrato para resolver preguntas de conocimiento general."""
+    """Contrato para resolver preguntas de conocimiento general. Ver `IntentClassifier`."""
 
-    def answer_general_knowledge(self, query: str, context: str | None = None) -> str:
+    async def answer_general_knowledge(self, query: str, context: str | None = None) -> str:
         ...
 
 
 class ProfileFactExtractor(Protocol):
-    """Contrato para extracción estructurada de hechos de perfil."""
+    """Contrato para extracción estructurada de hechos de perfil. Ver `IntentClassifier`."""
 
-    def extract_profile_facts(self, text: str, context: str | None = None) -> UserProfileExtraction:
+    async def extract_profile_facts(self, text: str, context: str | None = None) -> UserProfileExtraction:
         ...
 
 
@@ -93,7 +97,7 @@ class ProductionIntentRouter:
         self._confidence_threshold = confidence_threshold
         self.last_llm_metadata: dict[str, Any] | None = None
 
-    def route(self, user_message: str, context: str | None = None) -> IntentDecision:
+    async def route(self, user_message: str, context: str | None = None) -> IntentDecision:
         clean_text = (user_message or "").strip()
         self.last_llm_metadata = None
 
@@ -112,7 +116,7 @@ class ProductionIntentRouter:
             return fast_decision
 
         try:
-            classification = self._intent_classifier.classify_intent(clean_text, context=context)
+            classification = await self._intent_classifier.classify_intent(clean_text, context=context)
             self.last_llm_metadata = getattr(self._intent_classifier, "last_call_metadata", None)
         except Exception as exc:
             logger.warning("router_clasificador_llm_fallo", error=str(exc))
@@ -134,7 +138,7 @@ class ProductionIntentRouter:
             )
 
         if classification.route == ConversationRoute.GENERAL_KNOWLEDGE:
-            answer = self._knowledge_responder.answer_general_knowledge(clean_text, context=context)
+            answer = await self._knowledge_responder.answer_general_knowledge(clean_text, context=context)
             return IntentDecision(
                 action=IntentAction.ASK_KNOWLEDGE_BASE,
                 payload={"query": clean_text, "answer": answer},
@@ -261,11 +265,11 @@ class ProductionIntentRouter:
             normalized = normalized.replace(char, " ")
         return " ".join(normalized.split())
 
-    def extract_profile_facts(self, text: str, context: str | None = None) -> UserProfileExtraction:
+    async def extract_profile_facts(self, text: str, context: str | None = None) -> UserProfileExtraction:
         if not self._profile_extractor:
             return UserProfileExtraction()
         try:
-            return self._profile_extractor.extract_profile_facts(text, context=context)
+            return await self._profile_extractor.extract_profile_facts(text, context=context)
         except Exception as exc:
             logger.warning("router_extraccion_perfil_fallo", error=str(exc))
             return UserProfileExtraction()

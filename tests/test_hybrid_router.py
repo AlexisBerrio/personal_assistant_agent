@@ -15,7 +15,7 @@ class FakeIntentClassifier:
         self.raise_error = raise_error
         self.calls: list[tuple[str, str | None]] = []
 
-    def classify_intent(self, text: str, context: str | None = None) -> IntentClassification:
+    async def classify_intent(self, text: str, context: str | None = None) -> IntentClassification:
         self.calls.append((text, context))
         if self.raise_error:
             raise RuntimeError("classifier down")
@@ -29,32 +29,32 @@ class FakeKnowledgeResponder:
         self.answer = answer
         self.calls: list[tuple[str, str | None]] = []
 
-    def answer_general_knowledge(self, query: str, context: str | None = None) -> str:
+    async def answer_general_knowledge(self, query: str, context: str | None = None) -> str:
         self.calls.append((query, context))
         return self.answer
 
 
 class FakeProfileExtractor:
-    def extract_profile_facts(self, text: str, context: str | None = None) -> UserProfileExtraction:
+    async def extract_profile_facts(self, text: str, context: str | None = None) -> UserProfileExtraction:
         return UserProfileExtraction()
 
 
-class HybridRouterTests(unittest.TestCase):
-    def test_fast_rule_resolves_create_task_with_explicit_syntax(self):
+class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fast_rule_resolves_create_task_with_explicit_syntax(self):
         router = ProductionIntentRouter(
             llm_client=FakeIntentClassifier(),
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
         )
 
-        result = router.route("nueva tarea: comprar leche")
+        result = await router.route("nueva tarea: comprar leche")
 
         self.assertEqual(result.action, IntentAction.CREATE_TASK)
         self.assertEqual(result.payload["title"], "Comprar leche")
         self.assertEqual(result.source, "rule")
         self.assertGreaterEqual(result.confidence, 0.9)
 
-    def test_create_task_without_delimiter_is_delegated_to_classifier(self):
+    async def test_create_task_without_delimiter_is_delegated_to_classifier(self):
         classifier = FakeIntentClassifier(
             response=IntentClassification(
                 route=ConversationRoute.ORCHESTRATOR,
@@ -70,25 +70,25 @@ class HybridRouterTests(unittest.TestCase):
             profile_extractor=FakeProfileExtractor(),
         )
 
-        result = router.route("crear tarea comprar leche")
+        result = await router.route("crear tarea comprar leche")
 
         self.assertEqual(result.action, IntentAction.CREATE_TASK)
         self.assertEqual(result.source, "llm")
         self.assertEqual(len(classifier.calls), 1)
 
-    def test_help_command_is_handled_by_fast_rule(self):
+    async def test_help_command_is_handled_by_fast_rule(self):
         router = ProductionIntentRouter(
             llm_client=FakeIntentClassifier(),
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
         )
 
-        result = router.route("/help")
+        result = await router.route("/help")
 
         self.assertEqual(result.action, IntentAction.SMALL_TALK)
         self.assertEqual(result.source, "rule")
 
-    def test_small_talk_exact_message_does_not_use_orchestrator(self):
+    async def test_small_talk_exact_message_does_not_use_orchestrator(self):
         classifier = FakeIntentClassifier(
             response=IntentClassification(route=ConversationRoute.ORCHESTRATOR, intent=IntentAction.CREATE_TASK, confidence=0.99)
         )
@@ -98,13 +98,13 @@ class HybridRouterTests(unittest.TestCase):
             profile_extractor=FakeProfileExtractor(),
         )
 
-        result = router.route("Hola")
+        result = await router.route("Hola")
 
         self.assertEqual(result.action, IntentAction.SMALL_TALK)
         self.assertEqual(result.source, "rule")
         self.assertEqual(len(classifier.calls), 0)
 
-    def test_small_talk_with_punctuation_still_matches_fast_rule(self):
+    async def test_small_talk_with_punctuation_still_matches_fast_rule(self):
         classifier = FakeIntentClassifier(
             response=IntentClassification(route=ConversationRoute.ORCHESTRATOR, intent=IntentAction.CREATE_TASK, confidence=0.99)
         )
@@ -114,13 +114,13 @@ class HybridRouterTests(unittest.TestCase):
             profile_extractor=FakeProfileExtractor(),
         )
 
-        result = router.route("¡Hola!")
+        result = await router.route("¡Hola!")
 
         self.assertEqual(result.action, IntentAction.SMALL_TALK)
         self.assertEqual(result.source, "rule")
         self.assertEqual(len(classifier.calls), 0)
 
-    def test_farewell_is_handled_by_fast_rule(self):
+    async def test_farewell_is_handled_by_fast_rule(self):
         classifier = FakeIntentClassifier(
             response=IntentClassification(route=ConversationRoute.ORCHESTRATOR, intent=IntentAction.LIST_TASKS, confidence=0.99)
         )
@@ -130,14 +130,14 @@ class HybridRouterTests(unittest.TestCase):
             profile_extractor=FakeProfileExtractor(),
         )
 
-        result = router.route("adios")
+        result = await router.route("adios")
 
         self.assertEqual(result.action, IntentAction.SMALL_TALK)
         self.assertEqual(result.source, "rule")
         self.assertEqual(result.payload.get("reply"), "Hasta pronto.")
         self.assertEqual(len(classifier.calls), 0)
 
-    def test_farewell_with_punctuation_is_handled_by_fast_rule(self):
+    async def test_farewell_with_punctuation_is_handled_by_fast_rule(self):
         classifier = FakeIntentClassifier(
             response=IntentClassification(route=ConversationRoute.ORCHESTRATOR, intent=IntentAction.LIST_TASKS, confidence=0.99)
         )
@@ -147,13 +147,13 @@ class HybridRouterTests(unittest.TestCase):
             profile_extractor=FakeProfileExtractor(),
         )
 
-        result = router.route("¡Adiós!")
+        result = await router.route("¡Adiós!")
 
         self.assertEqual(result.action, IntentAction.SMALL_TALK)
         self.assertEqual(result.source, "rule")
         self.assertEqual(len(classifier.calls), 0)
 
-    def test_mixed_greeting_and_task_request_goes_to_classifier(self):
+    async def test_mixed_greeting_and_task_request_goes_to_classifier(self):
         classifier = FakeIntentClassifier(
             response=IntentClassification(
                 route=ConversationRoute.ORCHESTRATOR,
@@ -169,13 +169,13 @@ class HybridRouterTests(unittest.TestCase):
             profile_extractor=FakeProfileExtractor(),
         )
 
-        result = router.route("Hola, crea una tarea para mañana")
+        result = await router.route("Hola, crea una tarea para mañana")
 
         self.assertEqual(result.action, IntentAction.CREATE_TASK)
         self.assertEqual(result.source, "llm")
         self.assertEqual(len(classifier.calls), 1)
 
-    def test_mixed_greeting_with_comma_is_not_treated_as_small_talk(self):
+    async def test_mixed_greeting_with_comma_is_not_treated_as_small_talk(self):
         classifier = FakeIntentClassifier(
             response=IntentClassification(
                 route=ConversationRoute.ORCHESTRATOR,
@@ -191,13 +191,13 @@ class HybridRouterTests(unittest.TestCase):
             profile_extractor=FakeProfileExtractor(),
         )
 
-        result = router.route("hola, crea esta tarea")
+        result = await router.route("hola, crea esta tarea")
 
         self.assertEqual(result.action, IntentAction.CREATE_TASK)
         self.assertEqual(result.source, "llm")
         self.assertEqual(len(classifier.calls), 1)
 
-    def test_explicit_list_tasks_with_greeting_uses_fast_rule(self):
+    async def test_explicit_list_tasks_with_greeting_uses_fast_rule(self):
         classifier = FakeIntentClassifier(raise_error=True)
         router = ProductionIntentRouter(
             llm_client=classifier,
@@ -205,13 +205,13 @@ class HybridRouterTests(unittest.TestCase):
             profile_extractor=FakeProfileExtractor(),
         )
 
-        result = router.route("hola, lista mis tareas")
+        result = await router.route("hola, lista mis tareas")
 
         self.assertEqual(result.action, IntentAction.LIST_TASKS)
         self.assertEqual(result.source, "rule")
         self.assertEqual(len(classifier.calls), 0)
 
-    def test_explicit_list_tasks_without_greeting_uses_fast_rule(self):
+    async def test_explicit_list_tasks_without_greeting_uses_fast_rule(self):
         classifier = FakeIntentClassifier(raise_error=True)
         router = ProductionIntentRouter(
             llm_client=classifier,
@@ -219,13 +219,13 @@ class HybridRouterTests(unittest.TestCase):
             profile_extractor=FakeProfileExtractor(),
         )
 
-        result = router.route("listar mis tareas pendientes")
+        result = await router.route("listar mis tareas pendientes")
 
         self.assertEqual(result.action, IntentAction.LIST_TASKS)
         self.assertEqual(result.source, "rule")
         self.assertEqual(len(classifier.calls), 0)
 
-    def test_natural_language_list_request_is_delegated_to_classifier(self):
+    async def test_natural_language_list_request_is_delegated_to_classifier(self):
         classifier = FakeIntentClassifier(
             response=IntentClassification(
                 route=ConversationRoute.ORCHESTRATOR,
@@ -241,13 +241,13 @@ class HybridRouterTests(unittest.TestCase):
             profile_extractor=FakeProfileExtractor(),
         )
 
-        result = router.route("muéstrame las tareas de hoy")
+        result = await router.route("muéstrame las tareas de hoy")
 
         self.assertEqual(result.action, IntentAction.LIST_TASKS)
         self.assertEqual(result.source, "llm")
         self.assertEqual(len(classifier.calls), 1)
 
-    def test_general_knowledge_route_uses_knowledge_responder(self):
+    async def test_general_knowledge_route_uses_knowledge_responder(self):
         classifier = FakeIntentClassifier(
             response=IntentClassification(route=ConversationRoute.GENERAL_KNOWLEDGE, confidence=0.96, source="llm")
         )
@@ -258,13 +258,13 @@ class HybridRouterTests(unittest.TestCase):
             profile_extractor=FakeProfileExtractor(),
         )
 
-        result = router.route("¿Qué significa procrastinar?")
+        result = await router.route("¿Qué significa procrastinar?")
 
         self.assertEqual(result.action, IntentAction.ASK_KNOWLEDGE_BASE)
         self.assertEqual(result.payload.get("answer"), "La procrastinación es posponer tareas.")
         self.assertEqual(len(responder.calls), 1)
 
-    def test_low_confidence_returns_clarify_without_forcing_intent(self):
+    async def test_low_confidence_returns_clarify_without_forcing_intent(self):
         classifier = FakeIntentClassifier(
             response=IntentClassification(
                 route=ConversationRoute.ORCHESTRATOR,
@@ -280,24 +280,24 @@ class HybridRouterTests(unittest.TestCase):
             profile_extractor=FakeProfileExtractor(),
         )
 
-        result = router.route("ayúdame con algo ambiguo")
+        result = await router.route("ayúdame con algo ambiguo")
 
         self.assertEqual(result.action, IntentAction.CLARIFY)
         self.assertEqual(result.source, "llm")
 
-    def test_classifier_error_uses_safe_fallback_to_clarify(self):
+    async def test_classifier_error_uses_safe_fallback_to_clarify(self):
         router = ProductionIntentRouter(
             llm_client=FakeIntentClassifier(raise_error=True),
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
         )
 
-        result = router.route("Añade a mis tareas comprar leche mañana")
+        result = await router.route("Añade a mis tareas comprar leche mañana")
 
         self.assertEqual(result.action, IntentAction.CLARIFY)
         self.assertEqual(result.source, "fallback")
 
-    def test_ambiguous_delete_without_reference_results_in_clarify(self):
+    async def test_ambiguous_delete_without_reference_results_in_clarify(self):
         classifier = FakeIntentClassifier(
             response=IntentClassification(
                 route=ConversationRoute.ORCHESTRATOR,
@@ -313,11 +313,11 @@ class HybridRouterTests(unittest.TestCase):
             profile_extractor=FakeProfileExtractor(),
         )
 
-        result = router.route("Borra esa")
+        result = await router.route("Borra esa")
 
         self.assertEqual(result.action, IntentAction.CLARIFY)
 
-    def test_create_task_without_title_results_in_clarify(self):
+    async def test_create_task_without_title_results_in_clarify(self):
         classifier = FakeIntentClassifier(
             response=IntentClassification(
                 route=ConversationRoute.ORCHESTRATOR,
@@ -333,11 +333,11 @@ class HybridRouterTests(unittest.TestCase):
             profile_extractor=FakeProfileExtractor(),
         )
 
-        result = router.route("crea una tarea para investigar mas sobre eso")
+        result = await router.route("crea una tarea para investigar mas sobre eso")
 
         self.assertEqual(result.action, IntentAction.CLARIFY)
 
-    def test_natural_language_crud_is_delegated_to_orchestrator_route(self):
+    async def test_natural_language_crud_is_delegated_to_orchestrator_route(self):
         classifier = FakeIntentClassifier(
             response=IntentClassification(
                 route=ConversationRoute.ORCHESTRATOR,
@@ -353,7 +353,7 @@ class HybridRouterTests(unittest.TestCase):
             profile_extractor=FakeProfileExtractor(),
         )
 
-        result = router.route("Añade a mis tareas comprar leche mañana")
+        result = await router.route("Añade a mis tareas comprar leche mañana")
 
         self.assertEqual(result.action, IntentAction.CREATE_TASK)
         self.assertEqual(result.source, "llm")
