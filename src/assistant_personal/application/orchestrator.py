@@ -26,6 +26,7 @@ class TaskOrchestrator:
         max_retries: int = 1,
         session_repository: SessionMemoryRepository | None = None,
         session_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> None:
         self.service = service
         self.router = router or ProductionIntentRouter()
@@ -33,6 +34,8 @@ class TaskOrchestrator:
         self.session_repository = session_repository
         self.context = AgentContext(short_term_repository=self.session_repository)
         self.session_id = session_id or f"session-{uuid.uuid4()}"
+        # Fijo en "default" hasta que exista multi-tenant real (Fase 8) — ver §A.13, ítem 1.7.
+        self.tenant_id = tenant_id or "default"
 
     def handle_message(self, message: str) -> dict[str, Any]:
         return asyncio.run(self.handle_message_async(message))
@@ -156,7 +159,7 @@ class TaskOrchestrator:
             "interaccion_completada",
             request_id=request_id,
             session_id=self.session_id,
-            tenant_id="default",
+            tenant_id=self.tenant_id,
             intencion=intencion,
             confianza=confianza,
             uso_llm=uso_llm,

@@ -16,12 +16,17 @@ class MongoSessionRepository(SessionMemoryRepository):
     en el punto de entrada), nunca dentro de este repositorio.
     """
 
-    def __init__(self, db_name: str | None = None, get_db_fn: Any | None = None) -> None:
+    def __init__(self, db_name: str | None = None, get_db_fn: Any | None = None, tenant_id: str | None = None) -> None:
         self.db_name = db_name or get_settings().mongo_db_name
         self._get_db_fn = get_db_fn or get_db
+        # Fijo en "default" hasta que exista multi-tenant real (Fase 8) — ver §A.13, ítem 1.7.
+        self.tenant_id = tenant_id or "default"
 
     def _build_timestamp(self) -> str:
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+    def _session_filter(self, session_id: str) -> dict[str, Any]:
+        return {"session_id": session_id, "tenant_id": self.tenant_id}
 
     async def _get_collection(self) -> Any:
         db = await self._get_db_fn(self.db_name)
@@ -29,7 +34,7 @@ class MongoSessionRepository(SessionMemoryRepository):
 
     async def _get_session(self, session_id: str) -> dict[str, Any]:
         collection = await self._get_collection()
-        session = await collection.find_one({"session_id": session_id}) or {}
+        session = await collection.find_one(self._session_filter(session_id)) or {}
         return {
             "session_id": session.get("session_id", session_id),
             "turns": session.get("turns", []),
@@ -42,10 +47,10 @@ class MongoSessionRepository(SessionMemoryRepository):
         collection = await self._get_collection()
         now = self._build_timestamp()
         payload = {
-            "$set": {"session_id": session_id, **updates, "updated_at": now},
+            "$set": {"session_id": session_id, "tenant_id": self.tenant_id, **updates, "updated_at": now},
             "$setOnInsert": {"created_at": now},
         }
-        await collection.update_one({"session_id": session_id}, payload, upsert=True)
+        await collection.update_one(self._session_filter(session_id), payload, upsert=True)
 
     async def append_turn_async(self, session_id: str, user_message: str, assistant_response: str) -> None:
         session = await self._get_session(session_id)

@@ -11,15 +11,17 @@ from src.assistant_personal.infrastructure.persistence.mongo.client import get_d
 class MongoTaskRepository:
     """Repositorio concreto para persistir tareas en MongoDB con Motor."""
 
-    def __init__(self, db_name: str | None = None, get_db_fn: Any | None = None) -> None:
+    def __init__(self, db_name: str | None = None, get_db_fn: Any | None = None, tenant_id: str | None = None) -> None:
         self.db_name = db_name or get_settings().mongo_db_name
         self._get_db_fn = get_db_fn or get_db
+        # Fijo en "default" hasta que exista multi-tenant real (Fase 8) — ver §A.13, ítem 1.7.
+        self.tenant_id = tenant_id or "default"
 
     async def _get_db(self) -> Any:
         return await self._get_db_fn(self.db_name)
 
     def _active_task_filter(self, task_id: str | None = None) -> dict[str, Any]:
-        filter_query: dict[str, Any] = {"is_deleted": {"$ne": True}}
+        filter_query: dict[str, Any] = {"tenant_id": self.tenant_id, "is_deleted": {"$ne": True}}
         if task_id is not None:
             filter_query["task_id"] = task_id
         return filter_query
@@ -53,6 +55,7 @@ class MongoTaskRepository:
 
         history_entry = {
             "task_id": task_id,
+            "tenant_id": self.tenant_id,
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
             "changes": [],
         }
@@ -81,11 +84,14 @@ class MongoTaskRepository:
 
     async def get_task_history_async(self, task_id: str) -> list[dict[str, Any]]:
         db = await self._get_db()
-        cursor = db.task_history.find({"task_id": task_id}, {"_id": 0}).sort("timestamp", 1)
+        cursor = db.task_history.find(
+            {"task_id": task_id, "tenant_id": self.tenant_id}, {"_id": 0}
+        ).sort("timestamp", 1)
         return await self._collect_documents(cursor)
 
     async def create_task_async(self, payload: dict[str, Any]) -> dict[str, Any]:
         db = await self._get_db()
+        payload = {**payload, "tenant_id": self.tenant_id}
         result = await self._maybe_await(db.personal_tasks.insert_one(payload))
         return {**payload, "inserted_id": str(result.inserted_id)}
 

@@ -70,9 +70,15 @@ class MongoConnection:
             logger.error("mongo_connection_failed", error=str(exc))
 
     async def _ensure_task_indexes(self) -> None:
-        """Crea índices de negocio necesarios para la colección de tareas."""
+        """Crea índices de negocio necesarios para tareas y sesiones.
+
+        Compuestos con `tenant_id` (§A.13, ítem 1.7): aunque hoy solo existe el tenant
+        `"default"`, modelar la unicidad como `{tenant_id, task_id}` desde ahora evita una
+        migración de índices el día que haya más de un tenant real.
+        """
         db = self.client[self._db_name]
-        await db.personal_tasks.create_index([("task_id", 1)], unique=True)
+        await db.personal_tasks.create_index([("tenant_id", 1), ("task_id", 1)], unique=True)
+        await db.conversation_sessions.create_index([("tenant_id", 1), ("session_id", 1)], unique=True)
 
     async def _ensure_indexes_once(self) -> None:
         """Garantiza la creación de índices una sola vez por cliente, dentro del loop real que lo consume."""

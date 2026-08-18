@@ -13,6 +13,7 @@ class Task(BaseModel):
 
     title: str
     task_id: Optional[str] = None
+    tenant_id: str = "default"
     description: Optional[str] = None
     status: str = "Pending"
     category: Optional[str] = None
