@@ -270,7 +270,8 @@ el repo; fallo temprano y ruidoso ante configuración inválida.
 
 - [ ] `grep -rn "os.getenv" src/` solo devuelve resultados en el módulo de configuración.
 - [ ] Arrancar sin una variable obligatoria produce un error claro que la nombra.
-- [ ] `.env.example` cubre el 100 % de los campos de `Settings`.
+- [x] `.env.example` cubre el 100 % de los campos de `Settings` (`mongo_uri`, `mongo_db_name`,
+      `openai_api_key`, `openai_model`, `llm_provider`, `ollama_base_url`, `ollama_model`), con un comentario por variable.
 - [ ] Ningún secreto aparece en logs ni en respuestas de error (test que lo verifique).
 - [ ] Un único nombre de base de datos en todo el código, verificado por test.
 
@@ -890,7 +891,7 @@ Objetivo: **eliminar fallos silenciosos y desbloquear el resto de fases.**
 | 0.3 | Declarar `motor` y separar grupos de dependencias | 🟢 | §A.3 | 🟡 Parcial — `motor` y `pydantic-settings` ya están en `requirements.txt`; falta separar en grupos (`[dev]`/`[llm]`/`[mcp]`, depende de 0.2/`pyproject.toml`) |
 | 0.4 | `Settings` único con `pydantic-settings`; eliminar el segundo mecanismo de entorno | 🟢 | §A.4 | ✅ Hecho — `config.py` reescrito con `pydantic-settings` (`SecretStr` para la API key, falla ruidoso si falta `MONGO_URI`); `openai_llm_client.py` ya no llama `load_dotenv()` ni lee `os.getenv` directo, consume `get_settings()` |
 | 0.5 | Unificar el nombre de base de datos | 🟢 | §A.4 | ✅ Hecho — `TaskService`, `MongoTaskRepository`, `build_default_task_repository` y `MongoSessionRepository` ya no hardcodean `"personal_management"`: resuelven `db_name or get_settings().mongo_db_name`. Se corrigió `.env` (`MONGO_DB_NAME` apuntaba a `"sample_mflix"`, un dataset de ejemplo no relacionado — las tareas reales se estaban indexando en la base equivocada) |
-| 0.6 | `.env.example` completo | 🟢 | §A.4 | ❌ Pendiente |
+| 0.6 | `.env.example` completo | 🟢 | §A.4 | ✅ Hecho — cubre los 7 campos de `Settings`, con un comentario por variable |
 | 0.7 | **Corregir el bridging sync/async de la memoria de sesión** | 🟢 | §A.9 | ✅ Hecho — `MongoSessionRepository` async de extremo a extremo, ver detalle en §A.9 |
 | 0.8 | `docker-compose.yml` solo con Mongo, para tests locales | 🟢 | §A.7 | ❌ Pendiente |
 | 0.9 | Primer integration test: memoria de sesión entre peticiones (prueba 0.7) | 🟢 | §A.12 | 🟡 Parcial — test async con fake de forma Motor real; falta contra Mongo real en contenedor (depende de 0.8). Sí existe ya `tests/test_mongo_connection_lifecycle.py` contra Mongo real (0.12) |
