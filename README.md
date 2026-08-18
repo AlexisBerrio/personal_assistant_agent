@@ -65,16 +65,20 @@ tests/
 
 ## Ejecución
 
-### 1. Instalar el proyecto (modo editable)
+### 1. Instalar el proyecto
 
 ```powershell
-pip install -e ".[dev,llm,mcp]"
+uv sync --extra dev --extra llm --extra mcp
 ```
 
-Instala el paquete en modo editable junto con los grupos opcionales: `llm` (SDK de OpenAI), `mcp`
-(servidor MCP) y `dev` (pytest). Con esto los imports funcionan igual sin importar desde qué
-directorio se invoque el CLI, la API o los tests — ya no depende de `sys.path` ni del directorio de
-trabajo actual.
+Requiere [`uv`](https://docs.astral.sh/uv/) instalado. Crea un entorno virtual (`.venv`) e instala el
+paquete junto con los grupos opcionales: `llm` (SDK de OpenAI), `mcp` (servidor MCP) y `dev` (pytest).
+Las versiones exactas quedan fijadas en `uv.lock` (versionado en el repo), así que el resultado es
+reproducible en cualquier máquina. Los imports funcionan igual sin importar desde qué directorio se
+invoque el CLI, la API o los tests — no depende de `sys.path` ni del directorio de trabajo actual.
+
+Para ejecutar cualquier comando dentro del entorno: `uv run <comando>` (ej. `uv run pytest`,
+`uv run python -m src.assistant_personal.interfaces.cli`).
 
 ### 2. (Opcional) Levantar un MongoDB local desechable para tests
 
@@ -91,7 +95,7 @@ quieres borrar los datos del volumen).
 ### 3. Levantar la API
 
 ```powershell
-uvicorn app:app --host 127.0.0.1 --port 8000
+uv run uvicorn app:app --host 127.0.0.1 --port 8000
 ```
 
 ### 4. Probar la API
@@ -191,7 +195,7 @@ Ejemplo de documento para MongoDB:
 ### 9. Ejecutar el CLI
 
 ```powershell
-python -m src.assistant_personal.interfaces.cli
+uv run python -m src.assistant_personal.interfaces.cli
 ```
 
 ## Siguientes pasos

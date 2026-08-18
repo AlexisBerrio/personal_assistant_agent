@@ -939,19 +939,26 @@ Objetivo: **eliminar fallos silenciosos y desbloquear el resto de fases.**
 **DoD de fase:** clone → `uv sync` → tests (unitarios + integración) en verde en máquina limpia; la memoria
 de sesión persiste demostrablemente; ningún `print`; ningún secreto en el repo.
 
+> **Estado real (2026-08-18):** `uv sync` ya es literal (ver 1.1 en Fase 1). Persistencia de memoria,
+> ausencia de `print` y ausencia de secretos: verificados ✅. "Tests en verde" tiene una salvedad: con
+> Docker arriba, 47/50 pasan — quedan 3 errores preexistentes sin relación con Fase 0
+> (`test_intent_router`, `test_mcp_server`, `test_task_service`, bloqueados por un import roto en
+> `app.py`/`infrastructure/mcp/server.py`), confirmados anteriores a este trabajo vía `git stash`. No se
+> corrigieron por estar fuera de alcance de Fase 0; quedan como deuda conocida para cuando se toque MCP.
+
 ### Fase 1 — Fundamentos técnicos con profundidad real
 
-| # | Cambio | Nivel | Área |
-| --- | --- | --- | --- |
-| 1.1 | Adoptar `uv` + lockfile en repo y CI | 🟡 | §A.3 |
-| 1.2 | GitHub Actions: lint + mypy estricto en `domain`/`application` + unitarios | 🟢 | §A.6 |
-| 1.3 | Job de integración con Mongo como service container | 🟡 | §A.6 |
-| 1.4 | Integration tests para todos los repositorios | 🟢 | §A.12 |
-| 1.5 | `request_id` propagado a todos los logs + 12 campos por interacción | 🟢 | §A.5 |
-| 1.6 | Port `LLMClient` + adaptador `AsyncOpenAI` (resuelve la inconsistencia sync/async) | 🟢 | §A.1 |
-| 1.7 | `tenant_id` en todas las entidades e índices (valor `"default"`) | 🟢 | §A.13 |
-| 1.8 | Port `DocumentSearchRepository` con adaptador `$text` | 🟢 | §A.10 |
-| 1.9 | Tests E2E de API con `httpx.AsyncClient` | 🟡 | §A.12 |
+| # | Cambio | Nivel | Área | Estado |
+| --- | --- | --- | --- | --- |
+| 1.1 | Adoptar `uv` + lockfile en repo y CI | 🟢 | §A.3 | ✅ Hecho — `uv.lock` generado y versionado; `README.md` actualizado a `uv sync --extra dev --extra llm --extra mcp`; verificado con `uv run python -m unittest discover -s tests` (mismo resultado que con `pip`: 47/50, 3 errores preexistentes sin relación). El único workflow de CI (`gitleaks.yml`) no instala dependencias Python, así que no requirió cambios |
+| 1.2 | GitHub Actions: lint + mypy estricto en `domain`/`application` + unitarios | 🟢 | §A.6 | |
+| 1.3 | Job de integración con Mongo como service container | 🟡 | §A.6 | |
+| 1.4 | Integration tests para todos los repositorios | 🟢 | §A.12 | |
+| 1.5 | `request_id` propagado a todos los logs + 12 campos por interacción | 🟢 | §A.5 | |
+| 1.6 | Port `LLMClient` + adaptador `AsyncOpenAI` (resuelve la inconsistencia sync/async) | 🟢 | §A.1 | |
+| 1.7 | `tenant_id` en todas las entidades e índices (valor `"default"`) | 🟢 | §A.13 | |
+| 1.8 | Port `DocumentSearchRepository` con adaptador `$text` | 🟢 | §A.10 | |
+| 1.9 | Tests E2E de API con `httpx.AsyncClient` | 🟡 | §A.12 | |
 
 **DoD de fase:** CI bloquea PRs defectuosos; todo I/O del camino de FastAPI es async; existen métricas de
 coste por interacción.
