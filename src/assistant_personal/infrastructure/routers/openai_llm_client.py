@@ -14,6 +14,14 @@ from src.assistant_personal.infrastructure.prompts.loader import LoadedPrompt, l
 class _OpenAITextClient:
     """Cliente base para compartir invocación y parseo estructurado con OpenAI."""
 
+    # True en subclases cuyo prompt le pide al modelo devolver JSON (clasificación, extracción
+    # de perfil) — activa `response_format={"type": "json_object"}` en `_invoke_model`, que le
+    # exige a la API rechazar cualquier salida que no sea JSON sintácticamente válido. `False`
+    # para `OpenAIGeneralKnowledgeResponder`: su prompt pide texto libre, y la API de OpenAI
+    # exige que la palabra "json" aparezca en el prompt para aceptar ese modo — forzarlo ahí
+    # rompería la respuesta en texto plano.
+    _expects_json_response: bool = False
+
     def __init__(self, model: str | None = None, api_key: str | None = None):
         settings = get_settings()
         provider = (settings.llm_provider or "openai").strip().lower()
@@ -80,6 +88,9 @@ class _OpenAITextClient:
             return getattr(response, "output_text", "") or ""
 
         if hasattr(self.client, "chat") and hasattr(self.client.chat, "completions"):
+            extra_kwargs: dict[str, Any] = {}
+            if self._expects_json_response:
+                extra_kwargs["response_format"] = {"type": "json_object"}
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -87,6 +98,7 @@ class _OpenAITextClient:
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0,
+                **extra_kwargs,
             )
             usage = getattr(response, "usage", None)
             self._record_call_metadata(
@@ -152,6 +164,8 @@ class _OpenAITextClient:
 class OpenAIIntentClassifier(_OpenAITextClient):
     """Clasificador para enrutar la conversación."""
 
+    _expects_json_response = True
+
     async def classify_intent(self, text: str, context: str | None = None) -> IntentClassification:
         self._ensure_ready()
         system_prompt = load_prompt("router/classify_intent")
@@ -190,6 +204,8 @@ class OpenAIGeneralKnowledgeResponder(_OpenAITextClient):
 
 class OpenAIProfileFactExtractor(_OpenAITextClient):
     """Extractor estructurado de hechos de perfil para memoria de corto plazo."""
+
+    _expects_json_response = True
 
     async def extract_profile_facts(self, text: str, context: str | None = None) -> UserProfileExtraction:
         self._ensure_ready()

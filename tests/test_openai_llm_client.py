@@ -4,7 +4,10 @@ from typing import ClassVar
 from pydantic import ValidationError
 
 from src.assistant_personal.domain.entities import ConversationRoute, IntentAction
-from src.assistant_personal.infrastructure.routers.openai_llm_client import OpenAIIntentClassifier
+from src.assistant_personal.infrastructure.routers.openai_llm_client import (
+    OpenAIGeneralKnowledgeResponder,
+    OpenAIIntentClassifier,
+)
 
 
 class FakeChatCompletions:
@@ -25,6 +28,32 @@ class FakeChatCompletions:
 class FakeOpenAIClient:
     def __init__(self):
         self.chat = type("Chat", (), {"completions": FakeChatCompletions()})()
+
+
+class RecordingChatCompletions:
+    def __init__(self):
+        self.received_kwargs = None
+
+    async def create(self, **kwargs):
+        self.received_kwargs = kwargs
+
+        class FakeMessage:
+            content = '{"route": "small_talk", "intent": null, "confidence": 0.9, "reasoning": "saludo", "source": "llm", "payload": {}}'
+
+        class FakeChoice:
+            message = FakeMessage()
+
+        class FakeResponse:
+            choices: ClassVar = [FakeChoice()]
+            usage = None
+
+        return FakeResponse()
+
+
+class RecordingOpenAIClient:
+    def __init__(self):
+        self.completions = RecordingChatCompletions()
+        self.chat = type("Chat", (), {"completions": self.completions})()
 
 
 class FakeMarkdownChatCompletions:
@@ -107,6 +136,19 @@ class FakeWrappedTextOpenAIClient:
         self.chat = type("Chat", (), {"completions": FakeWrappedTextChatCompletions()})()
 
 
+class OpenAIGeneralKnowledgeResponderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_answer_general_knowledge_does_not_request_json_mode(self):
+        """Su prompt pide texto libre, no JSON — forzar response_format=json_object rompería la
+        respuesta (y la propia API de OpenAI lo rechaza sin la palabra 'json' en el prompt)."""
+        client = OpenAIGeneralKnowledgeResponder.__new__(OpenAIGeneralKnowledgeResponder)
+        client.model = "gpt-test"
+        client.client = RecordingOpenAIClient()
+
+        await client.answer_general_knowledge("¿qué es la técnica pomodoro?")
+
+        self.assertNotIn("response_format", client.client.completions.received_kwargs)
+
+
 class OpenAIIntentClassifierTests(unittest.IsolatedAsyncioTestCase):
     async def test_classify_intent_uses_chat_completions_when_responses_api_is_unavailable(self):
         client = OpenAIIntentClassifier.__new__(OpenAIIntentClassifier)
@@ -119,6 +161,18 @@ class OpenAIIntentClassifierTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.intent, IntentAction.CREATE_TASK)
         self.assertEqual(decision.source, "llm")
         self.assertGreaterEqual(decision.confidence, 0.9)
+
+    async def test_classify_intent_requests_strict_json_mode(self):
+        """Defensa en profundidad tras varios hallazgos de salida mal formada del LLM (route/intent
+        inventados, confidence null — docs/anexo_arquitectura_objetivo.md §A.8): activa
+        response_format=json_object en la llamada real a la API."""
+        client = OpenAIIntentClassifier.__new__(OpenAIIntentClassifier)
+        client.model = "gpt-test"
+        client.client = RecordingOpenAIClient()
+
+        await client.classify_intent("hola, me llamo Alexis")
+
+        self.assertEqual(client.client.completions.received_kwargs["response_format"], {"type": "json_object"})
 
     async def test_classify_intent_raises_when_no_supported_api_is_available(self):
         client = OpenAIIntentClassifier.__new__(OpenAIIntentClassifier)
