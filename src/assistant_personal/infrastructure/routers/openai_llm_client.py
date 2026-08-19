@@ -46,7 +46,12 @@ class _OpenAITextClient:
                 raise RuntimeError("OPENAI_MODEL is required")
 
         try:
-            self.client = AsyncOpenAI(api_key=api_key_value, base_url=base_url)
+            self.client = AsyncOpenAI(
+                api_key=api_key_value,
+                base_url=base_url,
+                timeout=settings.llm_request_timeout_seconds,
+                max_retries=settings.llm_max_retries,
+            )
         except Exception as exc:
             raise RuntimeError("Unable to initialize OpenAI client") from exc
 

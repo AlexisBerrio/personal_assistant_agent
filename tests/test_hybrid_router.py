@@ -337,8 +337,7 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
     async def test_small_talk_route_from_classifier_does_not_fall_to_clarify(self):
         """Regresión: 'hola, me llamo Alexis' no coincide con las reglas rápidas de saludo puro
         (no es un saludo exacto) ni encaja en general_knowledge/orchestrator, así que antes de
-        agregar ConversationRoute.SMALL_TALK caía en clarify por descarte. Ver
-        docs/anexo_arquitectura_objetivo.md, classify_intent v1.3.0."""
+        agregar ConversationRoute.SMALL_TALK caía en clarify por descarte."""
         classifier = FakeIntentClassifier(
             response=IntentClassification(route=ConversationRoute.SMALL_TALK, confidence=0.95, source="llm")
         )

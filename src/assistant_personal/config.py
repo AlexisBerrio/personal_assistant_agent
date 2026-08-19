@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434/v1"
     ollama_model: str | None = None
 
+    # El SDK reintenta solo con esto seteado; su timeout por defecto (600s) es demasiado largo.
+    llm_request_timeout_seconds: float = 5.0
+    llm_max_retries: int = 2
+
     @field_validator("openai_api_key", mode="before")
     @classmethod
     def _strip_openai_api_key(cls, value: str | None) -> str | None:
@@ -42,7 +46,7 @@ class Settings(BaseSettings):
         variables de entorno de CI). Sin esto, un `\\n` final rompe el header HTTP `Authorization`
         con un error de bajo nivel (`httpcore.LocalProtocolError: Illegal header value`) que el
         SDK de OpenAI reporta como el genérico `APIConnectionError: Connection error.` — un
-        síntoma que no delata su causa real. Ver docs/anexo_arquitectura_objetivo.md, ítem 2.4."""
+        síntoma que no delata su causa real."""
         return value.strip() if isinstance(value, str) else value
 
     @property
