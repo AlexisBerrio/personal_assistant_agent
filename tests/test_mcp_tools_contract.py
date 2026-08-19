@@ -88,8 +88,16 @@ class McpToolsContractTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(set(tools_by_name), set(EXPECTED_TOOLS_REQUIRED_PARAMS))
             for name, expected_required in EXPECTED_TOOLS_REQUIRED_PARAMS.items():
-                actual_required = set(tools_by_name[name].inputSchema.get("required", []))
+                schema = tools_by_name[name].inputSchema
+                actual_required = set(schema.get("required", []))
                 self.assertEqual(actual_required, expected_required, f"esquema de '{name}' cambió")
+                # Ítem 3.4: tenant_id lo inyecta el servidor (MongoTaskRepository), nunca un
+                # parámetro que el LLM pueda fijar — si alguien lo agrega a una tool, esto falla.
+                self.assertNotIn(
+                    "tenant_id",
+                    schema.get("properties", {}),
+                    f"'{name}' no debe aceptar tenant_id como parámetro",
+                )
         finally:
             await stack.aclose()
 
