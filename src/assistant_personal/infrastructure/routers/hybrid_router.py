@@ -147,6 +147,15 @@ class ProductionIntentRouter:
                 reasoning=classification.reasoning or "Pregunta de conocimiento general.",
             )
 
+        if classification.route == ConversationRoute.SMALL_TALK:
+            return self._build_decision(
+                action=IntentAction.SMALL_TALK,
+                payload={"reply": "¡Hola! Un gusto saludarte. ¿En qué te puedo ayudar?"},
+                confidence=classification.confidence,
+                source="llm",
+                reasoning=classification.reasoning or "Saludo o charla casual detectada por el clasificador.",
+            )
+
         if classification.route == ConversationRoute.ORCHESTRATOR and classification.intent:
             if self._needs_clarification(classification):
                 return self._build_decision(

@@ -6,6 +6,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+from src.assistant_personal.application.agent_context import InMemoryLongTermMemoryRepository, InMemorySessionRepository
 from src.assistant_personal.interfaces.cli import main
 
 
@@ -37,9 +38,17 @@ class CliExecutionTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, msg=completed.stderr)
 
     def test_cli_accepts_a_direct_user_message(self) -> None:
+        # Repositorios en memoria explícitos: este test valida parseo de argumentos y formato
+        # de salida del CLI, no persistencia real — no debe depender de que Mongo esté
+        # disponible (el CLI usa Mongo real por defecto, ver interfaces/cli.py).
         output = StringIO()
         with redirect_stdout(output):
-            main(["nueva tarea: estudiar"], service=FakeService())
+            main(
+                ["nueva tarea: estudiar"],
+                service=FakeService(),
+                session_repository=InMemorySessionRepository(),
+                long_term_repository=InMemoryLongTermMemoryRepository(),
+            )
 
         result = output.getvalue()
         self.assertIn("tarea creada", result.lower())
@@ -48,7 +57,12 @@ class CliExecutionTests(unittest.TestCase):
     def test_cli_enters_interactive_mode_when_requested(self) -> None:
         output = StringIO()
         with patch("builtins.input", side_effect=["salir"]), redirect_stdout(output):
-            main(["interactive"], service=FakeService())
+            main(
+                ["interactive"],
+                service=FakeService(),
+                session_repository=InMemorySessionRepository(),
+                long_term_repository=InMemoryLongTermMemoryRepository(),
+            )
 
         result = output.getvalue()
         self.assertIn("asistente personal activo", result.lower())

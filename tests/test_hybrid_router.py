@@ -270,6 +270,26 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.payload.get("answer"), "La procrastinación es posponer tareas.")
         self.assertEqual(len(responder.calls), 1)
 
+    async def test_small_talk_route_from_classifier_does_not_fall_to_clarify(self):
+        """Regresión: 'hola, me llamo Alexis' no coincide con las reglas rápidas de saludo puro
+        (no es un saludo exacto) ni encaja en general_knowledge/orchestrator, así que antes de
+        agregar ConversationRoute.SMALL_TALK caía en clarify por descarte. Ver
+        docs/anexo_arquitectura_objetivo.md, classify_intent v1.3.0."""
+        classifier = FakeIntentClassifier(
+            response=IntentClassification(route=ConversationRoute.SMALL_TALK, confidence=0.95, source="llm")
+        )
+        router = ProductionIntentRouter(
+            llm_client=classifier,
+            knowledge_responder=FakeKnowledgeResponder(),
+            profile_extractor=FakeProfileExtractor(),
+        )
+
+        result = await router.route("hola, me llamo Alexis")
+
+        self.assertEqual(result.action, IntentAction.SMALL_TALK)
+        self.assertEqual(result.source, "llm")
+        self.assertIn("reply", result.payload)
+
     async def test_low_confidence_returns_clarify_without_forcing_intent(self):
         classifier = FakeIntentClassifier(
             response=IntentClassification(

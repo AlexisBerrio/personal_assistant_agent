@@ -21,6 +21,7 @@ class ConversationRoute(str, Enum):
 
     GENERAL_KNOWLEDGE = "general_knowledge"
     ORCHESTRATOR = "orchestrator"
+    SMALL_TALK = "small_talk"  # Saludos, presentaciones, charla casual sin acción ni pregunta.
     CLARIFY = "clarify"
 
 

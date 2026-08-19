@@ -58,7 +58,7 @@ class MongoLongTermMemoryRepository(LongTermMemoryRepository):
         cursor = collection.find(self._fact_filter(user_id), {"_id": 0}).sort("updated_at", -1).limit(limit)
         documents = await cursor.to_list(length=limit)
         return [
-            UserProfileFact(key=doc["key"], value=doc["value"], confidence=doc.get("confidence", 0.8))
+            UserProfileFact(key=doc["key"], value=doc["value"], confidence=doc["confidence"])
             for doc in documents
         ]
 
