@@ -550,7 +550,7 @@ que un motor de grafo sería un adaptador más y no una reescritura.
       que verifica que se respetan.
 - [ ] El router puede emitir `multi_task` (2+ acciones en un mensaje) y el agente las ejecuta en secuencia
       vía MCP, en vez de degradar siempre a `clarify` (ítem 4.9).
-- [ ] Las reglas rápidas solo hacen match en operaciones sin parámetros por interpretar; cualquier filtro
+- [x] Las reglas rápidas solo hacen match en operaciones sin parámetros por interpretar; cualquier filtro
       o dato en lenguaje natural cae al agente, no solo las escrituras (ítem 4.11).
 - [ ] Existe un documento de decisión que registra por qué **no** se adoptó un state graph, con los
       criterios anteriores evaluados.
@@ -1091,6 +1091,16 @@ Una regla rápida solo debe hacer *match* cuando el mensaje mapea a una operaci�
 parámetros por interpretar; si el mensaje trae cualquier filtro o dato en lenguaje natural, la regla no
 debe dispararse — cae al clasificador/agente. Ver 4.12 para el gap de que `listar_tareas` ni siquiera
 soporta filtros hoy.
+
+**✅ Hecho (4.11):** las reglas duras (`EXACT_LIST_TASKS_COMMANDS`) ya cumplían por construcción — solo
+matchean frases fijas sin filtro. El gap real estaba en el prompt del clasificador LLM
+(`classify_intent.prompt.md` v1.4.3), que trataba "tareas de hoy"/"esta semana" como `list_tasks` normal
+con `payload={}`, perdiendo el filtro en silencio y devolviendo todo. v1.5.0 agrega una regla aislada:
+lectura con filtro de fecha/estado en lenguaje natural → `clarify`, en vez de ejecutar una consulta ciega.
+3 casos nuevos en el golden dataset (grt-110/111/112) más 3 corregidos (grt-041/042/047); eval-router
+111/112 (solo ruido preexistente en grt-059, no relacionado). `coste_medio_tokens_maximo` subido 600→650
+en `umbrales.yaml` con esa justificación anotada ahí: la regla nueva agrega tokens reales de capacidad,
+no bloat de prompt.
 
 **DoD de fase:** el patrón híbrido funciona con la ruta barata cubriendo la mayoría del tráfico; los
 guardrails están testeados; la decisión sobre state graph está documentada con criterios, no con

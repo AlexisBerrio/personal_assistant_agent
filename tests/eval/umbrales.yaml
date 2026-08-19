@@ -29,7 +29,10 @@ precision_entidades_minima: 0.80
 
 # Coste medio en tokens (entrada + salida) por caso resuelto vía LLM (source == "llm").
 # Sirve de alarma temprana ante cambios de prompt o de modelo que disparen el costo.
-coste_medio_tokens_maximo: 600
+# Subido 600 -> 650 en el ítem 4.11 (classify_intent v1.5.0): la nueva regla de list_tasks con
+# filtro NL agrega tokens al prompt y casos de razonamiento más largo (clarify explicado), medido
+# real ~622 tras recortar el prompt lo que se pudo sin desestabilizar otras intenciones.
+coste_medio_tokens_maximo: 650
 
 # % de casos resueltos por reglas rápidas sin llamar al LLM (métrica de eficiencia, no de
 # calidad). El dataset reserva ~25% de sus casos a rutas de regla explícitas, así que un valor
