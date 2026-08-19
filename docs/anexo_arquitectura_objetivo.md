@@ -1018,7 +1018,7 @@ de arriba.
 | # | Cambio | Nivel | Área | Estado |
 | --- | --- | --- | --- | --- |
 | 3.1 | MCP como única vía de ejecución de acciones; eliminar caminos duplicados | 🟢 | §A.8 | ✅ Hecho — `TaskOrchestrator` (usado por el CLI) llamaba a `TaskService` directo, en paralelo a las tools MCP y a `app.py`: tres caminos distintos a Mongo. Nuevo `McpTaskServiceClient` (cliente MCP real por stdio, `infrastructure/mcp/client.py`) implementa la misma interfaz async que `TaskService` (`list_tasks_async`/`create_task_async`/`complete_task_async`), así que `_dispatch` no cambió — solo el `service` que recibe el orquestador. `cli.py` ahora construye `McpTaskServiceClient()` por defecto en vez de `TaskService()`. Hallazgo real: el SDK de MCP no hereda el entorno del proceso padre por defecto (solo una allowlist de seguridad sin `MONGO_URI`/`OPENAI_API_KEY`) — sin pasar el entorno explícito, el servidor no encontraba `.env`. Verificado E2E real (CLI → orquestador → cliente MCP → subproceso servidor → Mongo local), no solo con tests. `test_intent_router.py`/`test_mcp_server.py` (huérfanos, testeaban un `IntentRouter` y un `actualizar_tarea` que ya no existen) se borraron; reemplazados por `test_mcp_client.py` (unitario, sesión falsa) y `test_mcp_client_integration.py` (protocolo MCP real contra Mongo local). Pendiente, fuera de alcance: `delete_task` no tiene tool MCP ni rama en `_dispatch` — ya fallaba antes de este ítem, no es una regresión |
-| 3.2 | Tests de contrato por tool (esquema + comportamiento) | 🟡 | §A.12 | |
+| 3.2 | Tests de contrato por tool (esquema + comportamiento) | 🟡 | §A.12 | ✅ Hecho — `test_mcp_tools_contract.py` (8 tests, protocolo MCP real por stdio contra Mongo local, no mocks): esquema de las 6 tools vía `list_tools()` (nombres + campos requeridos), comportamiento por tool incluyendo casos borde (`crear_tarea` sin `title`, `actualizar_tarea` sin campos, `buscar_tarea`/`completar_tarea` con `task_id` inexistente, idempotencia de `completar_tarea`). Hallazgo real: FastMCP envuelve `structuredContent` bajo `{"result": ...}` cuando el tipo de retorno anotado es `dict \| None` (`buscar_tarea`, `actualizar_tarea`), pero no para un `dict` simple (`crear_tarea`, `completar_tarea`) — mismo patrón de wrapping que arrays (ítem 3.1), no documentado hasta ahora |
 | 3.3 | Scopes declarados por tool + auditoría de invocaciones | 🟡 | §A.11 | |
 | 3.4 | `tenant_id` inyectado por el servidor, nunca parámetro del LLM | 🟢 | §A.11 | |
 
@@ -1027,80 +1027,20 @@ auditada; ninguna tool acepta filtros que cruzen tenants.
 
 ### Fase 4 — Arquitectura de agentes
 
-| # | Cambio | Nivel | Área |
-| --- | --- | --- | --- |
-| 4.1 | Adelantar tracing OpenTelemetry si no se hizo ya (depurar agentes sin traces es inviable) | 🟡 | §A.5 |
-| 4.2 | Guardrails: whitelist de tools, límite de pasos, presupuesto de tokens, confirmación de escrituras | 🟡 | §A.8 |
-| 4.3 | Agente con tools MCP **como fallback** para confianza media | 🟡 | §A.8 |
-| 4.4 | Port de orquestación en `domain/` (habilita cambiar de motor sin reescribir) | 🟢 | §A.8 |
-| 4.5 | Documento de decisión: evaluar los 4 criterios de state graph y registrar la conclusión | 🟢 | §A.8 |
-| 4.6 | LLM-as-judge calibrado para la respuesta final | 🟡 | §A.12 |
-| 4.7 | Soporte de solicitudes multi-intención: ejecutar varias acciones de dominio en un mismo turno | 🟡 | §A.12 |
-| 4.8 | Reordenar responsabilidades de `infrastructure/` mezcladas por la forma orgánica en que creció (router vs. LLM genérico, protocols vs. lógica de reglas) | 🟡 | §A.8 |
-| 4.9 | Router clasifica `multi_task` (2+ acciones en un mensaje) y el agente (4.3) las ejecuta en secuencia vía MCP, en vez de degradar siempre a `clarify` | 🟡 | §A.8 |
-| 4.10 | Endpoint conversacional en `app.py` que expone el orquestador (router + agente) con respuesta en lenguaje natural — precondición para cualquier frontend o canal de voz (Alexa, Fase 6) | 🟡 | §A.1 |
-| 4.11 | Regla de decisión explícita router vs. agente (no es lectura vs. escritura): el router solo invoca una tool MCP directo si ya tiene el 100% de lo necesario sin interpretar lenguaje natural; si falta estructurar algo, pasa por el agente | 🟢 | §A.8 |
-| 4.12 | `listar_tareas` gana parámetros de filtro (`estado`, `fecha_desde`, `fecha_hasta`) — hoy no acepta ninguno, prerequisito técnico de 4.11 para lecturas filtradas | 🟡 | §A.11 |
-
-**Nota sobre 4.7:** hoy (Fase 2, ítem 2.8) el router detecta mensajes con dos o más acciones distintas
-(ej. "borra la tarea vieja y agrega otra nueva de comprar pan") y responde `clarify` pidiendo que se
-envíen por separado, en vez de ejecutar una y descartar la otra silenciosamente — una mitigación
-deliberadamente simple. El diseño concreto de la ejecución real queda en el ítem 4.9 (`multi_task`);
-4.7 se mantiene como la entrada del roadmap, 4.9 es su realización específica.
-
-**Nota sobre 4.8:** `openai_llm_client.py` mezcla el cliente base genérico (`_OpenAITextClient`) con
-los responders concretos del router; `hybrid_router.py` mezcla Protocols, la clase del router y las
-reglas rápidas en un solo archivo. No es un bug, es crecimiento orgánico — separar ahora no tiene
-ganancia funcional inmediata; el disparador natural es cuando arranque 4.3, cuando el agente necesite
-el mismo cliente LLM. Idea más amplia del usuario, pendiente de decidir cuándo: mapeo completo del
-código para identificar qué más conviene separar manteniendo la separación por capas.
-
-**Nota sobre 4.9:** refina 4.7 con un diseño concreto en vez de dejarlo abierto. `multi_task` es una
-ruta más de `IntentClassification` (mismo contrato Pydantic, no un esquema paralelo) — el router la
-emite cuando detecta 2+ acciones de dominio distintas en un mensaje. En vez de degradar a `clarify`
-(mitigación actual de 2.8), el orquestador la entrega al agente de 4.3, que la descompone en llamadas
-MCP secuenciales bajo los mismos guardrails (4.2) que cualquier otro camino del agente — nunca ejecuta
-nada fuera de una tool MCP. Depende de 4.3: sin agente, no hay quién ejecute más de una acción por turno.
-
-**Nota sobre 4.10:** hoy `app.py` es CRUD estructurado puro — no usa `TaskOrchestrator`, no hay
-clasificación de intención ni memoria de sesión en el camino HTTP (salvedad ya documentada en el DoD
-de Fase 1). Un frontend que hable lenguaje natural (o un canal de voz como Alexa) necesita un endpoint
-que sí pase por el orquestador completo (router + agente + MCP) y devuelva una respuesta redactada en
-lenguaje natural, no un dump JSON de la tarea — es la misma respuesta que ya arma `TaskOrchestrator`
-para el CLI, expuesta por HTTP. Depende de 4.3 (agente) y 4.9 (`multi_task`) para que el endpoint nazca
-completo en vez de tener que revisitarlo cuando el agente exista. Precondición explícita para Fase 6
-(Alexa) y para cualquier frontend propio: por diseño, ningún canal de cara al usuario se construye antes
-de que esta pieza de infraestructura exista — confirmado con el usuario, no es una omisión.
-
-**Nota sobre 4.11:** aclara una confusión real entre dos invariantes distintas. "Toda comunicación con
-Mongo pasa por MCP" (ítem 3.1, ya cumplido) es sobre el **transporte** — nadie toca Mongo salvo a través
-de una tool MCP, sin importar quién decidió llamarla. "El router nunca persiste sin pasar por el agente"
-es sobre **quién decide qué ejecutar** — y la línea no es lectura vs. escritura, sino si hace falta
-interpretar lenguaje natural para armar los parámetros de la tool:
-
-- **Regla dura sin interpretación** (ej. "lista mis tareas" → `listar_tareas()` sin filtros, "completa la
-  tarea `<id>`" con id exacto) → el router llama la tool MCP directo. Nada que el agente aportaría.
-- **Cualquier caso que exija estructurar datos desde lenguaje natural** (fechas relativas, filtros de
-  estado, título/descripción al crear, referencia ambigua al completar/borrar) → pasa por el agente, sea
-  lectura o escritura. Ejemplo real: "lista mis tareas de ayer que completé" no lo puede resolver una
-  regla dura disparando una consulta ciega — traería todo y filtrar del lado del cliente es el
-  antipatrón que se quiere evitar; hace falta interpretar "ayer" y "que completé" en parámetros
-  estructurados antes de llamar la tool.
-
-Una regla rápida solo debe hacer *match* cuando el mensaje mapea a una operación 100% determinista y sin
-parámetros por interpretar; si el mensaje trae cualquier filtro o dato en lenguaje natural, la regla no
-debe dispararse — cae al clasificador/agente. Ver 4.12 para el gap de que `listar_tareas` ni siquiera
-soporta filtros hoy.
-
-**✅ Hecho (4.11):** las reglas duras (`EXACT_LIST_TASKS_COMMANDS`) ya cumplían por construcción — solo
-matchean frases fijas sin filtro. El gap real estaba en el prompt del clasificador LLM
-(`classify_intent.prompt.md` v1.4.3), que trataba "tareas de hoy"/"esta semana" como `list_tasks` normal
-con `payload={}`, perdiendo el filtro en silencio y devolviendo todo. v1.5.0 agrega una regla aislada:
-lectura con filtro de fecha/estado en lenguaje natural → `clarify`, en vez de ejecutar una consulta ciega.
-3 casos nuevos en el golden dataset (grt-110/111/112) más 3 corregidos (grt-041/042/047); eval-router
-111/112 (solo ruido preexistente en grt-059, no relacionado). `coste_medio_tokens_maximo` subido 600→650
-en `umbrales.yaml` con esa justificación anotada ahí: la regla nueva agrega tokens reales de capacidad,
-no bloat de prompt.
+| # | Cambio | Nivel | Área | Estado |
+| --- | --- | --- | --- | --- |
+| 4.1 | Adelantar tracing OpenTelemetry si no se hizo ya (depurar agentes sin traces es inviable) | 🟡 | §A.5 | |
+| 4.2 | Guardrails: whitelist de tools, límite de pasos, presupuesto de tokens, confirmación de escrituras | 🟡 | §A.8 | |
+| 4.3 | Agente con tools MCP **como fallback** para confianza media | 🟡 | §A.8 | |
+| 4.4 | Port de orquestación en `domain/` (habilita cambiar de motor sin reescribir) | 🟢 | §A.8 | |
+| 4.5 | Documento de decisión: evaluar los 4 criterios de state graph y registrar la conclusión | 🟢 | §A.8 | |
+| 4.6 | LLM-as-judge calibrado para la respuesta final | 🟡 | §A.12 | |
+| 4.7 | Soporte de solicitudes multi-intención: ejecutar varias acciones de dominio en un mismo turno | 🟡 | §A.12 | Mitigado desde Fase 2 (ítem 2.8): 2+ acciones → `clarify` explícito en vez de ejecutar una y descartar la otra. La ejecución real es 4.9, que depende de 4.3 |
+| 4.8 | Reordenar responsabilidades de `infrastructure/` mezcladas por la forma orgánica en que creció (router vs. LLM genérico, protocols vs. lógica de reglas) | 🟡 | §A.8 | Deuda anotada, no bug — el disparador natural es cuando arranque 4.3 y el agente necesite el mismo cliente LLM base |
+| 4.9 | Router clasifica `multi_task` (2+ acciones en un mensaje) y el agente (4.3) las ejecuta en secuencia vía MCP, en vez de degradar siempre a `clarify` | 🟡 | §A.8 | Diseño: `multi_task` es una ruta más de `IntentClassification` (mismo contrato); el agente de 4.3 la descompone en llamadas MCP secuenciales bajo los guardrails de 4.2. Depende de 4.3 |
+| 4.10 | Endpoint conversacional en `app.py` que expone el orquestador (router + agente) con respuesta en lenguaje natural — precondición para cualquier frontend o canal de voz (Alexa, Fase 6) | 🟡 | §A.1 | Hoy `app.py` es CRUD directo sin orquestador ni memoria de sesión (Fase 1). Depende de 4.3 y 4.9. Precondición confirmada con el usuario: ningún canal de cara al usuario se construye antes de esta pieza |
+| 4.11 | Regla de decisión explícita router vs. agente (no es lectura vs. escritura): el router solo invoca una tool MCP directo si ya tiene el 100% de lo necesario sin interpretar lenguaje natural; si falta estructurar algo, pasa por el agente | 🟢 | §A.8 | ✅ Hecho — reglas duras (`EXACT_LIST_TASKS_COMMANDS`) ya cumplían por construcción. Gap real en el clasificador LLM: trataba "tareas de hoy"/"esta semana" como `list_tasks` sin filtro, perdiéndolo en silencio. `classify_intent.prompt.md` v1.5.0 agrega: lectura con filtro de fecha/estado en NL → `clarify`, no ejecuta consulta ciega. 3 casos nuevos + 3 corregidos en golden dataset; eval-router 111/112 (ruido preexistente no relacionado, grt-059). `coste_medio_tokens_maximo` 600→650 en `umbrales.yaml`, justificado ahí |
+| 4.12 | `listar_tareas` gana parámetros de filtro (`estado`, `fecha_desde`, `fecha_hasta`) — hoy no acepta ninguno, prerequisito técnico de 4.11 para lecturas filtradas | 🟡 | §A.11 | |
 
 **DoD de fase:** el patrón híbrido funciona con la ruta barata cubriendo la mayoría del tráfico; los
 guardrails están testeados; la decisión sobre state graph está documentada con criterios, no con
