@@ -20,6 +20,13 @@ class SessionMemoryRepository(Protocol):
         ...
 
     def get_context_summary(self, session_id: str, max_turns: int = 3, max_items: int = 5) -> dict[str, Any]:
+        """Devuelve `{"turns": [...], "items": [...], "summary": str}`. `summary` es el resumen
+        incremental de turnos antiguos — cadena vacía si todavía no hay uno."""
+        ...
+
+    def compact_session(self, session_id: str, summary: str, keep_last_turns: int = 1) -> None:
+        """Fija el resumen incremental y recorta `turns` a los últimos `keep_last_turns` — los
+        turnos ya incorporados al resumen se descartan de la lista activa."""
         ...
 
     async def add_context_item_async(self, session_id: str, key: str, value: str) -> None:
@@ -31,4 +38,7 @@ class SessionMemoryRepository(Protocol):
     async def get_context_summary_async(
         self, session_id: str, max_turns: int = 3, max_items: int = 5
     ) -> dict[str, Any]:
+        ...
+
+    async def compact_session_async(self, session_id: str, summary: str, keep_last_turns: int = 1) -> None:
         ...

@@ -1,5 +1,7 @@
 import unittest
 
+import structlog
+
 from src.assistant_personal.application.agent_context import ShortTermMemory
 from src.assistant_personal.application.orchestrator import TaskOrchestrator
 from src.assistant_personal.domain.entities import IntentAction, IntentDecision, UserProfileExtraction, UserProfileFact
@@ -365,6 +367,22 @@ class TaskOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(response["success"])
         long_term_facts = await orchestrator.context.long_term_memory.get_facts_async()
         self.assertNotIn("color_favorito", long_term_facts)
+
+    async def test_interaction_log_includes_measurable_context_tokens(self):
+        """Regresión de docs/anexo_arquitectura_objetivo.md §A.9 (ítem 2.6): el DoD exige que el
+        presupuesto de contexto sea "medible y registrado" — verifica que el campo
+        `contexto_tokens` llega al log estructurado de cierre de interacción."""
+        orchestrator = TaskOrchestrator(
+            service=FakeService(), router=FakeStructuredProfileRouter(), session_id="log-tokens-session"
+        )
+
+        with structlog.testing.capture_logs() as captured:
+            await orchestrator.handle_message_async("Amo el sushi")
+
+        interaction_logs = [entry for entry in captured if entry.get("event") == "interaccion_completada"]
+        self.assertEqual(len(interaction_logs), 1)
+        self.assertIsInstance(interaction_logs[0]["contexto_tokens"], int)
+        self.assertGreaterEqual(interaction_logs[0]["contexto_tokens"], 0)
 
     async def test_orchestrator_does_not_reuse_context_from_other_session_ids(self):
         fake_collection = FakeSessionCollection()

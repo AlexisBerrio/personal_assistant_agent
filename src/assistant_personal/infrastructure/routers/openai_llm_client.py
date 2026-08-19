@@ -215,6 +215,21 @@ class OpenAIProfileFactExtractor(_OpenAITextClient):
         return UserProfileExtraction.model_validate(parsed)
 
 
+class OpenAISessionSummarizer(_OpenAITextClient):
+    """Resumen incremental de sesión para `ContextBuilder` (§A.9, ítem 2.6)."""
+
+    def _build_summary_user_prompt(self, previous_summary: str, turns: list[tuple[str, str]]) -> str:
+        turns_text = "\n".join(f"Usuario: {user_msg}\nAsistente: {assistant_msg}" for user_msg, assistant_msg in turns)
+        return f"Resumen previo: {previous_summary or '(sin resumen previo)'}\n\nTurnos nuevos:\n{turns_text}"
+
+    async def summarize_session(self, previous_summary: str, turns: list[tuple[str, str]]) -> str:
+        self._ensure_ready()
+        system_prompt = load_prompt("router/summarize_session")
+        user_prompt = self._build_summary_user_prompt(previous_summary, turns)
+        summary = await self._invoke_model(system_prompt, user_prompt)
+        return summary.strip()
+
+
 class OpenAILLMRouterClient:
     """Implementación del port `LLMClient` (domain/repositories/llm_client.py) que unifica los
     tres componentes en un único cliente, para consumidores que prefieren una sola dependencia
@@ -224,6 +239,7 @@ class OpenAILLMRouterClient:
         self.intent_classifier = OpenAIIntentClassifier(model=model, api_key=api_key)
         self.knowledge_responder = OpenAIGeneralKnowledgeResponder(model=model, api_key=api_key)
         self.profile_extractor = OpenAIProfileFactExtractor(model=model, api_key=api_key)
+        self.session_summarizer = OpenAISessionSummarizer(model=model, api_key=api_key)
 
     async def classify_intent(self, text: str, context: str | None = None) -> IntentClassification:
         return await self.intent_classifier.classify_intent(text, context=context)
@@ -233,3 +249,6 @@ class OpenAILLMRouterClient:
 
     async def extract_profile_facts(self, text: str, context: str | None = None) -> UserProfileExtraction:
         return await self.profile_extractor.extract_profile_facts(text, context=context)
+
+    async def summarize_session(self, previous_summary: str, turns: list[tuple[str, str]]) -> str:
+        return await self.session_summarizer.summarize_session(previous_summary, turns)

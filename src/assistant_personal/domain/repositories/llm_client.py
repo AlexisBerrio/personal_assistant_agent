@@ -23,3 +23,6 @@ class LLMClient(Protocol):
 
     async def extract_profile_facts(self, text: str, context: str | None = None) -> UserProfileExtraction:
         ...
+
+    async def summarize_session(self, previous_summary: str, turns: list[tuple[str, str]]) -> str:
+        ...

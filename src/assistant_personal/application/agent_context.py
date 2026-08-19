@@ -3,19 +3,22 @@ from __future__ import annotations
 import inspect
 from typing import Any
 
+from src.assistant_personal.application.context_builder import ContextBuilder
 from src.assistant_personal.domain.entities import UserProfileFact
 from src.assistant_personal.domain.repositories.long_term_memory_repository import LongTermMemoryRepository
 from src.assistant_personal.domain.repositories.session_memory_repository import SessionMemoryRepository
+
+_MAX_STORED_TURNS = 20
 
 
 class InMemorySessionRepository:
     """Repositorio en memoria para pruebas y uso local sin infraestructura externa."""
 
     def __init__(self) -> None:
-        self._sessions: dict[str, dict[str, list[dict[str, str]]]] = {}
+        self._sessions: dict[str, dict[str, Any]] = {}
 
-    def _get_session(self, session_id: str) -> dict[str, list[dict[str, str]]]:
-        return self._sessions.setdefault(session_id, {"turns": [], "items": []})
+    def _get_session(self, session_id: str) -> dict[str, Any]:
+        return self._sessions.setdefault(session_id, {"turns": [], "items": [], "summary": ""})
 
     def add_context_item(self, session_id: str, key: str, value: str) -> None:
         session = self._get_session(session_id)
@@ -29,13 +32,22 @@ class InMemorySessionRepository:
     def append_turn(self, session_id: str, user_message: str, assistant_response: str) -> None:
         session = self._get_session(session_id)
         session["turns"].append({"user_message": user_message, "assistant_response": assistant_response})
+        # Mismo tope de seguridad que MongoSessionRepository — no el presupuesto real, ver
+        # ContextBuilder (§A.9, ítem 2.6).
+        session["turns"] = session["turns"][-_MAX_STORED_TURNS:]
 
     def get_context_summary(self, session_id: str, max_turns: int = 3, max_items: int = 5) -> dict[str, Any]:
         session = self._get_session(session_id)
         return {
             "turns": session["turns"][-max_turns:],
             "items": session["items"][-max_items:],
+            "summary": session.get("summary", ""),
         }
+
+    def compact_session(self, session_id: str, summary: str, keep_last_turns: int = 1) -> None:
+        session = self._get_session(session_id)
+        session["summary"] = summary
+        session["turns"] = session["turns"][-keep_last_turns:] if keep_last_turns else []
 
     async def add_context_item_async(self, session_id: str, key: str, value: str) -> None:
         self.add_context_item(session_id, key, value)
@@ -47,6 +59,9 @@ class InMemorySessionRepository:
         self, session_id: str, max_turns: int = 3, max_items: int = 5
     ) -> dict[str, Any]:
         return self.get_context_summary(session_id, max_turns=max_turns, max_items=max_items)
+
+    async def compact_session_async(self, session_id: str, summary: str, keep_last_turns: int = 1) -> None:
+        self.compact_session(session_id, summary, keep_last_turns)
 
 
 class ShortTermMemory:
@@ -108,6 +123,17 @@ class ShortTermMemory:
             "get_context_summary", session_id, max_turns=self.max_turns, max_items=self.max_items
         )
         return [(turn["user_message"], turn["assistant_response"]) for turn in summary.get("turns", [])]
+
+    async def get_raw_session_async(self, session_id: str = "default", max_turns: int = 10) -> dict[str, Any]:
+        """Sesión sin recortar a `max_turns`/`max_items` de instancia — usado por `ContextBuilder`, que 
+            decide cuánto entra según presupuesto de tokens, no un conteo fijo."""
+        result: dict[str, Any] = await self._invoke_repository_async(
+            "get_context_summary", session_id, max_turns=max_turns, max_items=self.max_items
+        )
+        return result
+
+    async def compact_async(self, session_id: str, summary: str, keep_last_turns: int = 1) -> None:
+        await self._invoke_repository_async("compact_session", session_id, summary, keep_last_turns)
 
 
 class InMemoryLongTermMemoryRepository:
@@ -189,22 +215,22 @@ class AgentContext:
         short_term_repository: SessionMemoryRepository | None = None,
         long_term_repository: LongTermMemoryRepository | None = None,
         user_id: str = "default",
+        context_builder: ContextBuilder | None = None,
     ) -> None:
         self.short_term_memory = ShortTermMemory(repository=short_term_repository or InMemorySessionRepository())
         self.long_term_memory = LongTermMemory(
             repository=long_term_repository or InMemoryLongTermMemoryRepository(), user_id=user_id
         )
+        # Sin `summarizer` por defecto: el resumen incremental (§A.9, ítem 2.6) requiere un LLM
+        # real, que `AgentContext` (capa de aplicación) no debe depender directamente — lo inyecta
+        # `TaskOrchestrator`, que ya construye el resto de la infraestructura por defecto.
+        self.context_builder = context_builder or ContextBuilder()
+        self.last_context_tokens: int | None = None
 
     def _collect_recent_context(self, session_id: str) -> _RecentContext:
         recent_items = self.short_term_memory.get_items(session_id=session_id)[-3:]
         recent_turns = self.short_term_memory.get_turns(session_id=session_id)[-3:]
         recent_facts = list(self.long_term_memory.get_facts().items())[-3:]
-        return recent_items, recent_turns, recent_facts
-
-    async def _collect_recent_context_async(self, session_id: str) -> _RecentContext:
-        recent_items = (await self.short_term_memory.get_items_async(session_id=session_id))[-3:]
-        recent_turns = (await self.short_term_memory.get_turns_async(session_id=session_id))[-3:]
-        recent_facts = list((await self.long_term_memory.get_facts_async()).items())[-3:]
         return recent_items, recent_turns, recent_facts
 
     def _format_context_summary(
@@ -224,5 +250,14 @@ class AgentContext:
         return self._format_context_summary(recent_items, recent_turns, recent_facts)
 
     async def build_context_summary_async(self, session_id: str = "default") -> str:
-        recent_items, recent_turns, recent_facts = await self._collect_recent_context_async(session_id)
-        return self._format_context_summary(recent_items, recent_turns, recent_facts)
+        """Delega en `ContextBuilder` (§A.9, ítem 2.6): presupuesto de tokens medible en vez de
+        conteos fijos arbitrarios. `last_context_tokens` queda disponible para observabilidad
+        (mismo patrón que `last_llm_metadata` del router)."""
+        context_text, tokens = await self.context_builder.build_context_async(
+            self.short_term_memory, self.long_term_memory, session_id
+        )
+        self.last_context_tokens = tokens
+        return context_text
+
+    async def maybe_summarize_session_async(self, session_id: str = "default") -> None:
+        await self.context_builder.maybe_summarize_async(self.short_term_memory, session_id)

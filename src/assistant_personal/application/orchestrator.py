@@ -9,10 +9,12 @@ from typing import Any
 import structlog
 
 from src.assistant_personal.application.agent_context import AgentContext
+from src.assistant_personal.application.context_builder import ContextBuilder
 from src.assistant_personal.domain.repositories.long_term_memory_repository import LongTermMemoryRepository
 from src.assistant_personal.domain.repositories.session_memory_repository import SessionMemoryRepository
 from src.assistant_personal.infrastructure.observabilidad import get_logger
 from src.assistant_personal.infrastructure.routers.hybrid_router import ProductionIntentRouter
+from src.assistant_personal.infrastructure.routers.openai_llm_client import OpenAISessionSummarizer
 
 logger = get_logger(__name__)
 
@@ -27,6 +29,7 @@ class TaskOrchestrator:
         max_retries: int = 1,
         session_repository: SessionMemoryRepository | None = None,
         long_term_repository: LongTermMemoryRepository | None = None,
+        context_builder: ContextBuilder | None = None,
         session_id: str | None = None,
         tenant_id: str | None = None,
         user_id: str | None = None,
@@ -47,6 +50,10 @@ class TaskOrchestrator:
             short_term_repository=self.session_repository,
             long_term_repository=long_term_repository,
             user_id=self.user_id,
+            # Resumen incremental de sesión real por defecto (§A.9, ítem 2.6) — mismo criterio
+            # que `self.router` arriba: se construye con OpenAI real salvo que el llamador
+            # inyecte otra cosa (tests inyectan un `ContextBuilder()` sin summarizer).
+            context_builder=context_builder or ContextBuilder(summarizer=OpenAISessionSummarizer()),
         )
 
     def handle_message(self, message: str) -> dict[str, Any]:
@@ -82,6 +89,9 @@ class TaskOrchestrator:
             }
 
         await self.context.short_term_memory.add_async("user_message", message, session_id=self.session_id)
+        # Resumen incremental de sesión (§A.9, ítem 2.6): antes de armar el contexto de este
+        # turno, comprime los turnos acumulados de turnos anteriores si ya llegaron al umbral.
+        await self.context.maybe_summarize_session_async(session_id=self.session_id)
         context_summary = await self.context.build_context_summary_async(session_id=self.session_id)
 
         profile_facts = await self._extract_profile_facts(message, context_summary)
@@ -159,7 +169,8 @@ class TaskOrchestrator:
         llm_metadata: dict[str, Any] | None,
         resultado: str,
     ) -> None:
-        """Emite el log de cierre de una interacción con los 12 campos mínimos de §A.5.
+        """Emite el log de cierre de una interacción con los 12 campos mínimos de §A.5, más
+        `contexto_tokens` (§A.9, ítem 2.6).
 
         Con estos campos se puede calcular coste por interacción y tasa de `clarify` sin
         instrumentación adicional. `tenant_id` queda fijo en "default" hasta el ítem 1.7
@@ -167,6 +178,8 @@ class TaskOrchestrator:
         decisión se resolvió por regla y nunca se invocó al LLM. `prompt_version` (§A.8, ítem
         2.2) identifica qué versión del prompt de sistema generó la decisión, para poder
         filtrar estas métricas por versión cuando se cambie la redacción de un prompt.
+        `contexto_tokens` es el presupuesto medible que exige el DoD de §A.9: cuántos tokens
+        (estimados) ocupó el contexto de sesión/perfil que se le mandó al LLM en este turno.
         """
         metadata = llm_metadata or {}
         logger.info(
@@ -183,6 +196,7 @@ class TaskOrchestrator:
             tokens_salida=metadata.get("tokens_salida"),
             latencia_ms_total=int((time.monotonic() - started_at) * 1000),
             latencia_ms_llm=metadata.get("latencia_ms_llm"),
+            contexto_tokens=self.context.last_context_tokens,
             resultado=resultado,
         )
 

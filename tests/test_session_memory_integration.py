@@ -84,6 +84,25 @@ class SessionMemoryIntegrationTests(unittest.IsolatedAsyncioTestCase):
             any(item["key"] == "nombre" and item["value"] == "Alexis" for item in summary["items"])
         )
 
+    async def test_compact_session_persists_summary_and_trims_turns(self) -> None:
+        """Regresión de docs/anexo_arquitectura_objetivo.md §A.9 (ítem 2.6): el resumen
+        incremental de sesión debe persistir contra Mongo real, igual que el resto de la
+        memoria de sesión."""
+        first_repository = self._build_repository()
+        for i in range(3):
+            await first_repository.append_turn_async(self.session_id, f"mensaje {i}", f"respuesta {i}")
+
+        await first_repository.compact_session_async(
+            self.session_id, "el usuario habló de tres cosas distintas", keep_last_turns=1
+        )
+
+        second_repository = self._build_repository()
+        summary = await second_repository.get_context_summary_async(self.session_id)
+
+        self.assertEqual(summary["summary"], "el usuario habló de tres cosas distintas")
+        self.assertEqual(len(summary["turns"]), 1)
+        self.assertEqual(summary["turns"][0]["user_message"], "mensaje 2")
+
 
 if __name__ == "__main__":
     unittest.main()

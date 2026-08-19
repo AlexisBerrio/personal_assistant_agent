@@ -7,6 +7,8 @@ from src.assistant_personal.config import get_settings
 from src.assistant_personal.domain.repositories.session_memory_repository import SessionMemoryRepository
 from src.assistant_personal.infrastructure.persistence.mongo.client import get_db
 
+_MAX_STORED_TURNS = 20
+
 
 class MongoSessionRepository(SessionMemoryRepository):
     """Repositorio async para almacenar memoria de corto plazo por sesión en MongoDB.
@@ -39,6 +41,7 @@ class MongoSessionRepository(SessionMemoryRepository):
             "session_id": session.get("session_id", session_id),
             "turns": session.get("turns", []),
             "items": session.get("items", []),
+            "summary": session.get("summary", ""),
             "updated_at": session.get("updated_at"),
             "created_at": session.get("created_at"),
         }
@@ -60,7 +63,11 @@ class MongoSessionRepository(SessionMemoryRepository):
             "assistant_response": assistant_response,
             "timestamp": self._build_timestamp(),
         })
-        await self._upsert_session(session_id, {"turns": turns[-5:]})
+        # Tope de seguridad, no el presupuesto real: el resumen incremental de `ContextBuilder`
+        # recorta a 1 turno + resumen cada `summarize_every_n_turns` (default # 10) vía `compact_session_async`. 
+        # Este cap más alto (`_MAX_STORED_TURNS`) solo evita crecimiento sin límite si el 
+        # resumen falla repetidamente (ej. LLM caído varios turnos).
+        await self._upsert_session(session_id, {"turns": turns[-_MAX_STORED_TURNS:]})
 
     async def add_context_item_async(self, session_id: str, key: str, value: str) -> None:
         session = await self._get_session(session_id)
@@ -81,4 +88,12 @@ class MongoSessionRepository(SessionMemoryRepository):
         session = await self._get_session(session_id)
         turns = list(session.get("turns", []))[-max_turns:]
         items = list(session.get("items", []))[-max_items:]
-        return {"turns": turns, "items": items}
+        return {"turns": turns, "items": items, "summary": session.get("summary", "")}
+
+    async def compact_session_async(self, session_id: str, summary: str, keep_last_turns: int = 1) -> None:
+        """Fija el resumen incremental y recorta `turns` a los últimos `keep_last_turns` 
+        — los turnos ya incorporados al resumen se descartan de la lista activa."""
+        session = await self._get_session(session_id)
+        turns = list(session.get("turns", []))
+        kept_turns = turns[-keep_last_turns:] if keep_last_turns else []
+        await self._upsert_session(session_id, {"summary": summary, "turns": kept_turns})
