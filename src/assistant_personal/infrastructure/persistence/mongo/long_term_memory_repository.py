@@ -10,7 +10,7 @@ from src.assistant_personal.infrastructure.persistence.mongo.client import get_d
 
 
 class MongoLongTermMemoryRepository(LongTermMemoryRepository):
-    """Repositorio async para hechos de perfil de usuario en MongoDB (§A.9, ítem 2.5).
+    """Repositorio async para hechos de perfil de usuario en MongoDB.
 
     Async de extremo a extremo, mismo patrón que `MongoSessionRepository`.
     """
@@ -18,7 +18,7 @@ class MongoLongTermMemoryRepository(LongTermMemoryRepository):
     def __init__(self, db_name: str | None = None, get_db_fn: Any | None = None, tenant_id: str | None = None) -> None:
         self.db_name = db_name or get_settings().mongo_db_name
         self._get_db_fn = get_db_fn or get_db
-        # Fijo en "default" hasta que exista multi-tenant real (Fase 8) — ver §A.13, ítem 1.7.
+        # Fijo en "default" hasta que exista multi-tenant real.
         self.tenant_id = tenant_id or "default"
 
     def _build_timestamp(self) -> str:

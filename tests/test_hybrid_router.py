@@ -45,12 +45,23 @@ class FakeProfileExtractor:
         return UserProfileExtraction()
 
 
+class FakeSmallTalkResponder:
+    def __init__(self, reply: str = "respuesta de small talk"):
+        self.reply = reply
+        self.calls: list[tuple[str, str | None]] = []
+
+    async def answer_small_talk(self, text: str, context: str | None = None) -> str:
+        self.calls.append((text, context))
+        return self.reply
+
+
 class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
     async def test_fast_rule_resolves_create_task_with_explicit_syntax(self):
         router = ProductionIntentRouter(
             llm_client=FakeIntentClassifier(),
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
         )
 
         result = await router.route("nueva tarea: comprar leche")
@@ -74,6 +85,7 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
             llm_client=classifier,
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
         )
 
         result = await router.route("crear tarea comprar leche")
@@ -87,6 +99,7 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
             llm_client=FakeIntentClassifier(),
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
         )
 
         result = await router.route("/help")
@@ -102,6 +115,7 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
             llm_client=classifier,
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
         )
 
         result = await router.route("Hola")
@@ -118,6 +132,7 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
             llm_client=classifier,
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
         )
 
         result = await router.route("¡Hola!")
@@ -134,14 +149,56 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
             llm_client=classifier,
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
         )
 
         result = await router.route("adios")
 
         self.assertEqual(result.action, IntentAction.SMALL_TALK)
         self.assertEqual(result.source, "rule")
-        self.assertEqual(result.payload.get("reply"), "Hasta pronto.")
+        self.assertEqual(result.payload.get("reply"), "respuesta de small talk")
         self.assertEqual(len(classifier.calls), 0)
+
+    async def test_small_talk_reply_is_generated_not_static(self):
+        """Regresión: la respuesta de small_talk no puede ser un texto fijo repetido en cada
+        saludo — debe generarse (LLM) a partir de lo que el usuario dijo, para poder reaccionar
+        a contenido real (su nombre, una pregunta directa) en vez de romper la conversación."""
+        classifier = FakeIntentClassifier(
+            response=IntentClassification(route=ConversationRoute.ORCHESTRATOR, intent=IntentAction.LIST_TASKS, confidence=0.99)
+        )
+        responder = FakeSmallTalkResponder(reply="¡Hola de nuevo, Alexis!")
+        router = ProductionIntentRouter(
+            llm_client=classifier,
+            knowledge_responder=FakeKnowledgeResponder(),
+            profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=responder,
+        )
+
+        result = await router.route("hola")
+
+        self.assertEqual(result.payload.get("reply"), "¡Hola de nuevo, Alexis!")
+        self.assertEqual(responder.calls, [("hola", None)])
+
+    async def test_small_talk_reply_falls_back_safely_when_responder_fails(self):
+        classifier = FakeIntentClassifier(
+            response=IntentClassification(route=ConversationRoute.ORCHESTRATOR, intent=IntentAction.LIST_TASKS, confidence=0.99)
+        )
+
+        class FailingSmallTalkResponder:
+            async def answer_small_talk(self, text: str, context: str | None = None) -> str:
+                raise RuntimeError("small talk LLM down")
+
+        router = ProductionIntentRouter(
+            llm_client=classifier,
+            knowledge_responder=FakeKnowledgeResponder(),
+            profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FailingSmallTalkResponder(),
+        )
+
+        result = await router.route("hola")
+
+        self.assertEqual(result.action, IntentAction.SMALL_TALK)
+        self.assertTrue(result.payload.get("reply"))
 
     async def test_farewell_with_punctuation_is_handled_by_fast_rule(self):
         classifier = FakeIntentClassifier(
@@ -151,6 +208,7 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
             llm_client=classifier,
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
         )
 
         result = await router.route("¡Adiós!")
@@ -173,6 +231,7 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
             llm_client=classifier,
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
         )
 
         result = await router.route("Hola, crea una tarea para mañana")
@@ -195,6 +254,7 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
             llm_client=classifier,
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
         )
 
         result = await router.route("hola, crea esta tarea")
@@ -209,6 +269,7 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
             llm_client=classifier,
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
         )
 
         result = await router.route("hola, lista mis tareas")
@@ -223,6 +284,7 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
             llm_client=classifier,
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
         )
 
         result = await router.route("listar mis tareas pendientes")
@@ -245,6 +307,7 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
             llm_client=classifier,
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
         )
 
         result = await router.route("muéstrame las tareas de hoy")
@@ -262,6 +325,7 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
             llm_client=classifier,
             knowledge_responder=responder,
             profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
         )
 
         result = await router.route("¿Qué significa procrastinar?")
@@ -282,6 +346,7 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
             llm_client=classifier,
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
         )
 
         result = await router.route("hola, me llamo Alexis")
@@ -304,6 +369,7 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
             llm_client=classifier,
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
         )
 
         result = await router.route("ayúdame con algo ambiguo")
@@ -316,6 +382,7 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
             llm_client=FakeIntentClassifier(raise_error=True),
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
         )
 
         result = await router.route("Añade a mis tareas comprar leche mañana")
@@ -324,9 +391,9 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.source, "fallback")
 
     async def test_validation_error_uses_the_same_safe_fallback_as_any_other_failure(self):
-        """Regresión de docs/anexo_arquitectura_objetivo.md §A.8 (ítem 2.1): un `ValidationError`
-        real de Pydantic (salida del LLM que no cumple el esquema) debe caer en la misma política
-        de fallback que cualquier otro fallo del clasificador — una sola política, no dos."""
+        """Un `ValidationError` real de Pydantic (salida del LLM que no cumple el esquema) debe
+        caer en la misma política de fallback que cualquier otro fallo del clasificador — una
+        sola política, no dos."""
         from pydantic import ValidationError
 
         try:
@@ -338,6 +405,7 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
             llm_client=FakeIntentClassifier(raise_error=True, error=validation_error),
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
         )
 
         result = await router.route("mensaje cualquiera")
@@ -359,6 +427,7 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
             llm_client=classifier,
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
         )
 
         result = await router.route("Borra esa")
@@ -379,6 +448,7 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
             llm_client=classifier,
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
         )
 
         result = await router.route("crea una tarea para investigar mas sobre eso")
@@ -399,6 +469,7 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
             llm_client=classifier,
             knowledge_responder=FakeKnowledgeResponder(),
             profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
         )
 
         result = await router.route("Añade a mis tareas comprar leche mañana")

@@ -14,8 +14,7 @@ class Settings(BaseSettings):
     """Configuración central de la aplicación.
 
     Única fuente de verdad para variables de entorno (lee `.env` una sola vez).
-    Prohibido usar `os.getenv` fuera de este módulo — ver
-    docs/anexo_arquitectura_objetivo.md §A.4. Los secretos se tipan como
+    Prohibido usar `os.getenv` fuera de este módulo. Los secretos se tipan como
     `SecretStr` para que nunca aparezcan en logs ni en un `repr()` accidental.
 
     `.env` se ubica con una ruta absoluta anclada a la raíz del repo, no

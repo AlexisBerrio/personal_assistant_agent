@@ -59,8 +59,8 @@ jobs:
         # `service` desde app.py, que nunca lo expone a nivel de módulo) — ver
         # docs/anexo_arquitectura_objetivo.md, nota del DoD de Fase 0. Es deuda de MCP (Fase 3),
         # no de esta capa; excluirlos aquí evita que el CI quede rojo por algo fuera de alcance.
-        # `-m "not eval"` excluye test_eval_router.py (golden dataset del router, §A.10 ítem
-        # 2.3): hace llamadas reales a OpenAI con costo/latencia, y aquí solo hay una API key
+        # `-m "not eval"` excluye test_eval_router.py (golden dataset del router):
+        # hace llamadas reales a OpenAI con costo/latencia, y aquí solo hay una API key
         # dummy. El ítem 2.4 añade un job separado que corra `-m eval` con una key real.
         run: >
           uv run --python 3.12 pytest tests/

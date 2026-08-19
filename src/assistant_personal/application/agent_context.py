@@ -32,8 +32,8 @@ class InMemorySessionRepository:
     def append_turn(self, session_id: str, user_message: str, assistant_response: str) -> None:
         session = self._get_session(session_id)
         session["turns"].append({"user_message": user_message, "assistant_response": assistant_response})
-        # Mismo tope de seguridad que MongoSessionRepository — no el presupuesto real, ver
-        # ContextBuilder (§A.9, ítem 2.6).
+        # Mismo tope de seguridad que MongoSessionRepository — no el presupuesto real,
+        # ver ContextBuilder.
         session["turns"] = session["turns"][-_MAX_STORED_TURNS:]
 
     def get_context_summary(self, session_id: str, max_turns: int = 3, max_items: int = 5) -> dict[str, Any]:
@@ -162,8 +162,8 @@ class InMemoryLongTermMemoryRepository:
 
 
 class LongTermMemory:
-    """Memoria persistente con hechos de perfil del usuario, con presupuesto acotado (§A.9,
-    ítem 2.5) — sobrevive a un reinicio cuando el repositorio es `MongoLongTermMemoryRepository`.
+    """Memoria persistente con hechos de perfil del usuario, con presupuesto acotado —
+    sobrevive a un reinicio cuando el repositorio es `MongoLongTermMemoryRepository`.
 
     Mismo patrón de despacho que `ShortTermMemory`: métodos síncronos válidos solo con
     repositorios sin I/O real; `_async` para adaptadores con I/O real (ej. Mongo).
@@ -221,8 +221,8 @@ class AgentContext:
         self.long_term_memory = LongTermMemory(
             repository=long_term_repository or InMemoryLongTermMemoryRepository(), user_id=user_id
         )
-        # Sin `summarizer` por defecto: el resumen incremental (§A.9, ítem 2.6) requiere un LLM
-        # real, que `AgentContext` (capa de aplicación) no debe depender directamente — lo inyecta
+        # Sin `summarizer` por defecto: el resumen incremental requiere un LLM real, que
+        # `AgentContext` (capa de aplicación) no debe depender directamente — lo inyecta
         # `TaskOrchestrator`, que ya construye el resto de la infraestructura por defecto.
         self.context_builder = context_builder or ContextBuilder()
         self.last_context_tokens: int | None = None
@@ -250,9 +250,9 @@ class AgentContext:
         return self._format_context_summary(recent_items, recent_turns, recent_facts)
 
     async def build_context_summary_async(self, session_id: str = "default") -> str:
-        """Delega en `ContextBuilder` (§A.9, ítem 2.6): presupuesto de tokens medible en vez de
-        conteos fijos arbitrarios. `last_context_tokens` queda disponible para observabilidad
-        (mismo patrón que `last_llm_metadata` del router)."""
+        """Delega en `ContextBuilder`: presupuesto de tokens medible en vez de conteos fijos
+        arbitrarios. `last_context_tokens` queda disponible para observabilidad (mismo patrón
+        que `last_llm_metadata` del router)."""
         context_text, tokens = await self.context_builder.build_context_async(
             self.short_term_memory, self.long_term_memory, session_id
         )

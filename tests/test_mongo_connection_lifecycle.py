@@ -56,9 +56,7 @@ class SequentialCreateTaskRouter:
     "Requiere el Mongo local desechable de docker-compose.yml: ejecuta `docker compose up -d mongo`",
 )
 class MongoConnectionLifecycleTests(unittest.TestCase):
-    """Regresión de docs/anexo_arquitectura_objetivo.md §A.9 (ítem 0.12).
-
-    `MongoConnection` solía crear su índice con `asyncio.run` a nivel de módulo,
+    """`MongoConnection` solía crear su índice con `asyncio.run` a nivel de módulo,
     dejando el cliente de Motor ligado a un loop que se cerraba enseguida. Reusar
     ese cliente desde un loop distinto (el patrón real del CLI interactivo, que
     antes abría un `asyncio.run` por turno) fallaba con

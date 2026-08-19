@@ -35,9 +35,7 @@ def _local_mongo_is_reachable() -> bool:
     "Requiere el Mongo local desechable de docker-compose.yml: ejecuta `docker compose up -d mongo`",
 )
 class LongTermMemoryIntegrationTests(unittest.IsolatedAsyncioTestCase):
-    """Regresión de docs/anexo_arquitectura_objetivo.md §A.9 (ítem 2.5).
-
-    Contra un MongoDB real: escribe un hecho de perfil con una instancia de
+    """Contra un MongoDB real: escribe un hecho de perfil con una instancia de
     `MongoLongTermMemoryRepository` y lo lee con una segunda instancia — simula un reinicio de
     proceso, el mismo patrón que `test_session_memory_integration.py` usa para memoria de sesión.
     """

@@ -21,7 +21,7 @@ class MongoSessionRepository(SessionMemoryRepository):
     def __init__(self, db_name: str | None = None, get_db_fn: Any | None = None, tenant_id: str | None = None) -> None:
         self.db_name = db_name or get_settings().mongo_db_name
         self._get_db_fn = get_db_fn or get_db
-        # Fijo en "default" hasta que exista multi-tenant real (Fase 8) — ver §A.13, ítem 1.7.
+        # Fijo en "default" hasta que exista multi-tenant real.
         self.tenant_id = tenant_id or "default"
 
     def _build_timestamp(self) -> str:

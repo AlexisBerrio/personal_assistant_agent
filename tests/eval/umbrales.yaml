@@ -1,4 +1,4 @@
-# Umbrales de calidad para tests/eval/golden_router.jsonl (§A.10, ítem 2.3).
+# Umbrales de calidad para tests/eval/golden_router.jsonl.
 # Cada cambio de umbral debe justificarse en el commit que lo modifica: bajar un umbral sin
 # justificación es la forma más fácil de que la evaluación deje de proteger nada.
 

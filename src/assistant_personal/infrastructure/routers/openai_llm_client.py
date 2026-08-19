@@ -64,9 +64,9 @@ class _OpenAITextClient:
     async def _invoke_model(self, system_prompt: LoadedPrompt, user_prompt: str) -> str:
         """Invoca el modelo (async, vía `AsyncOpenAI`: no bloquea el event loop durante la
         llamada de red — ver domain/repositories/llm_client.py) y registra en
-        `self.last_call_metadata` los campos de observabilidad de §A.5 (`modelo`,
-        `tokens_entrada`, `tokens_salida`, `latencia_ms_llm`) más `prompt_version` (§A.8, ítem
-        2.2) para que el llamador (el router) los pueda leer después de cada invocación real."""
+        `self.last_call_metadata` los campos de observabilidad (`modelo`,
+        `tokens_entrada`, `tokens_salida`, `latencia_ms_llm`) más `prompt_version`
+        para que el llamador (el router) los pueda leer después de cada invocación real."""
         started_at = time.monotonic()
 
         if getattr(self, "_use_responses_api", True) and hasattr(self.client, "responses"):
@@ -174,7 +174,7 @@ class OpenAIIntentClassifier(_OpenAITextClient):
         return self._build_classification(parsed)
 
     def _build_classification(self, parsed: dict[str, Any]) -> IntentClassification:
-        """Valida la salida cruda del LLM directamente con Pydantic (§A.8, ítem 2.1).
+        """Valida la salida cruda del LLM directamente con Pydantic.
 
         Única tolerancia deliberada: `payload: null` se normaliza a `{}` (un capricho común
         del LLM que el tipo `dict[str, Any]` no aceptaría tal cual). Todo lo demás —enums
@@ -202,6 +202,17 @@ class OpenAIGeneralKnowledgeResponder(_OpenAITextClient):
         return answer.strip()
 
 
+class OpenAISmallTalkResponder(_OpenAITextClient):
+    """Genera la respuesta conversacional a saludos/presentaciones/agradecimientos/despedidas —
+    texto libre."""
+
+    async def answer_small_talk(self, text: str, context: str | None = None) -> str:
+        self._ensure_ready()
+        system_prompt = load_prompt("router/small_talk_reply")
+        reply = await self._invoke_model(system_prompt, self._build_user_prompt(text, context))
+        return reply.strip()
+
+
 class OpenAIProfileFactExtractor(_OpenAITextClient):
     """Extractor estructurado de hechos de perfil para memoria de corto plazo."""
 
@@ -216,7 +227,7 @@ class OpenAIProfileFactExtractor(_OpenAITextClient):
 
 
 class OpenAISessionSummarizer(_OpenAITextClient):
-    """Resumen incremental de sesión para `ContextBuilder` (§A.9, ítem 2.6)."""
+    """Resumen incremental de sesión para `ContextBuilder`."""
 
     def _build_summary_user_prompt(self, previous_summary: str, turns: list[tuple[str, str]]) -> str:
         turns_text = "\n".join(f"Usuario: {user_msg}\nAsistente: {assistant_msg}" for user_msg, assistant_msg in turns)
@@ -238,6 +249,7 @@ class OpenAILLMRouterClient:
     def __init__(self, model: str | None = None, api_key: str | None = None):
         self.intent_classifier = OpenAIIntentClassifier(model=model, api_key=api_key)
         self.knowledge_responder = OpenAIGeneralKnowledgeResponder(model=model, api_key=api_key)
+        self.small_talk_responder = OpenAISmallTalkResponder(model=model, api_key=api_key)
         self.profile_extractor = OpenAIProfileFactExtractor(model=model, api_key=api_key)
         self.session_summarizer = OpenAISessionSummarizer(model=model, api_key=api_key)
 
@@ -246,6 +258,9 @@ class OpenAILLMRouterClient:
 
     async def answer_general_knowledge(self, query: str, context: str | None = None) -> str:
         return await self.knowledge_responder.answer_general_knowledge(query, context=context)
+
+    async def answer_small_talk(self, text: str, context: str | None = None) -> str:
+        return await self.small_talk_responder.answer_small_talk(text, context=context)
 
     async def extract_profile_facts(self, text: str, context: str | None = None) -> UserProfileExtraction:
         return await self.profile_extractor.extract_profile_facts(text, context=context)

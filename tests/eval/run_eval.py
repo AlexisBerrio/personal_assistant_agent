@@ -1,4 +1,4 @@
-"""Evaluación del router híbrido contra el golden dataset (§A.10, ítem 2.3).
+"""Evaluación del router híbrido contra el golden dataset.
 
 Ejecuta `ProductionIntentRouter.route()` con el clasificador OpenAI real sobre cada caso de
 `golden_router.jsonl` y compara las métricas resultantes contra `umbrales.yaml`. Requiere

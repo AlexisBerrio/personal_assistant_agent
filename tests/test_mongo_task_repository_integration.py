@@ -33,9 +33,7 @@ def _local_mongo_is_reachable() -> bool:
     "Requiere el Mongo local desechable de docker-compose.yml: ejecuta `docker compose up -d mongo`",
 )
 class MongoTaskRepositoryIntegrationTests(unittest.IsolatedAsyncioTestCase):
-    """Regresión de docs/anexo_arquitectura_objetivo.md §A.12 (ítem 1.4).
-
-    `Este test ejercita el ciclo completo de una tarea contra el Mongo local desechable,
+    """Este test ejercita el ciclo completo de una tarea contra el Mongo local desechable,
     nunca contra Atlas.`
     """
 

@@ -40,7 +40,7 @@ class TaskOrchestrator:
         self.max_retries = max_retries
         self.session_repository = session_repository
         self.session_id = session_id or f"session-{uuid.uuid4()}"
-        # Fijo en "default" hasta que exista multi-tenant real (Fase 8) — ver §A.13, ítem 1.7.
+        # Fijo en "default" hasta que exista multi-tenant real.
         self.tenant_id = tenant_id or "default"
         # Fijo en "default" hasta que exista identidad de usuario real (auth, Fase 6/8) — mismo
         # criterio que `tenant_id`.
@@ -50,7 +50,7 @@ class TaskOrchestrator:
             short_term_repository=self.session_repository,
             long_term_repository=long_term_repository,
             user_id=self.user_id,
-            # Resumen incremental de sesión real por defecto (§A.9, ítem 2.6) — mismo criterio
+            # Resumen incremental de sesión real por defecto — mismo criterio
             # que `self.router` arriba: se construye con OpenAI real salvo que el llamador
             # inyecte otra cosa (tests inyectan un `ContextBuilder()` sin summarizer).
             context_builder=context_builder or ContextBuilder(summarizer=OpenAISessionSummarizer()),
@@ -61,7 +61,7 @@ class TaskOrchestrator:
 
     async def handle_message_async(self, message: str) -> dict[str, Any]:
         started_at = time.monotonic()
-        # Cada turno es su propia "interacción" a efectos de observabilidad (ver §A.5): un
+        # Cada turno es su propia "interacción" a efectos de observabilidad: un
         # request_id nuevo por turno, no reutilizado entre turnos del mismo CLI interactivo.
         # Si en el futuro esto se invoca dentro de una petición FastAPI ya instrumentada, esto
         # sobreescribe el request_id de la petición para los logs de la interacción — aceptable
@@ -89,7 +89,7 @@ class TaskOrchestrator:
             }
 
         await self.context.short_term_memory.add_async("user_message", message, session_id=self.session_id)
-        # Resumen incremental de sesión (§A.9, ítem 2.6): antes de armar el contexto de este
+        # Resumen incremental de sesión: antes de armar el contexto de este
         # turno, comprime los turnos acumulados de turnos anteriores si ya llegaron al umbral.
         await self.context.maybe_summarize_session_async(session_id=self.session_id)
         context_summary = await self.context.build_context_summary_async(session_id=self.session_id)
@@ -169,17 +169,17 @@ class TaskOrchestrator:
         llm_metadata: dict[str, Any] | None,
         resultado: str,
     ) -> None:
-        """Emite el log de cierre de una interacción con los 12 campos mínimos de §A.5, más
-        `contexto_tokens` (§A.9, ítem 2.6).
+        """Emite el log de cierre de una interacción con sus campos mínimos, incluido
+        `contexto_tokens`.
 
         Con estos campos se puede calcular coste por interacción y tasa de `clarify` sin
-        instrumentación adicional. `tenant_id` queda fijo en "default" hasta el ítem 1.7
-        (multi-tenant real); `modelo`/`tokens_*`/`latencia_ms_llm` quedan en None cuando la
-        decisión se resolvió por regla y nunca se invocó al LLM. `prompt_version` (§A.8, ítem
-        2.2) identifica qué versión del prompt de sistema generó la decisión, para poder
-        filtrar estas métricas por versión cuando se cambie la redacción de un prompt.
-        `contexto_tokens` es el presupuesto medible que exige el DoD de §A.9: cuántos tokens
-        (estimados) ocupó el contexto de sesión/perfil que se le mandó al LLM en este turno.
+        instrumentación adicional. `tenant_id` queda fijo en "default" hasta que exista
+        multi-tenant real; `modelo`/`tokens_*`/`latencia_ms_llm` quedan en None cuando la
+        decisión se resolvió por regla y nunca se invocó al LLM. `prompt_version` identifica
+        qué versión del prompt de sistema generó la decisión, para poder filtrar estas métricas
+        por versión cuando se cambie la redacción de un prompt. `contexto_tokens` es el
+        presupuesto medible: cuántos tokens (estimados) ocupó el contexto de sesión/perfil que
+        se le mandó al LLM en este turno.
         """
         metadata = llm_metadata or {}
         logger.info(
@@ -201,9 +201,9 @@ class TaskOrchestrator:
         )
 
     async def _maybe_await(self, value: Any) -> Any:
-        """Soporta routers síncronos y async: el port `LLMClient` (§A.1, ítem 1.6) es async de
-        punta a punta en producción, pero muchos dobles de test siguen siendo síncronos —
-        mismo patrón de despacho que `TaskService._invoke_repository_async`."""
+        """Soporta routers síncronos y async: el port `LLMClient` es async de punta a punta en
+        producción, pero muchos dobles de test siguen siendo síncronos — mismo patrón de
+        despacho que `TaskService._invoke_repository_async`."""
         if inspect.isawaitable(value):
             return await value
         return value
@@ -241,7 +241,7 @@ class TaskOrchestrator:
         return facts
 
     async def _persist_profile_facts(self, facts: list[dict[str, Any]]) -> None:
-        """Persiste en memoria de largo plazo (§A.9, ítem 2.5) — no en la de sesión, que es de
+        """Persiste en memoria de largo plazo — no en la de sesión, que es de
         corta vida y no es el almacén correcto para hechos de perfil estables. Solo se
         persisten los hechos cuya confianza supera `profile_confidence_threshold`: escribir todo
         lo que el usuario dice envenena el contexto de turnos futuros."""

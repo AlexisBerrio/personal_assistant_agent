@@ -75,9 +75,9 @@ class FakeSessionCollection:
 
 class MultiTurnContextTests(unittest.IsolatedAsyncioTestCase):
     async def test_context_accumulates_previous_turns_in_repository(self):
-        """Regresión del bug de bridging sync/async (docs/anexo §A.9): corre dentro
-        de un event loop real, igual que el camino de FastAPI, para asegurar que la
-        memoria de sesión persiste en vez de fallar en silencio."""
+        """Regresión del bug de bridging sync/async: corre dentro de un event loop real,
+        igual que el camino de FastAPI, para asegurar que la memoria de sesión persiste
+        en vez de fallar en silencio."""
         service = FakeService()
         fake_collection = FakeSessionCollection()
         fake_db = type("FakeDb", (), {"conversation_sessions": fake_collection})()

@@ -14,6 +14,7 @@ from src.assistant_personal.infrastructure.routers.openai_llm_client import (
     OpenAIGeneralKnowledgeResponder,
     OpenAIIntentClassifier,
     OpenAIProfileFactExtractor,
+    OpenAISmallTalkResponder,
 )
 
 logger = get_logger(__name__)
@@ -59,8 +60,8 @@ EXPLICIT_CREATE_TASK_PREFIXES = ("crear tarea:", "nueva tarea:")
 class IntentClassifier(Protocol):
     """Contrato de clasificación de intención y ruta de conversación.
 
-    Subconjunto async del port `LLMClient` (domain/repositories/llm_client.py) — ver §A.1,
-    ítem 1.6: async para no bloquear el event loop durante la llamada de red al LLM.
+    Subconjunto async del port `LLMClient` (domain/repositories/llm_client.py) — async
+    para no bloquear el event loop durante la llamada de red al LLM.
     """
 
     async def classify_intent(self, text: str, context: str | None = None) -> IntentClassification:
@@ -81,6 +82,13 @@ class ProfileFactExtractor(Protocol):
         ...
 
 
+class SmallTalkResponder(Protocol):
+    """Contrato para generar la respuesta a small talk. Ver `IntentClassifier`."""
+
+    async def answer_small_talk(self, text: str, context: str | None = None) -> str:
+        ...
+
+
 class ProductionIntentRouter:
     """Router híbrido para producción: reglas rápidas + LLM estructurado + fallback seguro."""
 
@@ -89,11 +97,13 @@ class ProductionIntentRouter:
         llm_client: IntentClassifier | None = None,
         knowledge_responder: GeneralKnowledgeResponder | None = None,
         profile_extractor: ProfileFactExtractor | None = None,
+        small_talk_responder: SmallTalkResponder | None = None,
         confidence_threshold: float = 0.7,
     ):
         self._intent_classifier = llm_client or OpenAIIntentClassifier()
         self._knowledge_responder = knowledge_responder or OpenAIGeneralKnowledgeResponder()
         self._profile_extractor = profile_extractor or OpenAIProfileFactExtractor()
+        self._small_talk_responder = small_talk_responder or OpenAISmallTalkResponder()
         self._confidence_threshold = confidence_threshold
         self.last_llm_metadata: dict[str, Any] | None = None
 
@@ -113,6 +123,15 @@ class ProductionIntentRouter:
         fast_decision = self._check_fast_rules(clean_text)
         if fast_decision:
             logger.info("router_intencion_resuelta_por_regla", accion=fast_decision.action)
+            if fast_decision.action == IntentAction.SMALL_TALK and "reply" not in fast_decision.payload:
+                reply = await self._generate_small_talk_reply(clean_text, context)
+                fast_decision = self._build_decision(
+                    action=IntentAction.SMALL_TALK,
+                    payload={**fast_decision.payload, "reply": reply},
+                    confidence=fast_decision.confidence,
+                    source=fast_decision.source,
+                    reasoning=fast_decision.reasoning,
+                )
             return fast_decision
 
         try:
@@ -148,9 +167,10 @@ class ProductionIntentRouter:
             )
 
         if classification.route == ConversationRoute.SMALL_TALK:
+            reply = await self._generate_small_talk_reply(clean_text, context)
             return self._build_decision(
                 action=IntentAction.SMALL_TALK,
-                payload={"reply": "¡Hola! Un gusto saludarte. ¿En qué te puedo ayudar?"},
+                payload={"reply": reply},
                 confidence=classification.confidence,
                 source="llm",
                 reasoning=classification.reasoning or "Saludo o charla casual detectada por el clasificador.",
@@ -183,6 +203,13 @@ class ProductionIntentRouter:
             reasoning="Ninguna regla coincidió y el LLM falló o devolvió baja confianza.",
         )
 
+    async def _generate_small_talk_reply(self, text: str, context: str | None) -> str:
+        try:
+            return await self._small_talk_responder.answer_small_talk(text, context=context)
+        except Exception as exc:
+            logger.warning("router_small_talk_llm_fallo", error=str(exc))
+            return "¡Hola! ¿En qué te puedo ayudar?"
+
     def _build_decision(
         self,
         *,
@@ -211,18 +238,12 @@ class ProductionIntentRouter:
                 source="rule",
             )
 
-        if self._is_pure_small_talk(text):
+        if self._is_pure_small_talk(text) or self._is_pure_farewell(text):
+            # Sin "reply" en el payload: `route()` genera la respuesta con el LLM antes de
+            # devolver la decisión.
             return IntentDecision(
                 action=IntentAction.SMALL_TALK,
-                payload={"text": text, "reply": "¡Hola! Estoy bien, gracias. ¿En qué te puedo ayudar hoy?"},
-                confidence=0.95,
-                source="rule",
-            )
-
-        if self._is_pure_farewell(text):
-            return IntentDecision(
-                action=IntentAction.SMALL_TALK,
-                payload={"text": text, "reply": "Hasta pronto."},
+                payload={"text": text},
                 confidence=0.95,
                 source="rule",
             )

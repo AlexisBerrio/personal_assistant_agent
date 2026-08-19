@@ -7,7 +7,7 @@ from src.assistant_personal.domain.entities import UserProfileFact
 
 class LongTermMemoryRepository(Protocol):
     """Puerto del dominio para almacenar y recuperar hechos de perfil de usuario que deben
-    sobrevivir a un reinicio (§A.9, ítem 2.5) — preferencias, hechos estables, no la memoria de
+    sobrevivir a un reinicio — preferencias, hechos estables, no la memoria de
     sesión (`SessionMemoryRepository`), que es de corta vida.
 
     Mismo contrato dual sync/async que `SessionMemoryRepository`: los adaptadores con I/O real

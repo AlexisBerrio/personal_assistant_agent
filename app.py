@@ -84,7 +84,7 @@ async def handle_unexpected_exception(request: Request, exc: Exception) -> JSONR
     Sin esto, un error inesperado (ej. de pymongo, del SDK de OpenAI, un
     AttributeError) se propagaba sin request_id y sin quedar registrado: el
     mismo patrón de fallo silencioso que ya se corrigió para la memoria de
-    sesión (docs/anexo_arquitectura_objetivo.md §A.9), aplicado aquí a nivel de API.
+    sesión, aplicado aquí a nivel de API.
     """
     request_id = getattr(request.state, "request_id", "") or "unknown"
     logger.error("excepcion_no_controlada", exc_info=exc)

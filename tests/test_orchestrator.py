@@ -293,9 +293,9 @@ class TaskOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(turns[1][0], "crear una tarea para cocinar")
 
     async def test_session_repository_persists_turns_and_context(self):
-        """Regresión del bug de bridging sync/async (docs/anexo §A.9): corre dentro
-        de un event loop real para asegurar que el repositorio nunca devuelve None
-        en silencio cuando ya hay un loop activo (el caso real de FastAPI)."""
+        """Regresión del bug de bridging sync/async: corre dentro de un event loop real
+        para asegurar que el repositorio nunca devuelve None en silencio cuando ya hay
+        un loop activo (el caso real de FastAPI)."""
         fake_collection = FakeSessionCollection()
         fake_db = type("FakeDb", (), {"conversation_sessions": fake_collection})()
         repository = MongoSessionRepository(db_name="test_db", get_db_fn=_make_async_get_db(fake_db))
@@ -349,15 +349,14 @@ class TaskOrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(response["success"])
         self.assertTrue(router.extract_calls)
-        # Los hechos de perfil se persisten en memoria de largo plazo (§A.9, ítem 2.5), no en la
-        # de sesión: sobreviven a un reinicio, la de sesión es de corta vida.
+        # Los hechos de perfil se persisten en memoria de largo plazo, no en la de sesión:
+        # sobreviven a un reinicio, la de sesión es de corta vida.
         long_term_facts = await orchestrator.context.long_term_memory.get_facts_async()
         self.assertEqual(long_term_facts.get("color_favorito"), "Azul")
 
     async def test_low_confidence_profile_facts_are_not_persisted(self):
-        """Regresión de docs/anexo_arquitectura_objetivo.md §A.9 (ítem 2.5): escribir todo lo que
-        el usuario dice envenena el contexto. Un hecho con confianza por debajo del umbral
-        (default 0.7) no debe llegar a la memoria de largo plazo."""
+        """Escribir todo lo que el usuario dice envenena el contexto. Un hecho con confianza
+        por debajo del umbral (default 0.7) no debe llegar a la memoria de largo plazo."""
         orchestrator = TaskOrchestrator(
             service=FakeService(), router=FakeLowConfidenceProfileRouter(), session_id="low-confidence-session"
         )
@@ -369,8 +368,7 @@ class TaskOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("color_favorito", long_term_facts)
 
     async def test_interaction_log_includes_measurable_context_tokens(self):
-        """Regresión de docs/anexo_arquitectura_objetivo.md §A.9 (ítem 2.6): el DoD exige que el
-        presupuesto de contexto sea "medible y registrado" — verifica que el campo
+        """El presupuesto de contexto debe ser "medible y registrado" — verifica que el campo
         `contexto_tokens` llega al log estructurado de cierre de interacción."""
         orchestrator = TaskOrchestrator(
             service=FakeService(), router=FakeStructuredProfileRouter(), session_id="log-tokens-session"

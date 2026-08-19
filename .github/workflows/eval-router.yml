@@ -1,6 +1,6 @@
 name: eval-router
 
-# Job separado del `ci.yml` principal (§A.10/A.12, ítem 2.4): hace llamadas reales a OpenAI
+# Job separado del `ci.yml` principal: hace llamadas reales a OpenAI
 # (costo + latencia), así que solo corre el eval de verdad cuando cambia algo que puede afectar
 # la calidad de clasificación del router.
 #

@@ -71,18 +71,18 @@ class MongoConnection:
     async def _ensure_task_indexes(self) -> None:
         """Crea índices de negocio necesarios para tareas y sesiones.
 
-        Compuestos con `tenant_id` (§A.13, ítem 1.7): aunque hoy solo existe el tenant
+        Compuestos con `tenant_id`: aunque hoy solo existe el tenant
         `"default"`, modelar la unicidad como `{tenant_id, task_id}` desde ahora evita una
         migración de índices el día que haya más de un tenant real.
         """
         db = self.client[self._db_name]
         await db.personal_tasks.create_index([("tenant_id", 1), ("task_id", 1)], unique=True)
         await db.conversation_sessions.create_index([("tenant_id", 1), ("session_id", 1)], unique=True)
-        # Índice de texto para el port DocumentSearchRepository (§A.10, ítem 1.8): precondición de
+        # Índice de texto para el port DocumentSearchRepository: precondición de
         # bajo costo antes de considerar RAG vectorial. Un único índice de texto por colección es
         # el límite de Mongo, por eso title y description comparten este.
         await db.personal_tasks.create_index([("title", "text"), ("description", "text")])
-        # Memoria de largo plazo (§A.9, ítem 2.5): un hecho por `key` y usuario — un upsert
+        # Memoria de largo plazo: un hecho por `key` y usuario — un upsert
         # repetido actualiza en vez de duplicar.
         await db.user_profile_facts.create_index([("tenant_id", 1), ("user_id", 1), ("key", 1)], unique=True)
 

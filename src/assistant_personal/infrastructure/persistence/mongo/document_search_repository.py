@@ -10,7 +10,7 @@ class MongoTextSearchRepository:
     """Adaptador del port `DocumentSearchRepository` (domain/repositories/) usando el índice
     de texto (`$text`) de MongoDB sobre `title`/`description` de `personal_tasks`.
 
-    Primer adaptador no vectorial exigido por §A.10 antes de considerar RAG. El índice de
+    Primer adaptador no vectorial antes de considerar RAG. El índice de
     texto se crea en `client.py._ensure_task_indexes`, igual que los demás índices de negocio.
     """
 

@@ -35,9 +35,7 @@ def _local_mongo_is_reachable() -> bool:
     "Requiere el Mongo local desechable de docker-compose.yml: ejecuta `docker compose up -d mongo`",
 )
 class MongoTextSearchIntegrationTests(unittest.IsolatedAsyncioTestCase):
-    """Regresión de docs/anexo_arquitectura_objetivo.md §A.10 (ítem 1.8).
-
-    Verifica el primer adaptador (no vectorial) del port `DocumentSearchRepository` contra el
+    """Verifica el primer adaptador (no vectorial) del port `DocumentSearchRepository` contra el
     índice de texto real de Mongo, y que respeta el filtro de `tenant_id` (nunca mezclar
     resultados de tenants distintos, ni siquiera con el único tenant `"default"` de hoy).
     """

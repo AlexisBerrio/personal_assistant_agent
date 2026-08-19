@@ -1,9 +1,9 @@
-"""Wrapper de pytest para tests/eval/run_eval.py (§A.10, ítem 2.3).
+"""Wrapper de pytest para tests/eval/run_eval.py.
 
 Marcado `eval`: hace llamadas reales a OpenAI (costo + latencia). El comando principal de
-`.github/workflows/ci.yml` excluye la marca `eval` con `-m "not eval"`; el ítem 2.4 añadirá un
-job dedicado que corra justo `pytest tests/ -m eval` con una key real. `skipUnless` es un
-segundo cinturón para correr el archivo suelto en local sin filtrar por marca.
+`.github/workflows/ci.yml` excluye la marca `eval` con `-m "not eval"`; `.github/workflows/eval-router.yml`
+corre justo `pytest tests/ -m eval` con una key real. `skipUnless` es un segundo cinturón para
+correr el archivo suelto en local sin filtrar por marca.
 """
 
 from __future__ import annotations

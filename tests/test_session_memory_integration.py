@@ -34,14 +34,12 @@ def _local_mongo_is_reachable() -> bool:
     "Requiere el Mongo local desechable de docker-compose.yml: ejecuta `docker compose up -d mongo`",
 )
 class SessionMemoryIntegrationTests(unittest.IsolatedAsyncioTestCase):
-    """Regresión de docs/anexo_arquitectura_objetivo.md §A.9 (ítem 0.9).
-
-    Contra un MongoDB real (el contenedor desechable de `docker-compose.yml`,
+    """Contra un MongoDB real (el contenedor desechable de `docker-compose.yml`,
     nunca el Atlas de `.env`): escribe un turno "en una petición" y lo lee "en
     otra" (una segunda instancia de `MongoSessionRepository`, el mismo patrón
     que tendría cada request de FastAPI reutilizando el cliente singleton de
     Mongo). Es la única clase de test que detecta de verdad el bug de bridging
-    sync/async que se corrigió en §A.9 — un mock nunca lo habría hecho, porque
+    sync/async — un mock nunca lo habría hecho, porque
     nunca devuelve una coroutine real dentro de un event loop activo.
     """
 
@@ -85,9 +83,8 @@ class SessionMemoryIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_compact_session_persists_summary_and_trims_turns(self) -> None:
-        """Regresión de docs/anexo_arquitectura_objetivo.md §A.9 (ítem 2.6): el resumen
-        incremental de sesión debe persistir contra Mongo real, igual que el resto de la
-        memoria de sesión."""
+        """El resumen incremental de sesión debe persistir contra Mongo real, igual que
+        el resto de la memoria de sesión."""
         first_repository = self._build_repository()
         for i in range(3):
             await first_repository.append_turn_async(self.session_id, f"mensaje {i}", f"respuesta {i}")

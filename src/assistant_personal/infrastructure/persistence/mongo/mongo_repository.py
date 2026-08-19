@@ -14,7 +14,7 @@ class MongoTaskRepository:
     def __init__(self, db_name: str | None = None, get_db_fn: Any | None = None, tenant_id: str | None = None) -> None:
         self.db_name = db_name or get_settings().mongo_db_name
         self._get_db_fn = get_db_fn or get_db
-        # Fijo en "default" hasta que exista multi-tenant real (Fase 8) — ver §A.13, ítem 1.7.
+        # Fijo en "default" hasta que exista multi-tenant real.
         self.tenant_id = tenant_id or "default"
 
     async def _get_db(self) -> Any:
@@ -94,7 +94,7 @@ class MongoTaskRepository:
         payload = {**payload, "tenant_id": self.tenant_id}
         # `insert_one` muta su argumento en el sitio, inyectándole `_id` (un `ObjectId`, no
         # serializable a JSON). Se le pasa una copia para que el `payload` que devolvemos se
-        # quede limpio — bug real detectado por tests/test_api_e2e.py (§A.12, ítem 1.9): el
+        # quede limpio — bug real detectado por tests/test_api_e2e.py: el
         # primer test que serializa esta respuesta de verdad a través de FastAPI.
         result = await self._maybe_await(db.personal_tasks.insert_one(dict(payload)))
         return {**payload, "inserted_id": str(result.inserted_id)}

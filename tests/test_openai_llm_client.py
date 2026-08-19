@@ -7,6 +7,7 @@ from src.assistant_personal.domain.entities import ConversationRoute, IntentActi
 from src.assistant_personal.infrastructure.routers.openai_llm_client import (
     OpenAIGeneralKnowledgeResponder,
     OpenAIIntentClassifier,
+    OpenAISmallTalkResponder,
 )
 
 
@@ -149,6 +150,29 @@ class OpenAIGeneralKnowledgeResponderTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("response_format", client.client.completions.received_kwargs)
 
 
+class OpenAISmallTalkResponderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_answer_small_talk_generates_reply_from_the_real_message(self):
+        """La respuesta de small_talk no puede ser un texto fijo: se genera con el LLM a partir
+        de lo que el usuario realmente dijo, igual que general_knowledge."""
+        client = OpenAISmallTalkResponder.__new__(OpenAISmallTalkResponder)
+        client.model = "gpt-test"
+        client.client = FakeOpenAIClient()
+
+        reply = await client.answer_small_talk("hola, me llamo Alexis")
+
+        self.assertTrue(reply)
+
+    async def test_answer_small_talk_does_not_request_json_mode(self):
+        """Igual que general_knowledge: su prompt pide texto libre conversacional, no JSON."""
+        client = OpenAISmallTalkResponder.__new__(OpenAISmallTalkResponder)
+        client.model = "gpt-test"
+        client.client = RecordingOpenAIClient()
+
+        await client.answer_small_talk("hola, me llamo Alexis")
+
+        self.assertNotIn("response_format", client.client.completions.received_kwargs)
+
+
 class OpenAIIntentClassifierTests(unittest.IsolatedAsyncioTestCase):
     async def test_classify_intent_uses_chat_completions_when_responses_api_is_unavailable(self):
         client = OpenAIIntentClassifier.__new__(OpenAIIntentClassifier)
@@ -164,8 +188,7 @@ class OpenAIIntentClassifierTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_classify_intent_requests_strict_json_mode(self):
         """Defensa en profundidad tras varios hallazgos de salida mal formada del LLM (route/intent
-        inventados, confidence null — docs/anexo_arquitectura_objetivo.md §A.8): activa
-        response_format=json_object en la llamada real a la API."""
+        inventados, confidence null): activa response_format=json_object en la llamada real a la API."""
         client = OpenAIIntentClassifier.__new__(OpenAIIntentClassifier)
         client.model = "gpt-test"
         client.client = RecordingOpenAIClient()
@@ -204,9 +227,8 @@ class OpenAIIntentClassifierTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.intent, IntentAction.LIST_TASKS)
 
     async def test_classify_intent_raises_validation_error_on_unknown_route(self):
-        """Regresión de docs/anexo_arquitectura_objetivo.md §A.8 (ítem 2.1): la salida cruda del
-        LLM se valida con Pydantic, no con casteos manuales — un `route` fuera del enum debe
-        levantar, no degradarse en silencio."""
+        """La salida cruda del LLM se valida con Pydantic, no con casteos manuales — un `route`
+        fuera del enum debe levantar, no degradarse en silencio."""
         client = OpenAIIntentClassifier.__new__(OpenAIIntentClassifier)
         client.model = "gpt-test"
         client.client = FakeUnknownRouteOpenAIClient()

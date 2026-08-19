@@ -35,16 +35,14 @@ def _local_mongo_is_reachable() -> bool:
     "Requiere el Mongo local desechable de docker-compose.yml: ejecuta `docker compose up -d mongo`",
 )
 class ApiEndToEndTests(unittest.IsolatedAsyncioTestCase):
-    """Regresión de docs/anexo_arquitectura_objetivo.md §A.12 (ítem 1.9).
-
-    Ejercita `app.py` completo por HTTP con `httpx.AsyncClient` (no `TestClient` síncrono):
-    middleware de `request_id`, exception handlers de 0.11 y el flujo CRUD real contra Mongo.
+    """Ejercita `app.py` completo por HTTP con `httpx.AsyncClient` (no `TestClient` síncrono):
+    middleware de `request_id`, exception handlers y el flujo CRUD real contra Mongo.
 
     Crítico: `httpx.ASGITransport` NUNCA dispara el `lifespan` de FastAPI, así que
     `get_service` caería a su fallback (`TaskService()` sin argumentos → Mongo de `.env`,
-    potencialmente Atlas de producción — el mismo incidente de §A.9, ítem 0.13). Por eso este
-    test sustituye `app.dependency_overrides[get_service]` por un servicio explícitamente
-    apuntado al Mongo local desechable, antes de enviar una sola petición.
+    potencialmente Atlas de producción). Por eso este test sustituye
+    `app.dependency_overrides[get_service]` por un servicio explícitamente apuntado al Mongo
+    local desechable, antes de enviar una sola petición.
     """
 
     db_name = "assistant_personal_test"
