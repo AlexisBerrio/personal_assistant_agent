@@ -24,7 +24,7 @@ class PromptLoaderTests(unittest.TestCase):
         extract_profile_facts = load_prompt("router/extract_profile_facts")
 
         self.assertEqual(general_knowledge.identifier, "general_knowledge:v1.0.0")
-        self.assertEqual(extract_profile_facts.identifier, "extract_profile_facts:v1.0.0")
+        self.assertEqual(extract_profile_facts.identifier, "extract_profile_facts:v1.1.0")
 
     def test_raises_when_no_prompt_file_exists_for_the_given_name(self) -> None:
         with self.assertRaises(FileNotFoundError):
