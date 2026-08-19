@@ -1,18 +1,22 @@
 # Arquitectura de Soluciones y Arquitectura Técnica
 
 **Proyecto:** `personal_assistant_agent`
-**Versión del documento:** 1.0
+**Versión del documento:** 2.0 — resincronizado con la implementación real (2026-08-19)
 **Ámbito:** describe la solución objetivo consolidada (Fases 0–4 como línea base implementable, con puntos
-de extensión marcados para Fases 5–8). Complementa el Anexo A (*Arquitectura objetivo industrializada*),
-que aporta el roadmap y la clasificación de propuestas; este documento aporta la **especificación**:
-componentes, contratos, modelo de datos, estructura de código y decisiones registradas.
+de extensión marcados para Fases 5–8). Complementa el Anexo A (`docs/anexo_arquitectura_objetivo.md`), que
+es la **fuente de verdad operativa**: lleva el roadmap fase a fase, el estado de cada ítem (hecho/pendiente)
+y la evidencia de cada cambio. Este documento describe **cómo está construido el sistema hoy** y hacia dónde
+apunta — cuando un componente todavía no existe, se marca explícitamente como *(objetivo, no implementado)*
+en vez de describirlo como si ya existiera.
 
 **Cómo se relacionan los dos documentos**
 
 | Documento | Responde a |
 | --- | --- |
-| Anexo A | ¿Qué adoptar, en qué fase, y con qué criterio? |
-| Este documento | ¿Cómo está construido el sistema y cuáles son sus contratos? |
+| Anexo A (`anexo_arquitectura_objetivo.md`) | ¿Qué falta, en qué fase, con qué evidencia de que está hecho? |
+| Este documento | ¿Cómo está construido el sistema y cuáles son sus contratos, hoy? |
+
+Si algo diverge entre los dos, el Anexo A gana — es el que se actualiza en cada sesión de trabajo.
 
 ---
 
@@ -20,36 +24,49 @@ componentes, contratos, modelo de datos, estructura de código y decisiones regi
 
 ## 1. Objetivo y alcance de la solución
 
-**Problema que resuelve.** Gestionar tareas personales por dos vías equivalentes: una API REST para
-integraciones y un flujo conversacional en lenguaje natural, con memoria entre turnos, preparado para
-canales de voz y clientes de agentes.
+**Problema que resuelve.** Gestionar tareas personales por varios canales equivalentes: hoy una API REST
+para integraciones y un CLI conversacional; a futuro un frontend propio y un canal de voz (Alexa, Fase 6).
+Todos comparten la misma memoria de sesión/perfil y la misma capa de ejecución MCP.
+
+**Orden de construcción, explícito y deliberado.** El sistema se construye de adentro hacia afuera: primero
+la infraestructura conversacional (router → orquestador → MCP → memoria), después el agente que la
+complementa (Fase 4), y solo entonces los canales de cara al usuario (frontend propio, Alexa). Hoy **no
+existe todavía ningún canal conversacional expuesto por HTTP** — `app.py` es CRUD estructurado puro; el
+único consumidor del orquestador es el CLI. Esto es una secuencia intencional, no una omisión: exponer un
+canal antes de que el router+agente+MCP estén completos obligaría a reconstruirlo dos veces.
 
 **Doble objetivo, y el orden importa.** El sistema es un producto funcional *y* un vehículo pedagógico.
 Cuando ambos objetivos entren en conflicto, gana la legibilidad: se prefiere el diseño explicable al
 diseño óptimo, salvo que la diferencia sea de corrección y no de elegancia.
 
-**Dentro del alcance (línea base):** CRUD y búsqueda de tareas; clasificación de intención; orquestación
-de acciones; memoria de sesión y de perfil; exposición de tools por MCP; CLI y API REST.
+**Dentro del alcance (línea base):** CRUD y búsqueda de tareas; clasificación de intención (incluida
+`multi_task` para mensajes con varias acciones); orquestación de acciones; memoria de sesión y de perfil;
+exposición de tools por MCP como única vía de ejecución; CLI y API REST; endpoint conversacional en
+lenguaje natural (precondición de cualquier frontend o canal de voz).
 
 **Fuera del alcance de la línea base:** colaboración multiusuario en tiempo real; calendario externo;
-notificaciones push; RAG (condicionado, §I.5); autenticación de usuarios finales (Fase 7).
+notificaciones push; RAG (condicionado, §I.5); autenticación de usuarios finales (Fase 7); Alexa (Fase 6,
+construible recién cuando el endpoint conversacional de §9.1 exista).
 
 ## 2. Capacidades de negocio y su realización técnica
 
 | Capacidad | Realización | Componente responsable |
 | --- | --- | --- |
-| Capturar una tarea en lenguaje natural | Clasificación de intención + extracción de entidades + tool MCP | `IntentRouter` → `TaskOrchestrator` → `crear_tarea` |
-| Consultar tareas con filtros | Query estructurada sobre Mongo, sin LLM | `TaskService` → `TaskRepository` |
-| Completar / actualizar tareas | Tool MCP idempotente | `TaskService` |
+| Capturar una tarea en lenguaje natural | Clasificación de intención + extracción de entidades + tool MCP | `ProductionIntentRouter` → `TaskOrchestrator` → `McpTaskServiceClient` → tool `crear_tarea` |
+| Capturar varias tareas/acciones en un mensaje | Ruta `multi_task` del router, descompuesta por el agente *(objetivo, Fase 4 — ítem 4.9)* | `ProductionIntentRouter` → agente con tools MCP |
+| Consultar tareas con filtros | Query estructurada sobre Mongo, sin LLM | `TaskService` → `MongoTaskRepository` |
+| Completar / actualizar tareas | Tool MCP | `TaskService` vía tool `completar_tarea`/`actualizar_tarea` |
 | Buscar por texto | Índice de texto de Mongo (`$text`) tras el port de búsqueda | `DocumentSearchRepository` |
-| Mantener el hilo de la conversación | Memoria de sesión con TTL + resumen incremental | `MemoryService` |
-| Recordar preferencias estables | Memoria de perfil con extracción explícita | `MemoryService` |
-| Desambiguar en vez de adivinar | Intención `clarify` como salida de primera clase | `IntentRouter` |
-| Ser consumido por agentes externos | Servidor MCP con tools tipadas | `interfaces/mcp` |
-| Atender por voz (Fase 6) | Adaptador de canal, mismo orquestador | `interfaces/alexa` |
+| Mantener el hilo de la conversación | Memoria de sesión con resumen incremental bajo presupuesto de tokens | `ShortTermMemory` + `ContextBuilder` |
+| Recordar preferencias estables | Memoria de perfil con extracción explícita gated por confianza | `LongTermMemory` |
+| Desambiguar en vez de adivinar | Intención `clarify` como salida de primera clase | `ProductionIntentRouter` |
+| Ser consumido por agentes externos | Servidor MCP con tools tipadas (stdio o HTTP) | `infrastructure/mcp/server.py` |
+| Responder en lenguaje natural a un frontend o canal de voz | Endpoint conversacional *(objetivo, no implementado — ítem 4.10)* | `app.py` → `TaskOrchestrator` |
+| Atender por voz (Fase 6) | Adaptador de canal, mismo orquestador *(objetivo, no implementado)* | `interfaces/alexa.py` |
 
 **Regla de oro de la solución:** una capacidad se implementa **una sola vez**, en `application/`, y se
-expone por tantos adaptadores como canales existan. Ningún canal contiene reglas de negocio.
+expone por tantos adaptadores como canales existan. Ningún canal contiene reglas de negocio. Hoy esto es
+cierto para el camino conversacional (CLI); `app.py` todavía es la excepción (CRUD directo, ver ADR-03).
 
 ## 3. Contexto del sistema (C4 nivel 1)
 
@@ -64,19 +81,19 @@ graph TB
 
     MDB[("MongoDB<br/>Atlas o local")]
     OAI["OpenAI API<br/>clasificación y redacción"]
-    ALX["Alexa Skills Kit<br/>(Fase 6)"]
+    ALX["Alexa Skills Kit<br/>(Fase 6, no construido)"]
     MCPC["Clientes MCP externos<br/>(Claude Desktop, IDE)"]
     OBSB["Backend de observabilidad<br/>(Fase 7)"]
 
+    U -->|"HTTP CRUD (hoy)"| CORE
     U -->|"lenguaje natural"| CORE
-    U -->|"HTTP / CLI"| CORE
     DEV -->|"lee, extiende, testea"| CORE
-    ALX -->|"webhook HTTPS"| CORE
+    ALX -.->|"webhook HTTPS (futuro)"| CORE
     MCPC -->|"protocolo MCP"| CORE
 
     CORE -->|"lectura y escritura"| MDB
     CORE -->|"HTTPS, tokens medidos"| OAI
-    CORE -->|"OTLP"| OBSB
+    CORE -.->|"OTLP (futuro)"| OBSB
 
     style SYS fill:#f0f4f8,stroke:#333,stroke-width:2px
 ```
@@ -86,98 +103,110 @@ graph TB
 | Dependencia | Criticidad | Degradación si cae |
 | --- | --- | --- |
 | MongoDB | **Crítica** | El sistema no opera. No hay modo offline. |
-| OpenAI API | **Degradable** | Modo solo-reglas: se atienden las intenciones cubiertas por reglas y el resto responde `clarify`. Se comunica al usuario. |
-| Backend de observabilidad | No crítica | Se pierde telemetría, nunca se bloquea una petición por fallo de export. |
+| OpenAI API | **Degradable** | Modo solo-reglas: se atienden las intenciones cubiertas por reglas y el resto responde `clarify`. |
+| Backend de observabilidad | No crítica, no implementada aún | Se perdería telemetría; nunca bloquea una petición. |
 
-Que la caída del LLM sea *degradable* y no *crítica* es una propiedad de diseño: es la consecuencia
-directa de haber puesto las reglas antes del modelo.
+Que la caída del LLM sea *degradable* y no *crítica* es una propiedad de diseño real, ya verificada: las
+reglas rápidas del router (`hybrid_router._check_fast_rules`) resuelven una parte del tráfico sin tocar el
+LLM.
 
 ## 4. Contenedores y despliegue (C4 nivel 2)
 
 ```mermaid
 graph TB
     subgraph runtime["Runtime de la aplicación"]
-        API["Proceso API<br/>FastAPI + Uvicorn<br/>async"]
-        MCPP["Proceso servidor MCP<br/>FastMCP (stdio o HTTP)"]
-        CLIP["Proceso CLI<br/>ejecución puntual"]
-        WORK["Worker de tareas de fondo<br/>(Fase 7, opcional)"]
+        API["Proceso API<br/>FastAPI + Uvicorn<br/>async<br/>(app.py, raíz del repo)"]
+        MCPP["Proceso servidor MCP<br/>FastMCP, stdio o HTTP<br/>(mongo_mcp_server.py)"]
+        CLIP["Proceso CLI<br/>ejecución puntual<br/>(interfaces/cli.py)"]
     end
 
     subgraph datos["Datos"]
-        MDB[("MongoDB<br/>tasks / sessions / memory / audit")]
+        MDB[("MongoDB<br/>personal_tasks / conversation_sessions / user_profile_facts")]
     end
 
     EXT["OpenAI API"]
 
     API --> MDB
     MCPP --> MDB
-    CLIP --> MDB
-    WORK --> MDB
-    API --> EXT
-    MCPP --> EXT
+    CLIP -->|"cliente MCP real (stdio)<br/>spawnea MCPP como subproceso"| MCPP
     CLIP --> EXT
+    MCPP --> EXT
 
-    API -.comparte código de<br/>application y domain.- MCPP
+    API -.comparte el mismo paquete<br/>src/assistant_personal.- MCPP
     MCPP -.- CLIP
 
     style datos fill:#f8f4f0,stroke:#333
 ```
 
+**Esto ya es real, no aspiracional (ítem 3.1):** el CLI no llama a `TaskService` en proceso — abre una
+conexión MCP real por stdio contra `mongo_mcp_server.py` como subproceso, y ejecuta las tools declaradas
+(`crear_tarea`, `listar_tareas`, `completar_tarea`). `app.py` sigue llamando a `TaskService` directo (no
+pasa por MCP) porque expone CRUD estructurado, no un canal conversacional — ver ADR-03 y el ítem 4.10.
+
 **Topología de despliegue por entorno**
 
 | Entorno | API | Mongo | LLM | Observabilidad |
 | --- | --- | --- | --- | --- |
-| Local | `uv run uvicorn --reload` | `docker compose up mongo` | Real o cliente grabado | Logs JSON a stdout |
-| CI | `httpx.AsyncClient` en proceso | Service container efímero | Grabado (VCR); real solo en `eval-router` | stdout |
-| Staging (Fase 7) | Contenedor en PaaS, 1 instancia | Atlas tier gratuito | Real, con cuota | OTLP → backend |
-| Producción (Fase 8) | Contenedor, 2+ instancias sin estado | Atlas con backups | Real, con cuota por tenant | OTLP + métricas |
+| Local | `uv run uvicorn app:app --reload` | `docker compose up mongo` (puerto 27018) | Real | Logs JSON a stdout (`structlog`) |
+| CI | `httpx.AsyncClient` en proceso (`test_api_e2e.py`) | Service container efímero | Real solo en `eval-router.yml`; dummy en `ci.yml` | stdout |
+| Producción (futuro) | Sin definir todavía | Atlas | Real, con cuota | Sin definir (Fase 7) |
 
-**Los tres procesos comparten el mismo paquete instalado.** No hay copias de lógica ni submódulos
-duplicados: esa es la razón principal por la que el empaquetado (`pyproject.toml`) es un prerrequisito
-estructural y no una comodidad.
+**Los tres procesos comparten el mismo paquete instalado** (`src/assistant_personal/`), pero **no** un
+único punto de ensamblado de dependencias todavía — `app.py`, `cli.py` y `server.py` cada uno construye sus
+propios adaptadores por defecto de forma independiente. Unificarlo en un solo `lifespan`/factory
+compartido es una mejora de mantenibilidad razonable, no bloqueante hoy.
 
 ## 5. Decisiones de solución registradas (ADR resumidos)
 
-Formato compacto: contexto → decisión → consecuencia aceptada. Los criterios de reevaluación están en el
-Anexo A.
+**ADR-01 — Arquitectura hexagonal por capas.** ✅ Vigente.
+`domain/` no conoce infraestructura; toda dependencia externa entra por un `Protocol` en
+`domain/repositories/`. *Consecuencia aceptada:* más ficheros y más indirección que un diseño plano — se
+acepta porque es el contenido pedagógico central y porque hace reversibles las decisiones de stack.
 
-**ADR-01 — Arquitectura hexagonal estricta por capas.**
-El dominio no conoce infraestructura; toda dependencia externa entra por un Protocol.
-*Consecuencia aceptada:* más ficheros y más indirección que un diseño plano. Se acepta porque es el
-contenido pedagógico central y porque hace reversibles las decisiones de stack.
+**ADR-02 — Router híbrido (reglas → LLM pequeño → `clarify`) en lugar de agente autónomo.** ✅ Vigente,
+Fases 2–3. *Consecuencia:* hay que escribir código explícito por intención; a cambio el coste es acotado,
+el comportamiento es predecible y la calidad es medible con un dataset (`tests/eval/golden_router.jsonl`).
 
-**ADR-02 — Router híbrido (reglas → LLM pequeño → `clarify`) en lugar de agente autónomo.**
-*Consecuencia:* hay que escribir código explícito por intención; a cambio el coste es acotado, el
-comportamiento es predecible y la calidad es medible con un dataset.
+**ADR-03 — MCP como capa canónica de tools.** ✅ Hecho para el camino conversacional (ítem 3.1, ver §4).
+Toda acción que el orquestador ejecuta pasa por una tool MCP real (protocolo stdio), nunca por un import
+directo de `TaskService`. **Pendiente:** `app.py` (CRUD HTTP) sigue siendo una excepción deliberada — no
+hay decisión tomada todavía sobre si el CRUD estructurado también debe pasar por MCP o si eso solo aplica
+al camino conversacional/agente (ver ítem 4.10).
 
-**ADR-03 — MCP como capa canónica de tools.**
-Toda acción se ejecuta a través de una tool MCP, también cuando la invoca el orquestador interno.
-*Consecuencia:* una indirección adicional en el camino de ejecución; a cambio, cero duplicación de reglas
-entre canales y libertad para cambiar quién invoca las tools sin reescribir negocio.
+**ADR-04 — MongoDB como único almacén.** ✅ Vigente.
+Tareas, sesiones y memoria de perfil viven en el mismo motor (`personal_tasks`, `conversation_sessions`,
+`user_profile_facts`). *Consecuencia:* se renuncia a capacidades relacionales; a cambio, una sola
+tecnología de datos que aprender, operar y respaldar.
 
-**ADR-04 — MongoDB como único almacén.**
-Documentos, sesiones, memoria y (si algún día aplica) vectores viven en el mismo motor.
-*Consecuencia:* se renuncia a capacidades relacionales; a cambio, una sola tecnología de datos que
-aprender, operar y respaldar.
+**ADR-05 — Async de extremo a extremo.** ✅ Hecho (ítem 1.6).
+Sin bridging sync/async dentro del event loop; `AsyncOpenAI` de punta a punta; `MongoConnection` rebindea
+el cliente Motor si el loop activo cambió.
 
-**ADR-05 — Async de extremo a extremo.**
-Nada de bridging sync/async dentro del event loop; el cliente LLM pasa a `AsyncOpenAI`; los adaptadores
-inevitablemente síncronos se aíslan con `asyncio.to_thread`.
-*Consecuencia:* obliga a tocar el cliente OpenAI y el repositorio de memoria. Es lo que cierra el bug de
-persistencia silenciosa.
+**ADR-06 — `tenant_id` presente desde el día uno con valor `"default"`.** ✅ Hecho (ítem 1.7).
 
-**ADR-06 — `tenant_id` presente desde el día uno con valor `"default"`.**
-*Consecuencia:* un parámetro más en firmas y documentos hoy, en lugar de una migración con riesgo en
-Fase 8.
+**ADR-07 — `clarify` es una respuesta correcta, no un fallo.** ✅ Vigente.
+Se mide como métrica de calidad con una banda objetivo (`tasa_clarify` en `umbrales.yaml`), no como error.
 
-**ADR-07 — `clarify` es una respuesta correcta, no un fallo.**
-Se mide como métrica de calidad con una banda objetivo, no como error.
-*Consecuencia:* el asistente pregunta más de lo que preguntaría un sistema que adivina. Se considera
-preferible a la acción incorrecta silenciosa.
+**ADR-08 — Español para identificadores propios de dominio; inglés para nombres de módulo/paquete y
+librerías de terceros.** ✅ Vigente, con una precisión sobre la v1.0 de este documento: el paquete raíz es
+`assistant_personal` (inglés), no `asistente` — decisión tomada al iniciar el proyecto y ya con historial
+de commits sobre ese nombre; renombrarlo no aporta valor funcional y tiene blast radius alto (toca
+prácticamente todos los imports). Los identificadores de dominio (tools MCP, nombres de intención, mensajes
+al usuario) sí están en español.
 
-**ADR-08 — Español como idioma de código, comentarios y datos de dominio.**
-*Consecuencia:* mezcla con nombres de librerías en inglés. Convención: identificadores propios en español,
-API de terceros tal cual.
+**ADR-09 — `multi_task` como ruta del router, no como excepción manejada aparte.** *(objetivo, ítem 4.9)*
+Cuando el router detecta 2+ acciones de dominio en un mensaje, no inventa un esquema paralelo: usa el mismo
+contrato `IntentClassification` con una ruta más. El agente de Fase 4 es quien la descompone en llamadas
+MCP secuenciales. *Consecuencia:* el router se mantiene simple (clasifica, no ejecuta); la complejidad de
+orquestar varios pasos vive en un solo lugar (el agente), no repartida entre el router y el orquestador.
+
+**ADR-10 — Router vs. agente: la línea es "¿requiere interpretar lenguaje natural?", no lectura vs.
+escritura.** *(objetivo, ítem 4.11)* El router (regla dura o clasificador de alta confianza) solo invoca
+una tool MCP directo cuando ya tiene el 100% de los parámetros sin interpretar nada ("lista mis tareas" sin
+filtros, "completa la tarea `<id>`"). Cualquier caso que exija estructurar datos desde lenguaje natural —
+filtros de fecha/estado en una lectura, título/descripción al crear, referencia ambigua al completar o
+borrar — pasa por el agente, sea lectura o escritura. No confundir con ADR-03: "todo pasa por MCP" es sobre
+el transporte (nadie toca Mongo salvo vía tool), esto es sobre quién decide qué parámetros usar.
 
 ---
 
@@ -185,377 +214,311 @@ API de terceros tal cual.
 
 ## 6. Estructura de código
 
+Árbol real (verificado, no aspiracional):
+
 ```
 personal_assistant_agent/
 ├── pyproject.toml              # metadatos, dependencias, config de ruff/mypy/pytest
 ├── uv.lock
 ├── .env.example
-├── docker-compose.yml          # Fase 0: solo mongo. Fase 7: api + mongo + collector
-├── Dockerfile                  # Fase 7, multi-stage
-├── AGENTS.md                   # principios no negociables
+├── docker-compose.yml          # Mongo local desechable, puerto 27018
+├── app.py                      # entrypoint FastAPI — CRUD de tareas, en la raíz por simplicidad
+│                                # de `uvicorn app:app`. Candidato a mover bajo interfaces/ (ver §14)
+├── mongo_mcp_server.py          # entrypoint del servidor MCP (stdio)
+├── .github/workflows/           # ci.yml, eval-router.yml, gitleaks.yml
 ├── docs/
-│   ├── arquitectura_y_prd.md   # fuente de verdad
-│   ├── anexo_arquitectura_objetivo.md
-│   └── arquitectura_soluciones_y_tecnica.md
-├── src/asistente/
-│   ├── domain/                 # sin imports de otras capas. Sin I/O. Sin librerías externas.
-│   │   ├── entidades/          # Task, Session, TurnoConversacion, HechoMemoria, Tenant, Principal
-│   │   ├── valores/            # EstadoTarea, Prioridad, Intencion, NivelConfianza
-│   │   ├── puertos/            # Protocols (§7)
-│   │   └── errores.py          # taxonomía de errores de dominio (§11)
-│   ├── application/            # casos de uso. Depende solo de domain.
+│   ├── anexo_arquitectura_objetivo.md   # fuente de verdad: roadmap + estado por ítem
+│   └── arquitectura_solucion.md         # este documento
+├── src/assistant_personal/
+│   ├── config.py                # pydantic-settings, única fuente de configuración
+│   ├── domain/                  # sin imports de otras capas, sin I/O
+│   │   ├── entities.py          # ConversationRoute, IntentAction, IntentClassification, ...
+│   │   ├── task_models.py       # Task y sus value objects
+│   │   └── repositories/        # Protocols (puertos): task_repository, session_memory_repository,
+│   │                             # long_term_memory_repository, document_search_repository, llm_client
+│   ├── application/             # casos de uso, depende solo de domain
 │   │   ├── task_service.py
-│   │   ├── task_orchestrator.py
-│   │   ├── intent_router.py
-│   │   ├── memory_service.py
-│   │   ├── context_builder.py
-│   │   ├── guardrails.py       # Fase 4
-│   │   └── dto/                # entrada y salida de casos de uso
-│   ├── infrastructure/         # implementa los puertos. Único lugar con I/O.
-│   │   ├── config/settings.py  # pydantic-settings, única fuente de configuración
-│   │   ├── mongo/              # cliente, repositorios, índices, migraciones
-│   │   ├── llm/                # AsyncOpenAI, reintentos, contador de tokens, prompts versionados
-│   │   ├── mcp/tools/          # implementación de tools
-│   │   └── observabilidad/     # structlog, OTel, context vars
-│   └── interfaces/             # adaptadores de entrada. Sin reglas de negocio.
-│       ├── api/                # app.py, routers, dependencias, middleware, handlers
-│       ├── cli/
-│       ├── mcp_server/
-│       └── alexa/              # Fase 6
-└── tests/
-    ├── unit/                   # sin I/O
-    ├── integration/            # Mongo real, marca @pytest.mark.integration
-    ├── contract/               # esquemas de tools MCP, Fase 3
-    ├── e2e/                    # httpx.AsyncClient + Mongo
+│   │   ├── orchestrator.py      # TaskOrchestrator
+│   │   ├── agent_context.py     # ShortTermMemory / LongTermMemory / AgentContext
+│   │   ├── context_builder.py   # ContextBuilder: presupuesto de tokens + resumen incremental
+│   │   └── prompt_engineering.py
+│   ├── infrastructure/          # implementa los puertos, único lugar con I/O
+│   │   ├── persistence/mongo/   # cliente, repositorios, índices
+│   │   ├── routers/             # ProductionIntentRouter + clientes OpenAI del router
+│   │   │                        # (candidato a separar cliente LLM genérico — ítem 4.8)
+│   │   ├── mcp/                 # server.py, client.py (McpTaskServiceClient), tools/
+│   │   ├── prompts/router/      # *.prompt.md versionados + loader.py
+│   │   └── observabilidad/      # structlog
+│   └── interfaces/
+│       └── cli.py               # único adaptador de entrada conversacional hoy
+└── tests/                       # plano, sin subcarpetas por tipo — la convención es el sufijo
+    ├── test_*.py                 # unitarios (sin I/O externo)
+    ├── test_*_integration.py     # contra Mongo real (docker-compose), @unittest.skipUnless
+    ├── test_mcp_client_integration.py  # protocolo MCP real, subproceso + Mongo real
     └── eval/
         ├── golden_router.jsonl
         ├── umbrales.yaml
-        └── test_eval_router.py
+        └── run_eval.py            # tests/test_eval_router.py lo envuelve con @pytest.mark.eval
 ```
 
-**Reglas de dependencia, verificables en CI**
+**No implementado todavía (vs. la v1.0 de este documento):** `application/guardrails.py` (Fase 4, ítem
+4.2), `interfaces/alexa.py` (Fase 6), un endpoint `api/` propiamente dicho más allá de `app.py` (ítem
+4.10). Tampoco existe una taxonomía de errores de dominio centralizada (`domain/errores.py`) — hoy los
+handlers de `app.py` traducen excepciones ad hoc; formalizarla es una mejora razonable, no bloqueante.
+
+**Sobre `tests/` sin subcarpetas por tipo (`unit/`, `integration/`, `contract/`, `e2e/`):** es una decisión
+deliberada, no una carencia. Para un proyecto de este tamaño, el patrón más común en la industria Python es
+exactamente este — un directorio plano con convención de nombre (`*_integration.py`) y/o marcadores de
+pytest (`@pytest.mark.eval`), no una jerarquía de carpetas por tipo de test. Migrar a subcarpetas solo
+tendría sentido si el número de archivos creciera lo suficiente como para que navegar por prefijo dejara
+de alcanzar (hoy: 22 archivos, lejos de ese punto).
+
+**Reglas de dependencia entre capas**
 
 ```mermaid
 graph LR
-    I["interfaces/"] --> A["application/"]
+    I["interfaces/ (cli.py)"] --> A["application/"]
     A --> D["domain/"]
     INF["infrastructure/"] -->|implementa| D
-    I -->|"solo en el ensamblado<br/>(lifespan / DI)"| INF
+    I -->|"solo en el ensamblado"| INF
     D -.->|"prohibido"| INF
     D -.->|"prohibido"| A
     style D fill:#f6f6f4,stroke:#333,stroke-width:2px
 ```
 
-Se aplican como test automático (import-linter o un test que inspeccione los imports):
-
-- `domain/` no importa `application`, `infrastructure` ni `interfaces`, ni librerías de I/O.
-- `application/` no importa `infrastructure` ni `interfaces`.
-- `infrastructure/` no importa `interfaces`.
-- El **único** punto donde se conocen las implementaciones concretas es el ensamblado de dependencias en el
-  `lifespan` de FastAPI (y su equivalente en CLI y MCP).
+Se respetan hoy por convención y revisión, no por un test automático que las verifique — un test de
+imports que falle si `domain/` importa `infrastructure/` es una mejora pendiente razonable (§15).
 
 ## 7. Puertos y adaptadores
 
-Todo puerto es un `typing.Protocol` en `domain/puertos`. Ningún caso de uso conoce una clase concreta.
+Todo puerto es un `typing.Protocol` en `domain/repositories/`. Los nombres son los reales del código, no
+una traducción — evita el desajuste que tenía la v1.0 de este documento.
 
-| Puerto | Métodos principales | Adaptador base | Adaptadores alternativos |
+| Puerto | Métodos principales | Adaptador real | Adaptadores de test |
 | --- | --- | --- | --- |
-| `TaskRepository` | `crear`, `obtener`, `listar`, `actualizar`, `eliminar` | `MongoTaskRepository` | `InMemoryTaskRepository` (tests) |
-| `SessionMemoryRepository` | `cargar_sesion`, `añadir_turno`, `guardar_resumen`, `purgar` | `MongoSessionRepository` (async puro) | `InMemory…` (tests) |
-| `LongTermMemoryRepository` | `leer_hechos`, `upsert_hecho`, `olvidar_usuario` | `MongoMemoryRepository` (Fase 2) | `InMemory…` |
-| `DocumentSearchRepository` | `buscar(consulta, filtros, limite)` | `MongoTextSearchRepository` (`$text`) | `AtlasVectorSearchRepository` (Fase 5, condicional) |
-| `LLMClient` | `completar`, `completar_estructurado`, `contar_tokens` | `AsyncOpenAIClient` | `GrabadoLLMClient` (VCR, CI), `FakeLLMClient` |
-| `IntentRouter` | `clasificar(mensaje, contexto)` | `ProductionIntentRouter` | `ReglasSoloRouter` (modo degradado) |
-| `ToolExecutor` | `listar_tools`, `ejecutar(nombre, args, principal)` | `McpToolExecutor` | `DirectToolExecutor` (tests) |
-| `Clock` | `ahora()` | `SystemClock` | `FrozenClock` (tests) |
-| `UnitOfWork` | `__aenter__`, `commit`, `rollback` | `MongoUnitOfWork` (sesiones de Mongo) | `NoopUnitOfWork` |
+| `TaskRepository` | `create_task_async`, `get_task_async`, `list_tasks_async`, `update_task_async`, `complete_task_async` | `MongoTaskRepository` | fakes ad hoc en `test_task_service.py` |
+| `SessionMemoryRepository` | `append_turn_async`, `get_context_summary_async`, `compact_session_async`, `add_context_item_async` | `MongoSessionRepository` | `InMemorySessionRepository` |
+| `LongTermMemoryRepository` | `upsert_fact_async`, `get_facts_async`, `delete_facts_async` | `MongoLongTermMemoryRepository` | `InMemoryLongTermMemoryRepository` |
+| `DocumentSearchRepository` | `buscar(consulta, filtros, limite)` | `MongoTextSearchRepository` (`$text`) | *(sin adaptador de test dedicado aún)* |
+| `LLMClient` | `classify_intent`, `answer_general_knowledge`, `answer_small_talk`, `extract_profile_facts`, `summarize_session` | `OpenAILLMRouterClient` (agrupa 5 clientes especializados de `_OpenAITextClient`) | fakes por método en `test_hybrid_router.py` |
 
-Dos puertos merecen justificación porque no son obvios:
+**Puertos propuestos en la v1.0 de este documento que NO se adoptaron** (y por qué, para no repetir la
+discusión):
 
-- **`Clock`.** Sin él, cualquier lógica de vencimientos y TTL es intestable sin `freezegun`. Coste: cinco
-  líneas.
-- **`LLMClient` con `completar_estructurado`.** Separar la llamada estructurada de la libre permite que la
-  validación Pydantic y la política de reintento ante salida inválida vivan en un solo sitio, en vez de
-  repetirse en cada uso.
+- **`UnitOfWork`.** Ninguna operación hoy necesita escribir en más de una colección de forma atómica; Mongo
+  sin transacciones multi-documento configuradas ya cubre el caso de uso real. Adoptar solo si aparece una
+  operación que sí lo requiera.
+- **`Principal`/autenticación.** No hay identidad de usuario real todavía (`user_id`/`tenant_id` fijos en
+  `"default"`) — es explícitamente Fase 6/7. Introducir el puerto antes tendría cero consumidores.
+- **`Clock`.** Idea con mérito real (testear TTL/vencimientos sin `freezegun`), pero hoy no hay lógica de
+  vencimientos que lo necesite — se evaluó como sobre-ingeniería anticipada. Si aparece esa lógica
+  (recordatorios con fecha, por ejemplo), es un puerto de cinco líneas, barato de agregar entonces.
+- **`ToolExecutor` como puerto separado.** La indirección ya existe, pero encarnada en `McpTaskServiceClient`
+  (mismo shape que `TaskService`, ver ítem 3.1) en vez de un puerto de dominio nuevo — más simple, menos
+  ceremonia para lo que hoy hace falta.
 
 ## 8. Modelo de datos
 
 ```mermaid
 erDiagram
-    TENANT ||--o{ USUARIO : contiene
-    USUARIO ||--o{ TASK : posee
-    USUARIO ||--o{ SESSION : mantiene
-    USUARIO ||--o{ HECHO_MEMORIA : describe
-    SESSION ||--o{ TURNO : acumula
-    TASK ||--o{ AUDITORIA : genera
+    TASK ||--o{ TASK_HISTORY : genera
+    SESSION ||--o{ TURN : acumula
+    USER ||--o{ PROFILE_FACT : describe
 
-    TENANT {
-        string tenant_id PK
-        string nombre
-        object cuotas
-        datetime creado_en
-    }
     TASK {
         ObjectId _id PK
-        string tenant_id FK
-        string usuario_id FK
-        string titulo
-        string descripcion
-        string estado
-        int prioridad
-        datetime fecha_vencimiento
-        array etiquetas
-        string origen
-        datetime creado_en
-        datetime actualizado_en
+        string tenant_id
+        string task_id
+        string title
+        string status
+        bool is_deleted
     }
     SESSION {
-        string _id PK
-        string tenant_id FK
-        string usuario_id FK
-        array turnos
-        string resumen
-        object estado_desambiguacion
-        datetime expira_en
+        string session_id PK
+        string tenant_id
+        array turns
+        string summary
+        array items
     }
-    TURNO {
-        string rol
-        string contenido
-        string intencion
-        float confianza
-        bool uso_llm
-        int tokens
-        datetime creado_en
-    }
-    HECHO_MEMORIA {
-        ObjectId _id PK
-        string tenant_id FK
-        string usuario_id FK
-        string clave
-        string valor
-        float confianza
-        string origen
-        datetime actualizado_en
-    }
-    AUDITORIA {
-        ObjectId _id PK
-        string tenant_id FK
-        string actor
-        string tool
-        object parametros_saneados
-        string resultado
-        string trace_id
-        datetime creado_en
+    PROFILE_FACT {
+        string tenant_id
+        string user_id
+        string key
+        string value
+        float confidence
     }
 ```
 
-**Colecciones e índices**
+**Colecciones e índices reales** (`client.py::_ensure_task_indexes`)
 
 | Colección | Índices | Notas |
 | --- | --- | --- |
-| `tareas` | `{tenant_id:1, usuario_id:1, estado:1, fecha_vencimiento:1}`, `{tenant_id:1, etiquetas:1}`, texto en `{titulo, descripcion}` | `tenant_id` **siempre primero**: determina el rendimiento de toda consulta futura |
-| `sesiones` | `{tenant_id:1, usuario_id:1}`, TTL en `expira_en` | `_id` = `session_id` legible. TTL de 30 días por defecto |
-| `memoria_larga` | único `{tenant_id:1, usuario_id:1, clave:1}` | El índice único es lo que convierte la escritura en `upsert` idempotente |
-| `auditoria` | `{tenant_id:1, creado_en:-1}`, TTL configurable | Parámetros **saneados**: nunca secretos ni texto íntegro del usuario |
+| `personal_tasks` | único `{tenant_id, task_id}`; texto en `{title, description}` | Borrado lógico: `is_deleted`/`deleted_at`, sin borrado físico |
+| `conversation_sessions` | único `{tenant_id, session_id}` | `summary` + `turns` embebidos; resumen incremental los recorta (`compact_session_async`) |
+| `user_profile_facts` | único `{tenant_id, user_id, key}` | El índice único es lo que vuelve `upsert_fact_async` idempotente |
 
-**Convenciones de datos**
-
-- Fechas en UTC, siempre `datetime` con zona; la conversión a hora local es responsabilidad de
-  `interfaces/`.
-- Sin borrado físico de tareas: `estado = "eliminada"` más TTL. Permite deshacer y auditar.
-- Los turnos viven **embebidos** en la sesión (se leen siempre juntos, son acotados por el resumen
-  incremental); los hechos de memoria viven en colección aparte (se consultan por clave y crecen sin
-  límite natural). El criterio es el patrón de acceso, no la estética del esquema.
-- Migraciones de esquema como scripts numerados idempotentes en `infrastructure/mongo/migraciones/`,
-  ejecutados en el arranque tras comparar una versión de esquema almacenada.
+**No implementado todavía:** colección `auditoria`/`audit` con `trace_id` por invocación de tool (relevante
+para el ítem 3.3, Fase 3). Tampoco hay migraciones de esquema versionadas — los índices se crean
+idempotentemente en el arranque, pero no hay un mecanismo de migración de datos existentes.
 
 ## 9. Contratos de interfaz
 
-### 9.1 API REST
+### 9.1 API REST (`app.py`)
 
-| Método | Ruta | Propósito | Notas |
+Rutas reales hoy — CRUD estructurado, sin paso por el router ni por MCP:
+
+| Método | Ruta | Propósito |
+| --- | --- | --- |
+| `GET` | `/health` | Liveness |
+| `POST` | `/tasks` | Crear tarea |
+| `GET` | `/tasks` | Listar tareas |
+| `GET` | `/tasks/{task_id}` | Obtener una |
+| `GET` | `/tasks/{task_id}/history` | Historial de cambios |
+| `PATCH` | `/tasks/{task_id}` | Actualizar parcialmente |
+| `DELETE` | `/tasks/{task_id}` | Borrado lógico |
+
+Errores: handlers dedicados por tipo de excepción (`RequestValidationError`, `HTTPException`, `ValueError`,
+`RuntimeError`, catch-all) devuelven un mensaje genérico + `request_id`; el detalle completo (con
+traceback) solo va a los logs, nunca al cliente.
+
+**Pendiente (ítem 4.10):** un endpoint conversacional (ej. `POST /messages`) que exponga
+`TaskOrchestrator` — recibe `mensaje`/`session_id?`, devuelve una respuesta en lenguaje natural (no un
+recurso JSON crudo), lista para un frontend propio o, más adelante, para servir de base a un canal de voz.
+
+### 9.2 Tools MCP (`infrastructure/mcp/tools/task_tools.py`)
+
+| Tool | Entrada principal | Idempotente | Efecto |
 | --- | --- | --- | --- |
-| `GET` | `/health` | Liveness | Sin dependencias |
-| `GET` | `/ready` | Readiness | Comprueba Mongo; usado por `HEALTHCHECK` |
-| `POST` | `/tareas` | Crear tarea | `201` + `Location` |
-| `GET` | `/tareas` | Listar con filtros y paginación | `estado`, `etiqueta`, `vence_antes`, `limite`, `cursor` |
-| `GET` | `/tareas/{id}` | Obtener una | `404` si no existe **o no es del tenant** |
-| `PATCH` | `/tareas/{id}` | Actualizar parcialmente | Idempotente |
-| `POST` | `/tareas/{id}/completar` | Completar | Idempotente: recompletar devuelve `200` |
-| `DELETE` | `/tareas/{id}` | Borrado lógico | `204` |
-| `POST` | `/conversacion/mensajes` | Turno conversacional | Cuerpo: `mensaje`, `session_id?`. Devuelve respuesta, `intencion`, `acciones`, `session_id` |
-| `DELETE` | `/usuarios/{id}/datos` | Derecho al olvido | Fase 8; cascada en todas las colecciones |
+| `health_check` | — | Sí | Verifica conexión a Mongo |
+| `listar_tareas` | — | Sí | Lee tareas activas |
+| `crear_tarea` | `title`, campos opcionales del modelo de negocio | No | Inserta |
+| `actualizar_tarea` | `task_id`, campos parciales | Sí | Actualiza |
+| `completar_tarea` | `task_id` | Sí | Marca como completada |
+| `buscar_tarea` | `task_id` | Sí | Busca una tarea puntual |
 
-**Detalle importante:** un recurso de otro tenant devuelve `404`, nunca `403`. Un `403` confirmaría la
-existencia del recurso y filtraría información entre tenants.
+**Pendiente, encontrado en el ítem 3.1:** no existe una tool `eliminar_tarea` — `delete_task` no tiene
+tool MCP ni rama en `TaskOrchestrator._dispatch`. Ya estaba roto antes de 3.1 (no es una regresión de ese
+ítem), pero es una brecha real entre lo que el dominio modela (`IntentAction.DELETE_TASK` existe) y lo
+que se puede ejecutar hoy.
 
-Errores: `application/problem+json` con `type`, `title`, `status`, `detail` genérico, `request_id`.
-Versionado por prefijo `/v1` desde el momento en que exista el primer consumidor externo (Alexa, Fase 6).
+**Invariantes de seguridad de las tools:**
 
-### 9.2 Tools MCP
-
-Cada tool declara nombre, esquema de entrada Pydantic, esquema de salida, scope exigido y si es idempotente.
-
-| Tool | Entrada | Scope | Idempotente | Efecto |
-| --- | --- | --- | --- | --- |
-| `crear_tarea` | `titulo`, `descripcion?`, `fecha_vencimiento?`, `prioridad?`, `etiquetas?` | `tareas:escribir` | No | Inserta |
-| `listar_tareas` | `estado?`, `etiqueta?`, `vence_antes?`, `limite<=50` | `tareas:leer` | Sí | Lee |
-| `buscar_tareas` | `consulta`, `limite<=20` | `tareas:leer` | Sí | Lee |
-| `actualizar_tarea` | `id`, campos parciales | `tareas:escribir` | Sí | Actualiza |
-| `completar_tarea` | `id` | `tareas:escribir` | Sí | Actualiza estado |
-| `eliminar_tarea` | `id` | `tareas:eliminar` | Sí | Borrado lógico, requiere confirmación |
-
-**Invariantes de seguridad de las tools (no negociables):**
-
-1. `tenant_id` y `usuario_id` los inyecta el servidor desde el `Principal`. **Nunca son parámetros del
-   esquema.** Es la mitigación estructural contra la inyección de prompt: el modelo no puede pedir lo que
-   no puede nombrar.
-2. Sin filtros arbitrarios ni fragmentos de query como entrada. Solo campos enumerados y tipados.
-3. `limite` con techo duro en el esquema, no en la implementación.
-4. Toda invocación escribe una entrada en `auditoria` con `trace_id`.
-5. Las tools destructivas exigen confirmación explícita en el flujo conversacional.
+1. `tenant_id` está fijo en `"default"` en el servidor (constructor de los repositorios), nunca es un
+   parámetro que el LLM pueda fijar en el esquema de una tool.
+2. Sin filtros arbitrarios ni fragmentos de query como entrada — solo campos enumerados y tipados
+   (ver las firmas reales en `task_tools.py`).
+3. *(objetivo, ítem 3.3)* Auditoría por invocación y scopes declarados por tool — no implementado aún.
 
 ### 9.3 Contrato de salida del router
 
-Objeto Pydantic validado, nunca texto libre parseado:
+Objeto Pydantic real (`domain/entities.py::IntentClassification`), validado con
+`model_validate` — nunca texto libre parseado a mano:
 
-```
-IntencionDetectada:
-  intencion: Literal["crear","listar","buscar","actualizar","completar","eliminar","clarify","fuera_de_dominio"]
-  confianza: float  # 0..1
-  entidades: dict   # validado por intención
-  origen: Literal["reglas","llm"]
-  version_prompt: str | None
-  tokens: int
+```python
+class IntentClassification(BaseModel):
+    route: ConversationRoute  # general_knowledge | orchestrator | small_talk | clarify
+                               # | multi_task (objetivo, ítem 4.9 — no existe todavía en el enum)
+    intent: IntentAction | None  # solo si route == orchestrator
+    confidence: float  # 0.0–1.0, nunca null
+    reasoning: str | None
+    source: str
+    payload: dict[str, Any]
 ```
 
-Política ante salida inválida: **un** reintento incluyendo el error de validación como contexto; si vuelve
-a fallar, `clarify`. Nunca se propaga una salida no validada a la ejecución.
+Política ante salida inválida: **una sola política**, sin reintento — cualquier `pydantic.ValidationError`
+(enum desconocido, `confidence` fuera de rango, campo ausente) sube sin capturar hasta
+`ProductionIntentRouter.route()`, que degrada a `route=clarify, source="fallback"`. Nunca se propaga una
+salida no validada a la ejecución (ítem 2.1).
 
 ## 10. Flujo de ejecución detallado
 
+Estado real del flujo conversacional (camino del CLI vía `TaskOrchestrator`, único que existe hoy):
+
 ```mermaid
 flowchart TD
-    START(["POST /conversacion/mensajes"]) --> MW["Middleware:<br/>request_id, trace_id, auth (F7)"]
-    MW --> VAL{"Validación Pydantic<br/>y longitud máxima"}
-    VAL -->|inválido| E422["422 problem+json"]
-    VAL -->|válido| PRIN["Construir Principal<br/>usuario_id, tenant_id, scopes"]
-    PRIN --> LOADM["MemoryService.cargar_contexto"]
-    LOADM --> CB["ContextBuilder:<br/>resumen + N turnos + <=10 hechos<br/>bajo presupuesto de tokens"]
+    START(["Usuario escribe un mensaje"]) --> EMPTY{"¿Mensaje vacío?"}
+    EMPTY -->|sí| GUARD["Guardrail: clarify"]
+    EMPTY -->|no| SUM["maybe_summarize_session_async<br/>(resumen incremental si toca)"]
+    SUM --> CB["ContextBuilder:<br/>hechos + resumen + turnos<br/>bajo presupuesto de tokens"]
     CB --> RULES{"Reglas rápidas"}
-    RULES -->|coincide| VALID
-    RULES -->|no coincide| LLMUP{"¿LLM disponible<br/>y dentro de cuota?"}
-    LLMUP -->|no| DEGR["Modo degradado:<br/>clarify + aviso al usuario"]
-    LLMUP -->|sí| LLMC["completar_estructurado<br/>gpt-4o-mini, timeout, reintentos"]
-    LLMC --> PARSE{"¿Salida válida?"}
-    PARSE -->|no, 1er fallo| LLMC
-    PARSE -->|no, 2º fallo| CLAR
-    PARSE -->|sí| CONF{"confianza >= umbral"}
-    CONF -->|no| CLAR["Respuesta clarify"]
-    CONF -->|sí| VALID["Guardrails:<br/>scope, whitelist, confirmación (F4)"]
-    VALID -->|denegado| DENY["Respuesta de rechazo + auditoría"]
-    VALID -->|permitido| EXEC["ToolExecutor.ejecutar<br/>tool MCP"]
-    EXEC --> UOW["UnitOfWork:<br/>escritura en Mongo"]
-    UOW --> AUD["Auditoría"]
-    AUD --> RESP["Redactar respuesta<br/>en lenguaje natural"]
-    CLAR --> SAVE
-    DEGR --> SAVE
-    DENY --> SAVE
-    RESP --> SAVE["MemoryService.guardar_turno<br/>fallo registrado, nunca silenciado"]
-    SAVE --> METR["Emitir métricas:<br/>intencion, uso_llm, tokens,<br/>latencias, resultado"]
-    METR --> OUT(["200 + respuesta"])
+    RULES -->|coincide| EXEC["McpTaskServiceClient<br/>→ tool MCP real"]
+    RULES -->|no coincide| CLS["Clasificador LLM<br/>gpt-4o-mini, timeout 5s, reintentos SDK"]
+    CLS --> CONF{"confidence >= 0.7?"}
+    CONF -->|no| CLAR["clarify"]
+    CONF -->|sí, general_knowledge| ANS["answer_general_knowledge"]
+    CONF -->|sí, small_talk| TALK["answer_small_talk<br/>(siempre generada, nunca texto fijo)"]
+    CONF -->|sí, orchestrator, 1 acción| EXEC
+    CONF -.->|sí, multi_task, objetivo 4.9| AGENT["Agente con tools MCP<br/>(no implementado — 4.3)"]
+    EXEC --> LOG["Log estructurado:<br/>interaccion_completada<br/>(12+ campos, incl. contexto_tokens)"]
+    ANS --> LOG
+    TALK --> LOG
+    CLAR --> LOG
+    AGENT -.-> LOG
+    LOG --> OUT(["Respuesta al usuario"])
 ```
 
-**Presupuestos objetivo por interacción** (medidos, no aspiracionales):
+**Presupuestos objetivo por interacción**
 
-| Ruta | Latencia p95 objetivo | Coste LLM |
+| Ruta | Coste LLM | Verificado |
 | --- | --- | --- |
-| Resuelta por reglas | < 150 ms | 0 |
-| Con clasificación LLM | < 1.500 ms | ~300–600 tokens |
-| Con agente de fallback (F4) | < 5.000 ms, máx. 5 pasos | acotado por presupuesto |
+| Resuelta por reglas | 0 tokens | ✅ (`_check_fast_rules`) |
+| Con clasificación LLM | ~590 tokens de prompt + variable | ✅ `eval-router` mide `coste_medio_tokens` |
+| Con agente de fallback (F4) | Acotado por presupuesto de pasos | Objetivo, no implementado |
 
 ## 11. Taxonomía de errores
 
-Los errores se definen en `domain/errores.py` y se traducen a HTTP **solo** en `interfaces/`. El dominio no
-conoce códigos de estado.
-
-| Error de dominio | HTTP | Reintentable | Se registra como |
-| --- | --- | --- | --- |
-| `ErrorValidacion` | 422 | No | `warning` |
-| `TareaNoEncontrada` | 404 | No | `info` |
-| `AccesoDenegado` | 404 (deliberado, §9.1) | No | `warning` + auditoría |
-| `ConflictoConcurrencia` | 409 | Sí | `info` |
-| `CuotaAgotada` | 429 | Sí, con espera | `warning` |
-| `ErrorProveedorLLM` | 503 | Sí, con backoff | `error` |
-| `ErrorPersistencia` | 503 | Depende | `error` |
-| `ErrorInesperado` | 500 | No | `exception` con traza en log, **nunca en la respuesta** |
-
-Regla: la respuesta al cliente lleva mensaje genérico y `request_id`; el detalle vive en los logs. Un
-stacktrace en el cuerpo es filtración de arquitectura.
+**Estado real:** no existe un módulo `domain/errores.py` con una taxonomía formal. `app.py` traduce
+excepciones (`ValueError`, `RuntimeError`, `Exception` catch-all) a HTTP en sus propios handlers; el
+orquestador captura excepciones de negocio y las convierte en respuestas `success: false` con un mensaje
+redactado. La regla que sí se respeta consistentemente: **la respuesta al cliente lleva mensaje genérico +
+`request_id`; el detalle (con traza) solo va a los logs.** Formalizar una taxonomía compartida en
+`domain/` es una mejora de mantenibilidad razonable (§15), no bloqueante.
 
 ## 12. Requisitos no funcionales
 
-| Atributo | Objetivo | Cómo se verifica |
+| Atributo | Objetivo | Cómo se verifica hoy |
 | --- | --- | --- |
-| Corrección de persistencia | 0 escrituras silenciosamente perdidas | Integration test de ida y vuelta por repositorio |
-| Latencia | Según §10 | Histogramas por tramo en métricas |
-| Coste | Coste medio por interacción conocido y con tendencia visible | Métrica de tokens por interacción |
-| Calidad del router | Accuracy ≥ umbral, `clarify` dentro de banda | Job `eval-router` en CI |
-| Disponibilidad | Degradación explícita sin LLM; sin modo degradado para Mongo | Test con `LLMClient` que falla |
-| Seguridad | 0 rutas de acceso cruzado entre tenants | Test que intenta leer datos de otro tenant |
-| Trazabilidad | Toda interacción reconstruible desde logs | `request_id` en el 100 % de los logs de la petición |
-| Mantenibilidad | Reglas de dependencia entre capas siempre respetadas | Test de imports en CI |
-| Reproducibilidad | Clone → un comando → tests en verde | Job de CI en runner limpio |
+| Corrección de persistencia | 0 escrituras silenciosamente perdidas | Integration tests de ida y vuelta contra Mongo real por repositorio |
+| Coste | Coste medio por interacción conocido y con tendencia visible | `contexto_tokens` en el log + `coste_medio_tokens` en `eval-router` |
+| Calidad del router | Accuracy ≥ umbral, `clarify` dentro de banda | Job `eval-router` en CI, bloqueante |
+| Disponibilidad | Degradación explícita sin LLM | Reglas rápidas resuelven sin LLM; timeout/reintentos configurados en el cliente |
+| Trazabilidad | Toda interacción reconstruible desde logs | `request_id` vía `structlog.contextvars` |
+| Reproducibilidad | Clone → un comando → tests en verde | `uv sync && uv run pytest` (ítem 1.1) |
+| Seguridad multi-tenant | *(objetivo, Fase 8)* | No verificado — `tenant_id` fijo en `"default"` hoy |
 
 ## 13. Estrategia de configuración e inyección de dependencias
 
-Una sola clase `Settings` (`pydantic-settings`) instanciada una vez y cacheada. Ensamblado en el `lifespan`:
-
-```
-lifespan:
-  1. cargar y validar Settings         -> falla ruidosamente si falta algo
-  2. abrir AsyncIOMotorClient          -> ping, aplicar migraciones e índices
-  3. construir adaptadores             -> repositorios, LLMClient, ToolExecutor
-  4. construir casos de uso            -> inyectando puertos, no clases concretas
-  5. publicar en app.state             -> los Depends solo leen de ahí
-  ...
-  6. cierre ordenado                   -> flush de telemetría, cerrar cliente Mongo
-```
-
-Los `Depends` de FastAPI **no construyen nada**: solo leen de `app.state`. Así el coste de arranque se paga
-una vez, los tests pueden sustituir cualquier puerto con un `dependency_overrides`, y hay un único lugar en
-todo el repositorio donde se ve el grafo completo de dependencias — que es, además, el mejor punto de
-entrada para alguien que llega nuevo al código.
-
-CLI y servidor MCP usan la **misma** función de ensamblado, sin duplicarla.
+Real: una sola clase `Settings` (`pydantic-settings`, `config.py`), cacheada con `@lru_cache` vía
+`get_settings()`. **No hay todavía un único punto de ensamblado compartido** entre `app.py`, `cli.py` y
+`mongo_mcp_server.py` — cada uno construye sus propios adaptadores por defecto de forma independiente
+(mismo patrón, código separado). Unificarlo en una función de ensamblado compartida es una mejora de
+mantenibilidad razonable cuando aparezca una segunda razón para tocar los tres a la vez — hoy no bloquea
+nada porque los tres procesos siguen el mismo criterio (`or Adaptador()` con default real).
 
 ## 14. Puntos de extensión previstos
 
-Cada uno está diseñado para ser un cambio **local**: nuevo adaptador, cero cambios en `application/`.
-
-| Extensión | Fase | Qué se añade | Qué NO cambia |
+| Extensión | Depende de | Qué se añade | Qué NO cambia |
 | --- | --- | --- | --- |
-| Agente de fallback con tools | 4 | `AgentToolExecutor` + guardrails | Router, tools, repositorios |
-| Motor de grafo de estados | 4+, condicional | Adaptador del puerto de orquestación | Casos de uso, dominio |
-| Búsqueda vectorial | 5, condicional | `AtlasVectorSearchRepository` | Puerto de búsqueda, casos de uso |
-| Canal Alexa | 6 | `interfaces/alexa` + política de respuesta breve | Orquestador, tools |
-| Multi-tenancy real | 8 | Filtro obligatorio en el repositorio base | Firmas de casos de uso (ya llevan `tenant_id`) |
-| Proveedor LLM alternativo | Cualquiera | Otro adaptador de `LLMClient` | Todo lo demás |
-
-Que esta tabla pueda escribirse con una columna «qué NO cambia» tan amplia es la única justificación real
-del coste de la arquitectura hexagonal. Si en algún momento deja de poder escribirse así, la abstracción ha
-dejado de pagar y hay que revisarla.
+| Agente de fallback con tools (4.3) | 3.1 (hecho) | `Agent` + guardrails (4.2) | Router, tools MCP, repositorios |
+| `multi_task` (4.9) | 4.3 | Ruta nueva en `IntentClassification` + descomposición en el agente | Contrato del router, `_dispatch` de acciones simples |
+| Endpoint conversacional (4.10) | 4.3, 4.9 | Ruta HTTP que expone `TaskOrchestrator` | `TaskOrchestrator`, router, MCP |
+| Canal Alexa (Fase 6) | 4.10 | `interfaces/alexa.py` + política de respuesta breve | Orquestador, tools |
+| `app.py` bajo `src/` (limpieza estructural) | Ninguna, cuando se priorice | Mover el entrypoint a `interfaces/api.py` | Rutas, lógica |
+| Proveedor LLM alternativo | Ninguna | Otro adaptador de `LLMClient` (ya soporta OpenAI/Ollama) | Todo lo demás |
 
 ## 15. Definition of Done de la arquitectura técnica
 
-- [ ] El paquete se instala y los tres procesos (API, CLI, MCP) arrancan desde el mismo paquete.
-- [ ] Un test de CI verifica las reglas de dependencia entre capas.
-- [ ] Todo puerto tiene al menos dos adaptadores: el real y uno de test.
-- [ ] Existe un integration test de ida y vuelta por cada repositorio contra Mongo real.
-- [ ] Todos los índices declarados en §8 se crean en el arranque de forma idempotente.
-- [ ] Ninguna tool MCP acepta `tenant_id` como parámetro de entrada.
-- [ ] Un test comprueba que acceder a un recurso de otro tenant devuelve `404`.
-- [ ] Los errores de dominio se traducen a HTTP solo en `interfaces/` y sin filtrar internals.
-- [ ] El router devuelve un objeto validado; una salida inválida nunca llega a la ejecución.
-- [ ] Toda interacción emite las métricas de §10 con el `request_id` de la petición.
-- [ ] `docs/arquitectura_y_prd.md` referencia este documento y se actualiza con cada cambio de diseño.
+- [x] El paquete se instala y los tres procesos (API, CLI, MCP) arrancan desde el mismo paquete instalado.
+- [ ] Un test de CI verifica las reglas de dependencia entre capas (import-linter o equivalente).
+- [x] Existe un integration test de ida y vuelta por cada repositorio contra Mongo real.
+- [x] Todos los índices declarados en §8 se crean en el arranque de forma idempotente.
+- [x] Ninguna tool MCP acepta `tenant_id` como parámetro de entrada.
+- [ ] Un test comprueba que acceder a un recurso de otro tenant devuelve `404` — no aplica todavía sin
+      multi-tenancy real (Fase 8).
+- [x] El router devuelve un objeto validado; una salida inválida nunca llega a la ejecución.
+- [x] Toda interacción del camino conversacional emite las métricas de §10 con el `request_id` de la
+      petición.
+- [ ] `app.py` vive bajo `src/assistant_personal/interfaces/`, no en la raíz del repo (cosmético, sin
+      bloquear nada funcional).
+- [x] Este documento se resincronizó con la implementación real (2026-08-19) y referencia
+      `docs/anexo_arquitectura_objetivo.md` como fuente de verdad del roadmap.
