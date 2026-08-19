@@ -135,9 +135,10 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
         return await _audited("health_check", set(), _call())
 
     @mcp.tool()
-    async def listar_tareas() -> list[dict[str, Any]]:
+    async def listar_tareas() -> dict[str, Any]:
         """Devuelve las tareas activas del asistente personal."""
-        return await _audited("listar_tareas", set(), service.list_tasks_async())
+        tasks = await _audited("listar_tareas", set(), service.list_tasks_async())
+        return {"tasks": tasks}
 
     @mcp.tool()
     async def crear_tarea(
@@ -196,7 +197,7 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
         context_metadata: dict[str, Any] | None = None,
         steps: list[dict[str, Any]] | None = None,
         agent_notes: list[dict[str, Any]] | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any]:
         """Actualiza una tarea existente por task_id usando los campos principales del modelo de negocio."""
         provided = _provided_keys(
             task_id=task_id,
@@ -226,7 +227,8 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
             agent_notes=agent_notes,
         )
 
-        return await _audited("actualizar_tarea", provided, service.update_task_async(task_id, updates))
+        task = await _audited("actualizar_tarea", provided, service.update_task_async(task_id, updates))
+        return {"task": task}
 
     @mcp.tool()
     async def completar_tarea(task_id: str) -> dict[str, Any]:
@@ -234,6 +236,7 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
         return await _audited("completar_tarea", {"task_id"}, service.complete_task_async(task_id))
 
     @mcp.tool()
-    async def buscar_tarea(task_id: str) -> dict[str, Any] | None:
+    async def buscar_tarea(task_id: str) -> dict[str, Any]:
         """Busca una tarea concreta por su task_id."""
-        return await _audited("buscar_tarea", {"task_id"}, service.get_task_async(task_id))
+        task = await _audited("buscar_tarea", {"task_id"}, service.get_task_async(task_id))
+        return {"task": task}

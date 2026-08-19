@@ -59,10 +59,8 @@ class McpTaskServiceClient:
         return result.structuredContent if result.structuredContent is not None else _extract_text(result)
 
     async def list_tasks_async(self) -> list[dict[str, Any]]:
-        # FastMCP envuelve arrays bajo {"result": [...]} porque el spec de MCP exige un objeto
-        # como structuredContent de tope, no un array suelto.
         result = await self._call_tool("listar_tareas", {})
-        return (result or {}).get("result", [])
+        return (result or {}).get("tasks", [])
 
     async def create_task_async(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._call_tool("crear_tarea", payload)

@@ -25,10 +25,10 @@ def _error(message: str) -> CallToolResult:
 
 
 class McpTaskServiceClientTests(unittest.IsolatedAsyncioTestCase):
-    async def test_list_tasks_unwraps_the_result_key(self) -> None:
-        """FastMCP envuelve arrays sueltos bajo {"result": [...]} porque el spec de MCP exige
-        un objeto de tope en structuredContent — este test fija ese contrato."""
-        session = FakeSession({"listar_tareas": _ok({"result": [{"task_id": "t-1"}]})})
+    async def test_list_tasks_unwraps_the_tasks_key(self) -> None:
+        """listar_tareas devuelve {"tasks": [...]} (ítem 3.5: contrato explícito, sin depender
+        del wrapping automático de FastMCP para tipos no-objeto) — este test fija ese contrato."""
+        session = FakeSession({"listar_tareas": _ok({"tasks": [{"task_id": "t-1"}]})})
         client = McpTaskServiceClient(session=session)
 
         tasks = await client.list_tasks_async()

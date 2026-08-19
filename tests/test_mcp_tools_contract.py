@@ -71,10 +71,10 @@ class McpToolsContractTests(unittest.IsolatedAsyncioTestCase):
         await session.initialize()
         return session, stack
 
-    # FastMCP envuelve structuredContent bajo {"result": ...} cuando el tipo de retorno anotado
-    # es `dict | None` (buscar_tarea, actualizar_tarea) — igual que ya hace con arrays (ítem 3.1)
-    # — pero no cuando es un `dict` simple (crear_tarea, completar_tarea). Confirmado con
-    # smoke-testing real antes de escribir estos asserts, no es una suposición.
+    # Ítem 3.5: las 6 tools devuelven siempre un objeto con nombres de campo explícitos
+    # (`tasks`, `task`) en vez de depender del wrapping automático de FastMCP bajo `{"result":
+    # ...}` para tipos no-objeto (`dict | None`, listas) — contrato uniforme, sin necesidad de
+    # conocer por tool si hace falta desenvolver algo.
     async def _create_task(self, session: ClientSession, title: str) -> dict[str, Any]:
         result = await session.call_tool("crear_tarea", {"title": title})
         assert result.structuredContent is not None
@@ -111,6 +111,19 @@ class McpToolsContractTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await stack.aclose()
 
+    async def test_listar_tareas_devuelve_las_tareas_bajo_la_clave_tasks(self) -> None:
+        session, stack = await self._open_session()
+        try:
+            title = f"mcp-contract-{uuid.uuid4()}"
+            created = await self._create_task(session, title)
+
+            result = await session.call_tool("listar_tareas", {})
+            self.assertFalse(result.isError)
+            task_ids = {t["task_id"] for t in result.structuredContent["tasks"]}
+            self.assertIn(created["task_id"], task_ids)
+        finally:
+            await stack.aclose()
+
     async def test_crear_tarea_devuelve_la_tarea_creada_con_task_id(self) -> None:
         session, stack = await self._open_session()
         try:
@@ -138,11 +151,11 @@ class McpToolsContractTests(unittest.IsolatedAsyncioTestCase):
 
             found = await session.call_tool("buscar_tarea", {"task_id": created["task_id"]})
             self.assertFalse(found.isError)
-            self.assertEqual(found.structuredContent["result"]["title"], title)
+            self.assertEqual(found.structuredContent["task"]["title"], title)
 
             missing = await session.call_tool("buscar_tarea", {"task_id": "no-existe-999"})
             self.assertFalse(missing.isError)
-            self.assertIsNone(missing.structuredContent["result"])
+            self.assertIsNone(missing.structuredContent["task"])
         finally:
             await stack.aclose()
 
@@ -167,7 +180,7 @@ class McpToolsContractTests(unittest.IsolatedAsyncioTestCase):
 
             result = await session.call_tool("actualizar_tarea", {"task_id": created["task_id"], "title": new_title})
             self.assertFalse(result.isError)
-            self.assertEqual(result.structuredContent["result"]["title"], new_title)
+            self.assertEqual(result.structuredContent["task"]["title"], new_title)
         finally:
             await stack.aclose()
 
