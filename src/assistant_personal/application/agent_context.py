@@ -125,7 +125,7 @@ class ShortTermMemory:
         return [(turn["user_message"], turn["assistant_response"]) for turn in summary.get("turns", [])]
 
     async def get_raw_session_async(self, session_id: str = "default", max_turns: int = 10) -> dict[str, Any]:
-        """Sesión sin recortar a `max_turns`/`max_items` de instancia — usado por `ContextBuilder`, que 
+        """Sesión sin recortar a `max_turns`/`max_items` de instancia — usado por `ContextBuilder`, que
             decide cuánto entra según presupuesto de tokens, no un conteo fijo."""
         result: dict[str, Any] = await self._invoke_repository_async(
             "get_context_summary", session_id, max_turns=max_turns, max_items=self.max_items

@@ -64,8 +64,8 @@ class MongoSessionRepository(SessionMemoryRepository):
             "timestamp": self._build_timestamp(),
         })
         # Tope de seguridad, no el presupuesto real: el resumen incremental de `ContextBuilder`
-        # recorta a 1 turno + resumen cada `summarize_every_n_turns` (default # 10) vía `compact_session_async`. 
-        # Este cap más alto (`_MAX_STORED_TURNS`) solo evita crecimiento sin límite si el 
+        # recorta a 1 turno + resumen cada `summarize_every_n_turns` (default # 10) vía `compact_session_async`.
+        # Este cap más alto (`_MAX_STORED_TURNS`) solo evita crecimiento sin límite si el
         # resumen falla repetidamente (ej. LLM caído varios turnos).
         await self._upsert_session(session_id, {"turns": turns[-_MAX_STORED_TURNS:]})
 
@@ -91,7 +91,7 @@ class MongoSessionRepository(SessionMemoryRepository):
         return {"turns": turns, "items": items, "summary": session.get("summary", "")}
 
     async def compact_session_async(self, session_id: str, summary: str, keep_last_turns: int = 1) -> None:
-        """Fija el resumen incremental y recorta `turns` a los últimos `keep_last_turns` 
+        """Fija el resumen incremental y recorta `turns` a los últimos `keep_last_turns`
         — los turnos ya incorporados al resumen se descartan de la lista activa."""
         session = await self._get_session(session_id)
         turns = list(session.get("turns", []))

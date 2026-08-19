@@ -23,7 +23,7 @@ class SessionSummarizer(Protocol):
 
 class ContextBuilder:
     """Arma el contexto que se envía al LLM respetando un presupuesto de tokens medible, y
-    dispara el resumen incremental de sesión cada `summarize_every_n_turns` turnos  — en vez 
+    dispara el resumen incremental de sesión cada `summarize_every_n_turns` turnos — en vez
     de los conteos fijos arbitrarios ("últimos 3 turnos") que usaba `AgentContext`
     antes de este ítem.
 
