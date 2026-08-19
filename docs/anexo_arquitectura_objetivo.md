@@ -941,11 +941,9 @@ Objetivo: **eliminar fallos silenciosos y desbloquear el resto de fases.**
 de sesión persiste demostrablemente; ningún `print`; ningún secreto en el repo.
 
 > **Estado real (2026-08-18):** `uv sync` ya es literal (ver 1.1 en Fase 1). Persistencia de memoria,
-> ausencia de `print` y ausencia de secretos: verificados ✅. "Tests en verde" tiene una salvedad: con
-> Docker arriba, 47/50 pasan — quedan 3 errores preexistentes sin relación con Fase 0
-> (`test_intent_router`, `test_mcp_server`, `test_task_service`, bloqueados por un import roto en
-> `app.py`/`infrastructure/mcp/server.py`), confirmados anteriores a este trabajo vía `git stash`. No se
-> corrigieron por estar fuera de alcance de Fase 0; quedan como deuda conocida para cuando se toque MCP.
+> ausencia de `print` y ausencia de secretos: verificados ✅. "Tests en verde" tenía una salvedad
+> (`test_intent_router`/`test_mcp_server` huérfanos, `test_task_service` roto por un bug sin relación) —
+> los dos primeros se resolvieron en el ítem 3.1; `test_task_service` sigue excluido de CI, deuda aparte.
 
 ### Fase 1 — Fundamentos técnicos con profundidad real
 
@@ -994,14 +992,20 @@ coste por interacción.
 **DoD de fase:** la calidad del router es medible y se vigila en CI; la memoria de largo plazo sobrevive a
 reinicios; el contexto enviado al LLM está acotado y registrado.
 
+**Validado (2026-08-19):** Suites de integración contra Mongo real que
+sustentan esta fase: `test_long_term_memory_integration.py`, `test_session_memory_integration.py`,
+`test_context_builder.py`. Deuda abierta sin bloquear el DoD: 2.9 (Responses API) y el hueco
+de 2.14/2.16 (fallos reales no sumados al golden dataset, ver §A.12 DoD) — ninguno afecta las tres garantías
+de arriba. 
+
 ### Fase 3 — MCP en profundidad
 
-| # | Cambio | Nivel | Área |
-| --- | --- | --- | --- |
-| 3.1 | MCP como única vía de ejecución de acciones; eliminar caminos duplicados | 🟢 | §A.8 |
-| 3.2 | Tests de contrato por tool (esquema + comportamiento) | 🟡 | §A.12 |
-| 3.3 | Scopes declarados por tool + auditoría de invocaciones | 🟡 | §A.11 |
-| 3.4 | `tenant_id` inyectado por el servidor, nunca parámetro del LLM | 🟢 | §A.11 |
+| # | Cambio | Nivel | Área | Estado |
+| --- | --- | --- | --- | --- |
+| 3.1 | MCP como única vía de ejecución de acciones; eliminar caminos duplicados | 🟢 | §A.8 | ✅ Hecho — `TaskOrchestrator` (usado por el CLI) llamaba a `TaskService` directo, en paralelo a las tools MCP y a `app.py`: tres caminos distintos a Mongo. Nuevo `McpTaskServiceClient` (cliente MCP real por stdio, `infrastructure/mcp/client.py`) implementa la misma interfaz async que `TaskService` (`list_tasks_async`/`create_task_async`/`complete_task_async`), así que `_dispatch` no cambió — solo el `service` que recibe el orquestador. `cli.py` ahora construye `McpTaskServiceClient()` por defecto en vez de `TaskService()`. Hallazgo real: el SDK de MCP no hereda el entorno del proceso padre por defecto (solo una allowlist de seguridad sin `MONGO_URI`/`OPENAI_API_KEY`) — sin pasar el entorno explícito, el servidor no encontraba `.env`. Verificado E2E real (CLI → orquestador → cliente MCP → subproceso servidor → Mongo local), no solo con tests. `test_intent_router.py`/`test_mcp_server.py` (huérfanos, testeaban un `IntentRouter` y un `actualizar_tarea` que ya no existen) se borraron; reemplazados por `test_mcp_client.py` (unitario, sesión falsa) y `test_mcp_client_integration.py` (protocolo MCP real contra Mongo local). Pendiente, fuera de alcance: `delete_task` no tiene tool MCP ni rama en `_dispatch` — ya fallaba antes de este ítem, no es una regresión |
+| 3.2 | Tests de contrato por tool (esquema + comportamiento) | 🟡 | §A.12 | |
+| 3.3 | Scopes declarados por tool + auditoría de invocaciones | 🟡 | §A.11 | |
+| 3.4 | `tenant_id` inyectado por el servidor, nunca parámetro del LLM | 🟢 | §A.11 | |
 
 **DoD de fase:** ninguna acción se puede ejecutar sin pasar por una tool MCP; cada invocación queda
 auditada; ninguna tool acepta filtros que cruzen tenants.

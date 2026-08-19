@@ -3,11 +3,12 @@ import asyncio
 import sys
 import uuid
 from collections.abc import Sequence
+from typing import Any
 
 from src.assistant_personal.application.orchestrator import TaskOrchestrator
-from src.assistant_personal.application.task_service import TaskService
 from src.assistant_personal.domain.repositories.long_term_memory_repository import LongTermMemoryRepository
 from src.assistant_personal.domain.repositories.session_memory_repository import SessionMemoryRepository
+from src.assistant_personal.infrastructure.mcp.client import McpTaskServiceClient
 from src.assistant_personal.infrastructure.persistence.mongo.long_term_memory_repository import (
     MongoLongTermMemoryRepository,
 )
@@ -30,7 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _handle_interactive(service: TaskService, args: argparse.Namespace) -> None:
+def _handle_interactive(service: Any, args: argparse.Namespace) -> None:
     _run_interactive_loop(service)
 
 
@@ -38,8 +39,23 @@ def _format_result_message(result: dict[str, object]) -> str:
     return result.get("message") or result.get("result") or result.get("reason") or "No se pudo procesar la solicitud."
 
 
+async def _close_service(service: Any) -> None:
+    aclose = getattr(service, "aclose", None)
+    if callable(aclose):
+        await aclose()
+
+
 def _handle_single_message(
-    service: TaskService,
+    service: Any,
+    message: str,
+    session_repository: SessionMemoryRepository | None = None,
+    long_term_repository: LongTermMemoryRepository | None = None,
+) -> None:
+    asyncio.run(_handle_single_message_async(service, message, session_repository, long_term_repository))
+
+
+async def _handle_single_message_async(
+    service: Any,
     message: str,
     session_repository: SessionMemoryRepository | None = None,
     long_term_repository: LongTermMemoryRepository | None = None,
@@ -51,12 +67,15 @@ def _handle_single_message(
         session_id=f"cli-{uuid.uuid4()}",
         user_id=_CLI_USER_ID,
     )
-    result = orchestrator.handle_message(message)
-    print(_format_result_message(result))
+    try:
+        result = await orchestrator.handle_message_async(message)
+        print(_format_result_message(result))
+    finally:
+        await _close_service(service)
 
 
 def _run_interactive_loop(
-    service: TaskService,
+    service: Any,
     session_repository: SessionMemoryRepository | None = None,
     long_term_repository: LongTermMemoryRepository | None = None,
 ) -> None:
@@ -72,7 +91,7 @@ def _run_interactive_loop(
 
 
 async def _run_interactive_loop_async(
-    service: TaskService,
+    service: Any,
     session_repository: SessionMemoryRepository | None = None,
     long_term_repository: LongTermMemoryRepository | None = None,
 ) -> None:
@@ -85,28 +104,31 @@ async def _run_interactive_loop_async(
     )
     print("Asistente personal activo. Escribe 'salir' para terminar.")
 
-    while True:
-        try:
-            message = input("Usuario> ").strip()
-        except EOFError:
-            print("\nHasta pronto.")
-            break
+    try:
+        while True:
+            try:
+                message = input("Usuario> ").strip()
+            except EOFError:
+                print("\nHasta pronto.")
+                break
 
-        if message.lower() in {"salir", "exit", "quit"}:
-            print("Hasta pronto.")
-            break
+            if message.lower() in {"salir", "exit", "quit"}:
+                print("Hasta pronto.")
+                break
 
-        if not message:
-            print("Guardrails: el mensaje está vacío.")
-            continue
+            if not message:
+                print("Guardrails: el mensaje está vacío.")
+                continue
 
-        result = await orchestrator.handle_message_async(message)
-        print(_format_result_message(result))
+            result = await orchestrator.handle_message_async(message)
+            print(_format_result_message(result))
+    finally:
+        await _close_service(service)
 
 
 def main(
     argv: Sequence[str] | None = None,
-    service: TaskService | None = None,
+    service: Any = None,
     session_repository: SessionMemoryRepository | None = None,
     long_term_repository: LongTermMemoryRepository | None = None,
 ) -> None:
@@ -115,17 +137,17 @@ def main(
 
     if raw_args and raw_args[0] not in {"interactive"} and not raw_args[0].startswith("-"):
         _handle_single_message(
-            service or TaskService(), " ".join(raw_args).strip(), session_repository, long_term_repository
+            service or McpTaskServiceClient(), " ".join(raw_args).strip(), session_repository, long_term_repository
         )
         return
 
     args = parser.parse_args(raw_args)
 
     if not args.command or args.command == "interactive":
-        _run_interactive_loop(service or TaskService(), session_repository, long_term_repository)
+        _run_interactive_loop(service or McpTaskServiceClient(), session_repository, long_term_repository)
         return
 
-    service = service or TaskService()
+    service = service or McpTaskServiceClient()
     args.func(service, args)
 
 
