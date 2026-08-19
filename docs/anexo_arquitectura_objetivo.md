@@ -1012,6 +1012,7 @@ auditada; ninguna tool acepta filtros que cruzen tenants.
 | 4.5 | Documento de decisión: evaluar los 4 criterios de state graph y registrar la conclusión | 🟢 | §A.8 |
 | 4.6 | LLM-as-judge calibrado para la respuesta final | 🟡 | §A.12 |
 | 4.7 | Soporte de solicitudes multi-intención: ejecutar varias acciones de dominio en un mismo turno | 🟡 | §A.12 |
+| 4.8 | Reordenar responsabilidades de `infrastructure/` mezcladas por la forma orgánica en que creció (router vs. LLM genérico, protocols vs. lógica de reglas) | 🟡 | §A.8 |
 
 **Nota sobre 4.7:** hoy (Fase 2, ítem 2.8) el router detecta mensajes con dos o más acciones distintas
 (ej. "borra la tarea vieja y agrega otra nueva de comprar pan") y responde `clarify` pidiendo que se
@@ -1021,6 +1022,24 @@ schema de salida del LLM (`IntentClassification`/`IntentDecision` son de una sol
 route()` y `TaskOrchestrator._dispatch`, que hoy asumen un único `IntentDecision` por turno de punta a
 punta. Es un candidato natural para cuando exista orquestación multi-paso real (agente con tools MCP,
 ítem 4.3) en vez de resolverlo como un parche sobre el router de reglas + LLM único.
+
+**Nota sobre 4.8:** surgió al preguntarse si el cliente OpenAI compartido debería seguir viviendo dentro
+de `infrastructure/routers/` una vez que el agente de Fase 4 (ítem 4.3) también necesite llamar al LLM.
+Hoy `openai_llm_client.py` mezcla `_OpenAITextClient` (cliente base genérico: invocación, parseo,
+métricas — nada específico del router) con cinco responders concretos del router actual
+(`OpenAIIntentClassifier`, `OpenAIGeneralKnowledgeResponder`, `OpenAISmallTalkResponder`,
+`OpenAIProfileFactExtractor`, `OpenAISessionSummarizer`); y `hybrid_router.py` mezcla los cuatro
+Protocols de dependencias, la clase del router, las reglas rápidas (`_check_fast_rules` y sus
+variantes) y lógica de negocio (`_needs_clarification`) en un solo archivo. Ninguna de las dos cosas
+es un bug — es la forma orgánica en que creció el código a través de las Fases 1–2 — pero antes de que
+el agente de Fase 4 empiece a necesitar el mismo cliente LLM, vale la pena separar: cliente base
+genérico a `infrastructure/llm/` (fuera del paquete `routers/`, para que no quede semánticamente atado
+al router), y opcionalmente dividir `hybrid_router.py` en módulos (`protocols.py`, `fast_rules.py`,
+`router.py`). Deliberadamente no se hace ahora (sin ganancia funcional inmediata, para no adivinar la
+forma del puerto genérico dos veces) — el disparador natural es cuando arranque el trabajo de 4.3.
+La idea del usuario, más amplia que este caso puntual, es hacer un mapeo completo del código para
+identificar qué otras responsabilidades conviene separar manteniendo la separación por capas —
+pendiente de decidir si se hace como auditoría dedicada antes de Fase 4 o incrementalmente ítem a ítem.
 
 **DoD de fase:** el patrón híbrido funciona con la ruta barata cubriendo la mayoría del tráfico; los
 guardrails están testeados; la decisión sobre state graph está documentada con criterios, no con
