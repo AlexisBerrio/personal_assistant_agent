@@ -19,6 +19,7 @@ TOOL_SCOPES: dict[str, str] = {
     "crear_tarea": "write",
     "actualizar_tarea": "write",
     "completar_tarea": "write",
+    "eliminar_tarea": "write",
 }
 
 
@@ -239,4 +240,10 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
     async def buscar_tarea(task_id: str) -> dict[str, Any]:
         """Busca una tarea concreta por su task_id."""
         task = await _audited("buscar_tarea", {"task_id"}, service.get_task_async(task_id))
+        return {"task": task}
+
+    @mcp.tool()
+    async def eliminar_tarea(task_id: str) -> dict[str, Any]:
+        """Elimina (soft delete) una tarea existente por su task_id."""
+        task = await _audited("eliminar_tarea", {"task_id"}, service.delete_task_async(task_id))
         return {"task": task}

@@ -148,6 +148,10 @@ class FakeService:
         self.calls.append(("complete", task_id))
         return {"task_id": task_id, "status": "Completed"}
 
+    def delete_task(self, task_id):
+        self.calls.append(("delete", task_id))
+        return {"task_id": task_id, "deleted": True}
+
 
 class FakeCreateTaskRouter:
     def extract_profile_facts(self, _message, context=None):
@@ -178,6 +182,19 @@ class FakeCreateWithoutTitleRouter:
             payload={},
             confidence=1.0,
             source="llm",
+        )
+
+
+class FakeDeleteTaskRouter:
+    def extract_profile_facts(self, _message, context=None):
+        return UserProfileExtraction()
+
+    def route(self, _message, context=None):
+        return IntentDecision(
+            action=IntentAction.DELETE_TASK,
+            payload={"task_id": "t-99"},
+            confidence=1.0,
+            source="rule",
         )
 
 
@@ -224,6 +241,17 @@ class TaskOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["action"], "create_task")
         self.assertEqual(response["result"]["title"], "Tarea para estudiar")
         self.assertEqual(service.calls[0][0], "create")
+
+    def test_deletes_task_through_the_orchestrator(self):
+        service = FakeService()
+        orchestrator = TaskOrchestrator(service=service, router=FakeDeleteTaskRouter())
+
+        response = orchestrator.handle_message("borra la tarea t-99")
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["action"], "delete_task")
+        self.assertEqual(response["result"]["task_id"], "t-99")
+        self.assertEqual(service.calls[0], ("delete", "t-99"))
 
     def test_retries_once_when_a_specialist_fails(self):
         service = FlakyService()

@@ -23,6 +23,7 @@ EXPECTED_TOOLS_REQUIRED_PARAMS = {
     "actualizar_tarea": {"task_id"},
     "completar_tarea": {"task_id"},
     "buscar_tarea": {"task_id"},
+    "eliminar_tarea": {"task_id"},
 }
 
 
@@ -45,7 +46,7 @@ def _local_mongo_is_reachable() -> bool:
     "Requiere el Mongo local desechable de docker-compose.yml: ejecuta `docker compose up -d mongo`",
 )
 class McpToolsContractTests(unittest.IsolatedAsyncioTestCase):
-    """Contrato (esquema + comportamiento) de las 6 tools MCP, contra el protocolo real por
+    """Contrato (esquema + comportamiento) de las 7 tools MCP, contra el protocolo real por
     stdio y Mongo local — no la Atlas de `.env`. Complementa test_mcp_client_integration.py
     (ítem 3.1, que solo prueba que el cliente funciona en el camino feliz): aquí se valida cada
     tool por separado, incluyendo casos borde, para que un cambio accidental de esquema o de
@@ -181,6 +182,23 @@ class McpToolsContractTests(unittest.IsolatedAsyncioTestCase):
             result = await session.call_tool("actualizar_tarea", {"task_id": created["task_id"], "title": new_title})
             self.assertFalse(result.isError)
             self.assertEqual(result.structuredContent["task"]["title"], new_title)
+        finally:
+            await stack.aclose()
+
+    async def test_eliminar_tarea_marca_como_eliminada_y_no_falla_sobre_id_inexistente(self) -> None:
+        session, stack = await self._open_session()
+        try:
+            title = f"mcp-contract-{uuid.uuid4()}"
+            created = await self._create_task(session, title)
+
+            deleted = await session.call_tool("eliminar_tarea", {"task_id": created["task_id"]})
+            self.assertFalse(deleted.isError)
+            self.assertEqual(deleted.structuredContent["task"]["task_id"], created["task_id"])
+            self.assertTrue(deleted.structuredContent["task"]["deleted"])
+
+            missing = await session.call_tool("eliminar_tarea", {"task_id": "no-existe-999"})
+            self.assertFalse(missing.isError)
+            self.assertIsNone(missing.structuredContent["task"])
         finally:
             await stack.aclose()
 

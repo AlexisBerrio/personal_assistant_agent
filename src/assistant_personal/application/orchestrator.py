@@ -271,6 +271,9 @@ class TaskOrchestrator:
         if action == "complete_task":
             return "Tarea completada."
 
+        if action == "delete_task":
+            return "Tarea eliminada."
+
         return str(result)
 
     async def _execute_with_retries(self, intent: Any) -> dict[str, Any]:
@@ -304,6 +307,13 @@ class TaskOrchestrator:
             if not task_id:
                 raise ValueError("Guardrails: falta el identificador de tarea")
             result = await self._invoke_service("complete_task", task_id)
+            return {"success": True, "action": intent.action, "result": result}
+
+        if intent.action == "delete_task":
+            task_id = intent.payload.get("task_id")
+            if not task_id:
+                raise ValueError("Guardrails: falta el identificador de tarea")
+            result = await self._invoke_service("delete_task", task_id)
             return {"success": True, "action": intent.action, "result": result}
 
         return {"success": False, "action": "clarify", "reason": "No se pudo ejecutar la acción"}

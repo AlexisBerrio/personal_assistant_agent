@@ -68,6 +68,10 @@ class McpTaskServiceClient:
     async def complete_task_async(self, task_id: str) -> dict[str, Any]:
         return await self._call_tool("completar_tarea", {"task_id": task_id})
 
+    async def delete_task_async(self, task_id: str) -> dict[str, Any] | None:
+        result = await self._call_tool("eliminar_tarea", {"task_id": task_id})
+        return (result or {}).get("task")
+
     async def aclose(self) -> None:
         if self._owns_session and self._exit_stack is not None:
             await self._exit_stack.aclose()

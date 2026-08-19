@@ -395,11 +395,14 @@ recurso JSON crudo), lista para un frontend propio o, más adelante, para servir
 | `actualizar_tarea` | `task_id`, campos parciales | Sí | Actualiza |
 | `completar_tarea` | `task_id` | Sí | Marca como completada |
 | `buscar_tarea` | `task_id` | Sí | Busca una tarea puntual |
+| `eliminar_tarea` | `task_id` | Sí | Elimina (soft delete) |
 
-**Pendiente, encontrado en el ítem 3.1:** no existe una tool `eliminar_tarea` — `delete_task` no tiene
-tool MCP ni rama en `TaskOrchestrator._dispatch`. Ya estaba roto antes de 3.1 (no es una regresión de ese
-ítem), pero es una brecha real entre lo que el dominio modela (`IntentAction.DELETE_TASK` existe) y lo
-que se puede ejecutar hoy.
+Cada tool declara un scope (`read`/`write`, `TOOL_SCOPES`) y audita su invocación por logger
+estructurado (ítem 3.3) — metadata sin enforcement todavía, eso depende del `Principal` de Fase 6-7.
+`listar_tareas`/`buscar_tarea`/`actualizar_tarea` devuelven siempre un objeto con nombres de campo
+explícitos (`{"tasks": [...]}`, `{"task": {...} | None}`), no dependen del wrapping automático de
+FastMCP (ítem 3.5). **Pendiente:** el mismatch `task_reference`/`task_id` entre el prompt del router y
+`TaskOrchestrator._dispatch` — completar/eliminar por descripción natural falla hoy (ítem 3.7).
 
 **Invariantes de seguridad de las tools:**
 
