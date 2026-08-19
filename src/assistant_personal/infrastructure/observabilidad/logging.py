@@ -25,7 +25,10 @@ def configure_logging(level: int = logging.INFO) -> None:
         ],
         wrapper_class=structlog.make_filtering_bound_logger(level),
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(file=sys.stdout),
+        # stderr, no stdout: el servidor MCP en modo stdio usa stdout como canal del protocolo
+        # JSON-RPC — un log ahí lo corrompe. La CLI también reserva stdout para su salida real
+        # (`print`), no para diagnóstico. stderr es seguro en todos los entrypoints.
+        logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
         cache_logger_on_first_use=True,
     )
 
