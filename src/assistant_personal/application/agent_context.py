@@ -7,8 +7,10 @@ from src.assistant_personal.application.context_builder import ContextBuilder
 from src.assistant_personal.domain.entities import UserProfileFact
 from src.assistant_personal.domain.repositories.long_term_memory_repository import LongTermMemoryRepository
 from src.assistant_personal.domain.repositories.session_memory_repository import SessionMemoryRepository
+from src.assistant_personal.infrastructure.observabilidad import get_tracer
 
 _MAX_STORED_TURNS = 20
+tracer = get_tracer(__name__)
 
 
 class InMemorySessionRepository:
@@ -253,11 +255,14 @@ class AgentContext:
         """Delega en `ContextBuilder`: presupuesto de tokens medible en vez de conteos fijos
         arbitrarios. `last_context_tokens` queda disponible para observabilidad (mismo patrón
         que `last_llm_metadata` del router)."""
-        context_text, tokens = await self.context_builder.build_context_async(
-            self.short_term_memory, self.long_term_memory, session_id
-        )
-        self.last_context_tokens = tokens
-        return context_text
+        with tracer.start_as_current_span("memoria.cargar") as span:
+            span.set_attribute("session_id", session_id)
+            context_text, tokens = await self.context_builder.build_context_async(
+                self.short_term_memory, self.long_term_memory, session_id
+            )
+            self.last_context_tokens = tokens
+            span.set_attribute("contexto_tokens", tokens)
+            return context_text
 
     async def maybe_summarize_session_async(self, session_id: str = "default") -> None:
         await self.context_builder.maybe_summarize_async(self.short_term_memory, session_id)

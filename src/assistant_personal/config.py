@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     llm_request_timeout_seconds: float = 5.0
     llm_max_retries: int = 2
 
+    # Apagado por defecto: tracing requiere un collector (Jaeger) corriendo, igual que el Mongo
+    # de docker-compose — opt-in, no algo que deba funcionar sin infraestructura extra.
+    otel_enabled: bool = False
+    otel_exporter_otlp_endpoint: str = "http://localhost:4317"
+
     @field_validator("openai_api_key", mode="before")
     @classmethod
     def _strip_openai_api_key(cls, value: str | None) -> str | None:

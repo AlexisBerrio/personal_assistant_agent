@@ -9,7 +9,7 @@ from src.assistant_personal.domain.entities import (
     IntentDecision,
     UserProfileExtraction,
 )
-from src.assistant_personal.infrastructure.observabilidad import get_logger
+from src.assistant_personal.infrastructure.observabilidad import get_logger, get_tracer
 from src.assistant_personal.infrastructure.routers.openai_llm_client import (
     OpenAIGeneralKnowledgeResponder,
     OpenAIIntentClassifier,
@@ -18,6 +18,7 @@ from src.assistant_personal.infrastructure.routers.openai_llm_client import (
 )
 
 logger = get_logger(__name__)
+tracer = get_tracer(__name__)
 
 EXACT_LIST_TASKS_COMMANDS = {
     "lista mis tareas",
@@ -108,6 +109,16 @@ class ProductionIntentRouter:
         self.last_llm_metadata: dict[str, Any] | None = None
 
     async def route(self, user_message: str, context: str | None = None) -> IntentDecision:
+        """Envoltorio del span `router.clasificar` (ítem 4.1) alrededor de `_route`, para no
+        re-indentar toda la lógica de reglas/LLM bajo un único `with`."""
+        with tracer.start_as_current_span("router.clasificar") as span:
+            decision = await self._route(user_message, context)
+            span.set_attribute("accion", str(decision.action))
+            span.set_attribute("fuente", decision.source)
+            span.set_attribute("confianza", decision.confidence)
+            return decision
+
+    async def _route(self, user_message: str, context: str | None = None) -> IntentDecision:
         clean_text = (user_message or "").strip()
         self.last_llm_metadata = None
 

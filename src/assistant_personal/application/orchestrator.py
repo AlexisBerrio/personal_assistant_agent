@@ -12,11 +12,12 @@ from src.assistant_personal.application.agent_context import AgentContext
 from src.assistant_personal.application.context_builder import ContextBuilder
 from src.assistant_personal.domain.repositories.long_term_memory_repository import LongTermMemoryRepository
 from src.assistant_personal.domain.repositories.session_memory_repository import SessionMemoryRepository
-from src.assistant_personal.infrastructure.observabilidad import get_logger
+from src.assistant_personal.infrastructure.observabilidad import get_logger, get_tracer
 from src.assistant_personal.infrastructure.routers.hybrid_router import ProductionIntentRouter
 from src.assistant_personal.infrastructure.routers.openai_llm_client import OpenAISessionSummarizer
 
 logger = get_logger(__name__)
+tracer = get_tracer(__name__)
 
 
 class TaskOrchestrator:
@@ -70,7 +71,13 @@ class TaskOrchestrator:
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(request_id=request_id)
         try:
-            return await self._handle_message(message, request_id=request_id, started_at=started_at)
+            with tracer.start_as_current_span("orquestador.ejecutar") as span:
+                span.set_attribute("request_id", request_id)
+                span.set_attribute("session_id", self.session_id)
+                result = await self._handle_message(message, request_id=request_id, started_at=started_at)
+                span.set_attribute("resultado_accion", str(result.get("action", "")))
+                span.set_attribute("resultado_exito", bool(result.get("success", False)))
+                return result
         finally:
             structlog.contextvars.clear_contextvars()
 

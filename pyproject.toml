@@ -17,11 +17,22 @@ dependencies = [
     "structlog>=26.1.0",
     "python-dotenv==1.2.2",
     "pyyaml>=6.0",
+    # `opentelemetry-api` (no el SDK) va en base: cualquier módulo puede pedir un tracer con
+    # `trace.get_tracer(...)` y obtener spans no-op de costo ~cero si nadie configuró un
+    # `TracerProvider` real — así el código de instrumentación no depende de que `[otel]` esté
+    # instalado. El SDK/exporter/auto-instrumentación (el peso real) vive en `[otel]`.
+    "opentelemetry-api==1.44.0",
 ]
 
 [project.optional-dependencies]
 llm = ["openai==1.54.0"]
 mcp = ["mcp==1.27.1"]
+otel = [
+    "opentelemetry-sdk==1.44.0",
+    "opentelemetry-exporter-otlp-proto-grpc==1.44.0",
+    "opentelemetry-instrumentation-fastapi==0.65b0",
+    "opentelemetry-instrumentation-pymongo==0.65b0",
+]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.6", "mypy>=1.11"]
 
 [tool.setuptools.packages.find]

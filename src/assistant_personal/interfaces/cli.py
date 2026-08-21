@@ -9,6 +9,7 @@ from src.assistant_personal.application.orchestrator import TaskOrchestrator
 from src.assistant_personal.domain.repositories.long_term_memory_repository import LongTermMemoryRepository
 from src.assistant_personal.domain.repositories.session_memory_repository import SessionMemoryRepository
 from src.assistant_personal.infrastructure.mcp.client import McpTaskServiceClient
+from src.assistant_personal.infrastructure.observabilidad import configure_tracing
 from src.assistant_personal.infrastructure.persistence.mongo.long_term_memory_repository import (
     MongoLongTermMemoryRepository,
 )
@@ -132,6 +133,7 @@ def main(
     session_repository: SessionMemoryRepository | None = None,
     long_term_repository: LongTermMemoryRepository | None = None,
 ) -> None:
+    configure_tracing()
     parser = build_parser()
     raw_args = list(argv) if argv is not None else sys.argv[1:]
 

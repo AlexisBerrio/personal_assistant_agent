@@ -8,7 +8,10 @@ from openai import AsyncOpenAI
 
 from src.assistant_personal.config import get_settings
 from src.assistant_personal.domain.entities import IntentClassification, UserProfileExtraction
+from src.assistant_personal.infrastructure.observabilidad import get_tracer
 from src.assistant_personal.infrastructure.prompts.loader import LoadedPrompt, load_prompt
+
+tracer = get_tracer(__name__)
 
 
 class _OpenAITextClient:
@@ -72,6 +75,18 @@ class _OpenAITextClient:
         `self.last_call_metadata` los campos de observabilidad (`modelo`,
         `tokens_entrada`, `tokens_salida`, `latencia_ms_llm`) más `prompt_version`
         para que el llamador (el router) los pueda leer después de cada invocación real."""
+        with tracer.start_as_current_span("llm.completar") as span:
+            span.set_attribute("modelo", self.model or "")
+            span.set_attribute("prompt_version", system_prompt.identifier)
+            result = await self._invoke_model_uninstrumented(system_prompt, user_prompt)
+            metadata = self.last_call_metadata or {}
+            if metadata.get("tokens_entrada") is not None:
+                span.set_attribute("tokens_entrada", metadata["tokens_entrada"])
+            if metadata.get("tokens_salida") is not None:
+                span.set_attribute("tokens_salida", metadata["tokens_salida"])
+            return result
+
+    async def _invoke_model_uninstrumented(self, system_prompt: LoadedPrompt, user_prompt: str) -> str:
         started_at = time.monotonic()
 
         if getattr(self, "_use_responses_api", True) and hasattr(self.client, "responses"):

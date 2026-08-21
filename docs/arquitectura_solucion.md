@@ -83,7 +83,7 @@ graph TB
     OAI["OpenAI API<br/>clasificación y redacción"]
     ALX["Alexa Skills Kit<br/>(Fase 6, no construido)"]
     MCPC["Clientes MCP externos<br/>(Claude Desktop, IDE)"]
-    OBSB["Backend de observabilidad<br/>(Fase 7)"]
+    OBSB["Jaeger (local)<br/>trazas OTLP — ítem 4.1"]
 
     U -->|"HTTP CRUD (hoy)"| CORE
     U -->|"lenguaje natural"| CORE
@@ -93,7 +93,7 @@ graph TB
 
     CORE -->|"lectura y escritura"| MDB
     CORE -->|"HTTPS, tokens medidos"| OAI
-    CORE -.->|"OTLP (futuro)"| OBSB
+    CORE -.->|"OTLP, opt-in (OTEL_ENABLED)"| OBSB
 
     style SYS fill:#f0f4f8,stroke:#333,stroke-width:2px
 ```
@@ -104,7 +104,7 @@ graph TB
 | --- | --- | --- |
 | MongoDB | **Crítica** | El sistema no opera. No hay modo offline. |
 | OpenAI API | **Degradable** | Modo solo-reglas: se atienden las intenciones cubiertas por reglas y el resto responde `clarify`. |
-| Backend de observabilidad | No crítica, no implementada aún | Se perdería telemetría; nunca bloquea una petición. |
+| Jaeger (trazas) | No crítica, opt-in (`OTEL_ENABLED`) | Se pierden trazas; `BatchSpanProcessor` absorbe el fallo del exporter, nunca bloquea una petición. |
 
 Que la caída del LLM sea *degradable* y no *crítica* es una propiedad de diseño real, ya verificada: las
 reglas rápidas del router (`hybrid_router._check_fast_rules`) resuelven una parte del tráfico sin tocar el
@@ -214,7 +214,7 @@ el transporte (nadie toca Mongo salvo vía tool), esto es sobre quién decide qu
 
 ## 6. Estructura de código
 
-Árbol real (verificado, no aspiracional):
+Árbol:
 
 ```
 personal_assistant_agent/
@@ -248,7 +248,7 @@ personal_assistant_agent/
 │   │   │                        # (candidato a separar cliente LLM genérico — ítem 4.8)
 │   │   ├── mcp/                 # server.py, client.py (McpTaskServiceClient), tools/
 │   │   ├── prompts/router/      # *.prompt.md versionados + loader.py
-│   │   └── observabilidad/      # structlog
+│   │   └── observabilidad/      # structlog + tracing.py (OTel, opt-in, ítem 4.1)
 │   └── interfaces/
 │       └── cli.py               # único adaptador de entrada conversacional hoy
 └── tests/                       # plano, sin subcarpetas por tipo — la convención es el sufijo

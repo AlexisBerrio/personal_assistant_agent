@@ -10,8 +10,9 @@ from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.assistant_personal.application.task_service import TaskService
+from src.assistant_personal.config import get_settings
 from src.assistant_personal.domain.task_models import Task
-from src.assistant_personal.infrastructure.observabilidad import get_logger
+from src.assistant_personal.infrastructure.observabilidad import configure_tracing, get_logger
 
 logger = get_logger(__name__)
 
@@ -21,6 +22,7 @@ GENERIC_ERROR_MESSAGE = "Ocurrió un error interno. Comparte el request_id con s
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
     """Gestiona el ciclo de vida de recursos compartidos por la API."""
+    configure_tracing()
     app_instance.state.service = TaskService()
     yield
     app_instance.state.service = None
@@ -28,6 +30,14 @@ async def lifespan(app_instance: FastAPI):
 
 # Creamos la aplicación FastAPI. Es el punto de entrada para recibir peticiones.
 app = FastAPI(title="Asistente Personal", version="0.1.0", lifespan=lifespan)
+
+if get_settings().otel_enabled:
+    # Import perezoso: `opentelemetry-instrumentation-fastapi` vive en el extra `[otel]`, no en
+    # las dependencias base — importarlo solo cuando el tracing está activo evita que instalar
+    # la app sin ese extra rompa el arranque de `app.py`.
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+    FastAPIInstrumentor.instrument_app(app)
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
