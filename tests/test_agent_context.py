@@ -1,6 +1,6 @@
 import unittest
 
-from src.assistant_personal.application.agent_context import AgentContext
+from src.assistant_personal.application.memory.agent_context import AgentContext
 
 
 class AgentContextTests(unittest.TestCase):

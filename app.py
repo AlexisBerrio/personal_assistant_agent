@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from src.assistant_personal.application.task_service import TaskService
+from src.assistant_personal.application.tasks.task_service import TaskService
 from src.assistant_personal.config import get_settings
 from src.assistant_personal.domain.task_models import Task
 from src.assistant_personal.infrastructure.observabilidad import configure_tracing, get_logger

@@ -8,7 +8,7 @@ import httpx
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from app import app, get_service
-from src.assistant_personal.application.task_service import TaskService
+from src.assistant_personal.application.tasks.task_service import TaskService
 from src.assistant_personal.infrastructure.persistence.mongo.client import MongoConnection
 from src.assistant_personal.infrastructure.persistence.mongo.mongo_repository import MongoTaskRepository
 

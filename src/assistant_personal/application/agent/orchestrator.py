@@ -8,8 +8,8 @@ from typing import Any
 
 import structlog
 
-from src.assistant_personal.application.agent_context import AgentContext
-from src.assistant_personal.application.context_builder import ContextBuilder
+from src.assistant_personal.application.memory.agent_context import AgentContext
+from src.assistant_personal.application.memory.context_builder import ContextBuilder
 from src.assistant_personal.domain.repositories.long_term_memory_repository import LongTermMemoryRepository
 from src.assistant_personal.domain.repositories.session_memory_repository import SessionMemoryRepository
 from src.assistant_personal.infrastructure.observabilidad import get_logger, get_tracer

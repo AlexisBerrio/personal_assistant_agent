@@ -1,6 +1,6 @@
 import unittest
 
-from src.assistant_personal.application.guardrails import (
+from src.assistant_personal.application.agent.guardrails import (
     Guardrails,
     GuardrailsConfig,
     StepDecision,

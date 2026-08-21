@@ -6,7 +6,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 
-from src.assistant_personal.application.task_service import TaskService
+from src.assistant_personal.application.tasks.task_service import TaskService
 from src.assistant_personal.domain.task_models import Task
 from src.assistant_personal.infrastructure.observabilidad import get_logger
 

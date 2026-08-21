@@ -5,7 +5,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from src.assistant_personal.application.orchestrator import TaskOrchestrator
+from src.assistant_personal.application.agent.orchestrator import TaskOrchestrator
 from src.assistant_personal.domain.repositories.long_term_memory_repository import LongTermMemoryRepository
 from src.assistant_personal.domain.repositories.session_memory_repository import SessionMemoryRepository
 from src.assistant_personal.infrastructure.mcp.client import McpTaskServiceClient

@@ -1,6 +1,6 @@
 import unittest
 
-from src.assistant_personal.application.task_service import TaskService
+from src.assistant_personal.application.tasks.task_service import TaskService
 from src.assistant_personal.infrastructure.persistence.mongo.mongo_repository import MongoTaskRepository
 
 

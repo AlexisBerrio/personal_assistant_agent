@@ -7,7 +7,7 @@ from src.assistant_personal.config import get_settings
 from src.assistant_personal.domain.repositories.task_repository import TaskRepository
 from src.assistant_personal.domain.task_models import Task
 from src.assistant_personal.infrastructure.persistence.mongo.client import get_db
-from src.assistant_personal.infrastructure.task_repository import build_default_task_repository
+from src.assistant_personal.infrastructure.persistence.mongo.mongo_repository import build_default_task_repository
 
 
 class TaskService:

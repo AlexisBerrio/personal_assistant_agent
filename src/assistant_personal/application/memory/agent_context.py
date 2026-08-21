@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 from typing import Any
 
-from src.assistant_personal.application.context_builder import ContextBuilder
+from src.assistant_personal.application.memory.context_builder import ContextBuilder
 from src.assistant_personal.domain.entities import UserProfileFact
 from src.assistant_personal.domain.repositories.long_term_memory_repository import LongTermMemoryRepository
 from src.assistant_personal.domain.repositories.session_memory_repository import SessionMemoryRepository

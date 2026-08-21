@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app import app
-from src.assistant_personal.application.task_service import TaskService
+from src.assistant_personal.application.tasks.task_service import TaskService
 from src.assistant_personal.domain.task_models import Task
 from src.assistant_personal.infrastructure.mcp import server as mcp_server
 from src.assistant_personal.infrastructure.mcp.tools.task_tools import register_task_tools
@@ -64,7 +64,7 @@ class TaskServiceTests(unittest.TestCase):
     def test_create_task_converts_domain_model_to_plain_dictionary(self):
         fake_db = FakeDatabase()
 
-        with patch("src.assistant_personal.application.task_service.get_db", return_value=fake_db):
+        with patch("src.assistant_personal.application.tasks.task_service.get_db", return_value=fake_db):
             service = TaskService()
             task = Task(
                 title="Comprar pan",
@@ -142,7 +142,7 @@ class TaskServiceTests(unittest.TestCase):
             "agent_notes": [],
         }]
 
-        with patch("src.assistant_personal.application.task_service.get_db", return_value=fake_db):
+        with patch("src.assistant_personal.application.tasks.task_service.get_db", return_value=fake_db):
             service = TaskService()
             result = asyncio.run(service.list_tasks_async())
 
@@ -304,7 +304,7 @@ class TaskServiceTests(unittest.TestCase):
     def test_create_task_uses_pending_as_default_status(self):
         fake_db = FakeDatabase()
 
-        with patch("src.assistant_personal.application.task_service.get_db", return_value=fake_db):
+        with patch("src.assistant_personal.application.tasks.task_service.get_db", return_value=fake_db):
             service = TaskService()
             asyncio.run(service.create_task_async(Task(title="Nueva tarea")))
 
@@ -320,7 +320,7 @@ class TaskServiceTests(unittest.TestCase):
             "deleted_at": None,
         }
 
-        with patch("src.assistant_personal.application.task_service.get_db", return_value=fake_db):
+        with patch("src.assistant_personal.application.tasks.task_service.get_db", return_value=fake_db):
             service = TaskService()
             asyncio.run(service.update_task_async("task-123", {"description": "Actualizada"}))
 

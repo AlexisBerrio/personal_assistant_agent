@@ -2,8 +2,8 @@ import unittest
 
 import structlog
 
-from src.assistant_personal.application.agent_context import ShortTermMemory
-from src.assistant_personal.application.orchestrator import TaskOrchestrator
+from src.assistant_personal.application.agent.orchestrator import TaskOrchestrator
+from src.assistant_personal.application.memory.agent_context import ShortTermMemory
 from src.assistant_personal.domain.entities import IntentAction, IntentDecision, UserProfileExtraction, UserProfileFact
 from src.assistant_personal.infrastructure.persistence.mongo.session_repository import MongoSessionRepository
 

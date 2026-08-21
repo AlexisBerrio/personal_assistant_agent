@@ -63,7 +63,7 @@ def build_default_guardrails(max_steps: int = 5, max_tokens: int = 4000) -> Guar
     """Construye `Guardrails` con la whitelist real de tools MCP (`TOOL_SCOPES` de
     `task_tools.py`) como fuente de verdad, para que la whitelist nunca se desincronice de las
     tools que el servidor MCP expone de verdad."""
-    
+
     allowed_tools = frozenset(TOOL_SCOPES.keys())
     write_tools = frozenset(name for name, scope in TOOL_SCOPES.items() if scope == "write")
     return Guardrails(

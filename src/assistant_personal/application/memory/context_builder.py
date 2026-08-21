@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
-    from src.assistant_personal.application.agent_context import LongTermMemory, ShortTermMemory
+    from src.assistant_personal.application.memory.agent_context import LongTermMemory, ShortTermMemory
 
 
 def estimate_tokens(text: str) -> int:

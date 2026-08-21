@@ -3,8 +3,8 @@ import unittest
 from copy import deepcopy
 from unittest.mock import patch
 
-from src.assistant_personal.application.task_service import TaskService
-from src.assistant_personal.infrastructure.task_repository import build_default_task_repository
+from src.assistant_personal.application.tasks.task_service import TaskService
+from src.assistant_personal.infrastructure.persistence.mongo.mongo_repository import build_default_task_repository
 
 
 class InMemoryTaskRepository:
@@ -66,7 +66,7 @@ class Phase0CadenceTests(unittest.TestCase):
     def test_task_service_uses_infrastructure_repository_factory_by_default(self):
         fake_repo = object()
 
-        with patch("src.assistant_personal.application.task_service.build_default_task_repository", return_value=fake_repo) as mock_factory:
+        with patch("src.assistant_personal.application.tasks.task_service.build_default_task_repository", return_value=fake_repo) as mock_factory:
             service = TaskService()
 
         self.assertIs(service.repository, fake_repo)

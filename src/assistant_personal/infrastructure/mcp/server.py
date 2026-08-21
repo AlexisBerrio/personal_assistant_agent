@@ -26,7 +26,7 @@ def register_tools() -> None:
     if _tools_registered:
         return
 
-    from src.assistant_personal.application.task_service import TaskService
+    from src.assistant_personal.application.tasks.task_service import TaskService
     from src.assistant_personal.infrastructure.mcp.tools.task_tools import register_task_tools
 
     register_task_tools(mcp, TaskService())

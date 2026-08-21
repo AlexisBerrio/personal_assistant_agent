@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.assistant_personal.config import get_settings
+from src.assistant_personal.domain.repositories.task_repository import TaskRepository
 from src.assistant_personal.infrastructure.persistence.mongo.client import get_db
 
 
@@ -169,4 +170,9 @@ class MongoTaskRepository:
 
         await self._record_history(db, task_id, {"status": "Deleted", "is_deleted": True}, previous_task)
         return {"task_id": task_id, "deleted": True, "deleted_at": deleted_at}
+
+
+def build_default_task_repository(db_name: str | None = None, get_db_fn: Any | None = None) -> TaskRepository:
+    """Construye el adaptador MongoDB por defecto para el puerto del dominio."""
+    return MongoTaskRepository(db_name=db_name or get_settings().mongo_db_name, get_db_fn=get_db_fn or get_db)
 

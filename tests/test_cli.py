@@ -6,7 +6,10 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from src.assistant_personal.application.agent_context import InMemoryLongTermMemoryRepository, InMemorySessionRepository
+from src.assistant_personal.application.memory.agent_context import (
+    InMemoryLongTermMemoryRepository,
+    InMemorySessionRepository,
+)
 from src.assistant_personal.interfaces.cli import main
 
 

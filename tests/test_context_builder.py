@@ -1,12 +1,12 @@
 import unittest
 
-from src.assistant_personal.application.agent_context import (
+from src.assistant_personal.application.memory.agent_context import (
     InMemoryLongTermMemoryRepository,
     InMemorySessionRepository,
     LongTermMemory,
     ShortTermMemory,
 )
-from src.assistant_personal.application.context_builder import ContextBuilder, estimate_tokens
+from src.assistant_personal.application.memory.context_builder import ContextBuilder, estimate_tokens
 
 
 class FakeSummarizer:

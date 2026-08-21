@@ -236,14 +236,13 @@ personal_assistant_agent/
 │   │   ├── task_models.py       # Task y sus value objects
 │   │   └── repositories/        # Protocols (puertos): task_repository, session_memory_repository,
 │   │                             # long_term_memory_repository, document_search_repository, llm_client
-│   ├── application/             # casos de uso, depende solo de domain
-│   │   ├── task_service.py
-│   │   ├── orchestrator.py      # TaskOrchestrator
-│   │   ├── agent_context.py     # ShortTermMemory / LongTermMemory / AgentContext
-│   │   ├── context_builder.py   # ContextBuilder: presupuesto de tokens + resumen incremental
-│   │   └── prompt_engineering.py
+│   ├── application/             # casos de uso, depende solo de domain — subcarpetas por sub-tema (ítem 4.15)
+│   │   ├── tasks/task_service.py
+│   │   ├── agent/                # orchestrator.py (TaskOrchestrator) + guardrails.py (ítem 4.2)
+│   │   └── memory/                # agent_context.py (ShortTermMemory/LongTermMemory/AgentContext)
+│   │                              # + context_builder.py (presupuesto de tokens + resumen incremental)
 │   ├── infrastructure/          # implementa los puertos, único lugar con I/O
-│   │   ├── persistence/mongo/   # cliente, repositorios, índices
+│   │   ├── persistence/mongo/   # cliente, repositorios, índices, build_default_task_repository
 │   │   ├── routers/             # ProductionIntentRouter + clientes OpenAI del router
 │   │   │                        # (candidato a separar cliente LLM genérico — ítem 4.8)
 │   │   ├── mcp/                 # server.py, client.py (McpTaskServiceClient), tools/
@@ -264,7 +263,7 @@ personal_assistant_agent/
 **No implementado todavía (vs. la v1.0 de este documento):** `interfaces/alexa.py` (Fase 6), un endpoint
 `api/` propiamente dicho más allá de `app.py` (ítem 4.10). Tampoco existe una taxonomía de errores de
 dominio centralizada (`domain/errores.py`) — hoy los handlers de `app.py` traducen excepciones ad hoc;
-formalizarla es una mejora razonable, no bloqueante. `application/guardrails.py` (ítem 4.2) sí existe ya
+formalizarla es una mejora razonable, no bloqueante. `application/agent/guardrails.py` (ítem 4.2) sí existe ya
 — política pura sin agente que la consuma todavía (depende de 4.3).
 
 **Sobre `tests/` sin subcarpetas por tipo (`unit/`, `integration/`, `contract/`, `e2e/`):** es una decisión
