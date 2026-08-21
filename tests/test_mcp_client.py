@@ -26,15 +26,23 @@ def _error(message: str) -> CallToolResult:
 
 class McpTaskServiceClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_list_tasks_unwraps_the_tasks_key(self) -> None:
-        """listar_tareas devuelve {"tasks": [...]} (ítem 3.5: contrato explícito, sin depender
-        del wrapping automático de FastMCP para tipos no-objeto) — este test fija ese contrato."""
+        """listar_tareas devuelve {"tasks": [...]}, un contrato explícito en vez de depender del
+        wrapping automático de FastMCP para tipos no-objeto — este test lo fija."""
         session = FakeSession({"listar_tareas": _ok({"tasks": [{"task_id": "t-1"}]})})
         client = McpTaskServiceClient(session=session)
 
         tasks = await client.list_tasks_async()
 
         self.assertEqual(tasks, [{"task_id": "t-1"}])
-        self.assertEqual(session.calls, [("listar_tareas", {})])
+        self.assertEqual(session.calls, [("listar_tareas", {"limite": 20})])
+
+    async def test_list_tasks_forwards_status_filter_as_estado(self) -> None:
+        session = FakeSession({"listar_tareas": _ok({"tasks": []})})
+        client = McpTaskServiceClient(session=session)
+
+        await client.list_tasks_async(status="Completed", limit=5)
+
+        self.assertEqual(session.calls, [("listar_tareas", {"estado": "Completed", "limite": 5})])
 
     async def test_create_task_forwards_the_payload_and_returns_structured_content(self) -> None:
         session = FakeSession({"crear_tarea": _ok({"task_id": "t-2", "title": "Comprar leche"})})

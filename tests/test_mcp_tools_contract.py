@@ -125,6 +125,35 @@ class McpToolsContractTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await stack.aclose()
 
+    async def test_listar_tareas_filtra_por_estado(self) -> None:
+        session, stack = await self._open_session()
+        try:
+            pending_title = f"mcp-contract-{uuid.uuid4()}"
+            completed_title = f"mcp-contract-{uuid.uuid4()}"
+            pending = await self._create_task(session, pending_title)
+            completed = await self._create_task(session, completed_title)
+            await session.call_tool("completar_tarea", {"task_id": completed["task_id"]})
+
+            result = await session.call_tool("listar_tareas", {"estado": "Completed"})
+            self.assertFalse(result.isError)
+            task_ids = {t["task_id"] for t in result.structuredContent["tasks"]}
+            self.assertIn(completed["task_id"], task_ids)
+            self.assertNotIn(pending["task_id"], task_ids)
+        finally:
+            await stack.aclose()
+
+    async def test_listar_tareas_respeta_el_limite_pedido(self) -> None:
+        session, stack = await self._open_session()
+        try:
+            for _ in range(3):
+                await self._create_task(session, f"mcp-contract-{uuid.uuid4()}")
+
+            result = await session.call_tool("listar_tareas", {"limite": 2})
+            self.assertFalse(result.isError)
+            self.assertLessEqual(len(result.structuredContent["tasks"]), 2)
+        finally:
+            await stack.aclose()
+
     async def test_crear_tarea_devuelve_la_tarea_creada_con_task_id(self) -> None:
         session, stack = await self._open_session()
         try:

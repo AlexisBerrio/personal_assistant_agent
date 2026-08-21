@@ -14,7 +14,7 @@ class TaskRepository(Protocol):
     async def check_connection(self) -> bool:
         ...
 
-    async def list_active_tasks_async(self) -> list[dict[str, Any]]:
+    async def list_active_tasks_async(self, status: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
         ...
 
     async def get_task_by_id_async(self, task_id: str) -> dict[str, Any] | None:

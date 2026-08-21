@@ -8,7 +8,7 @@ class FakeRepository:
     def __init__(self):
         self.calls = []
 
-    def list_active_tasks(self):
+    def list_active_tasks(self, status=None, limit=20):
         self.calls.append("list")
         return [{"task_id": "task-1", "title": "Tarea demo"}]
 

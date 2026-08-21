@@ -15,8 +15,11 @@ class InMemoryTaskRepository:
     def check_connection(self):
         return True
 
-    async def list_active_tasks_async(self):
-        return [deepcopy(task) for task in self.tasks if not task.get("is_deleted")]
+    async def list_active_tasks_async(self, status=None, limit=20):
+        active = [deepcopy(task) for task in self.tasks if not task.get("is_deleted")]
+        if status is not None:
+            active = [task for task in active if task.get("status") == status]
+        return active[:limit]
 
     async def get_task_by_id_async(self, task_id):
         for task in self.tasks:

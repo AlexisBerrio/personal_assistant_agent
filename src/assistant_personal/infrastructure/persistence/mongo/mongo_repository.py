@@ -11,6 +11,10 @@ from src.assistant_personal.infrastructure.persistence.mongo.client import get_d
 class MongoTaskRepository:
     """Repositorio concreto para persistir tareas en MongoDB con Motor."""
 
+    # Techo duro independiente de lo que pida el llamador: evita que una sola lectura vuelque
+    # cientos de tareas al contexto de quien la consuma (hoy el router, mañana un agente LLM).
+    MAX_LIST_LIMIT = 100
+
     def __init__(self, db_name: str | None = None, get_db_fn: Any | None = None, tenant_id: str | None = None) -> None:
         self.db_name = db_name or get_settings().mongo_db_name
         self._get_db_fn = get_db_fn or get_db
@@ -20,10 +24,12 @@ class MongoTaskRepository:
     async def _get_db(self) -> Any:
         return await self._get_db_fn(self.db_name)
 
-    def _active_task_filter(self, task_id: str | None = None) -> dict[str, Any]:
+    def _active_task_filter(self, task_id: str | None = None, status: str | None = None) -> dict[str, Any]:
         filter_query: dict[str, Any] = {"tenant_id": self.tenant_id, "is_deleted": {"$ne": True}}
         if task_id is not None:
             filter_query["task_id"] = task_id
+        if status is not None:
+            filter_query["status"] = status
         return filter_query
 
     async def check_connection(self) -> bool:
@@ -70,9 +76,10 @@ class MongoTaskRepository:
 
         await self._maybe_await(db.task_history.insert_one(history_entry))
 
-    async def list_active_tasks_async(self) -> list[dict[str, Any]]:
+    async def list_active_tasks_async(self, status: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
         db = await self._get_db()
-        cursor = db.personal_tasks.find(self._active_task_filter(), {"_id": 0}).limit(10)
+        capped_limit = max(1, min(limit, self.MAX_LIST_LIMIT))
+        cursor = db.personal_tasks.find(self._active_task_filter(status=status), {"_id": 0}).limit(capped_limit)
         return await self._collect_documents(cursor)
 
     async def get_task_by_id_async(self, task_id: str) -> dict[str, Any] | None:

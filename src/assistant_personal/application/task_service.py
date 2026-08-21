@@ -75,9 +75,9 @@ class TaskService:
 
         raise AttributeError(f"El repositorio no implementa '{method_name}'")
 
-    async def list_tasks_async(self) -> list[dict[str, Any]]:
-        """Devuelve las tareas más recientes de la colección personal_tasks."""
-        raw_tasks = await self._invoke_repository_async("list_active_tasks")
+    async def list_tasks_async(self, status: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
+        """Devuelve las tareas activas, opcionalmente filtradas por status."""
+        raw_tasks = await self._invoke_repository_async("list_active_tasks", status, limit)
         return [self._serialize_value(task) for task in raw_tasks]
 
     async def get_task_async(self, task_id: str) -> dict[str, Any] | None:

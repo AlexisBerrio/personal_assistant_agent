@@ -174,14 +174,16 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
         return await _audited("health_check", set(), _call())
 
     @mcp.tool()
-    async def listar_tareas() -> ListarTareasResponse:
+    async def listar_tareas(estado: str | None = None, limite: int = 20) -> ListarTareasResponse:
         """Devuelve las tareas activas (status distinto de "Deleted") del usuario.
 
-        Devuelve: {"tasks": [...]}. No acepta filtros (fecha, estado, categoría) todavía — siempre
-        trae el mismo conjunto. Limitada a 10 resultados como máximo: si el usuario tiene más,
-        esta tool no las trae todas.
+        `estado` filtra por status exacto ("Pending", "In Progress", "Completed") — omitido trae
+        todas las activas. `limite` acota cuántas trae, con techo de 100 en el servidor aunque se
+        pida más; el valor por defecto es 20. Todavía no filtra por fecha (fuera de alcance).
+        Devuelve: {"tasks": [...]}.
         """
-        tasks = await _audited("listar_tareas", set(), service.list_tasks_async())
+        provided = _provided_keys(estado=estado)
+        tasks = await _audited("listar_tareas", provided, service.list_tasks_async(estado, limite))
         return ListarTareasResponse(tasks=[Task.model_validate(task) for task in tasks])
 
     @mcp.tool()

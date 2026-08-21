@@ -390,7 +390,7 @@ recurso JSON crudo), lista para un frontend propio o, más adelante, para servir
 | Tool | Entrada principal | Idempotente | Efecto |
 | --- | --- | --- | --- |
 | `health_check` | — | Sí | Verifica conexión a Mongo |
-| `listar_tareas` | — | Sí | Lee tareas activas |
+| `listar_tareas` | `estado?`, `limite?` (default 20, techo 100) | Sí | Lee tareas activas |
 | `crear_tarea` | `title`, campos opcionales del modelo de negocio | No | Inserta |
 | `actualizar_tarea` | `task_id`, campos parciales | Sí | Actualiza |
 | `completar_tarea` | `task_id` | Sí | Marca como completada |
