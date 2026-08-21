@@ -137,11 +137,17 @@ class MongoTaskRepository:
         if previous_task is None:
             return {"matched": 0, "modified": 0}
 
+        # No re-estampar completed_at si ya estaba completada: si no, repetir la llamada sobre
+        # una tarea ya completada dejaría de ser idempotente (modified pasaría a 1 cada vez).
+        update_fields: dict[str, Any] = {"status": "Completed"}
+        if previous_task.get("status") != "Completed":
+            update_fields["completed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
         result = await self._maybe_await(db.personal_tasks.update_one(
             self._active_task_filter(task_id),
-            {"$set": {"status": "Completed"}},
+            {"$set": update_fields},
         ))
-        await self._record_history(db, task_id, {"status": "Completed"}, previous_task)
+        await self._record_history(db, task_id, update_fields, previous_task)
         return {"matched": result.matched_count, "modified": result.modified_count}
 
     async def delete_task_async(self, task_id: str) -> dict[str, Any] | None:

@@ -161,6 +161,24 @@ class McpToolsContractTests(unittest.IsolatedAsyncioTestCase):
             created = await self._create_task(session, title)
             self.assertEqual(created["title"], title)
             self.assertTrue(created["task_id"])
+            self.assertTrue(created["created_at"])
+            self.assertIsNone(created["due_date"])
+            self.assertIsNone(created["completed_at"])
+        finally:
+            await stack.aclose()
+
+    async def test_crear_tarea_normaliza_due_date_iso_y_rechaza_formato_invalido(self) -> None:
+        session, stack = await self._open_session()
+        try:
+            title = f"mcp-contract-{uuid.uuid4()}"
+            result = await session.call_tool("crear_tarea", {"title": title, "due_date": "2026-08-28"})
+            self.assertFalse(result.isError)
+            self.assertEqual(result.structuredContent["due_date"], "2026-08-28T00:00:00")
+
+            invalid = await session.call_tool(
+                "crear_tarea", {"title": f"{title}-invalida", "due_date": "el viernes"}
+            )
+            self.assertTrue(invalid.isError)
         finally:
             await stack.aclose()
 
@@ -247,6 +265,24 @@ class McpToolsContractTests(unittest.IsolatedAsyncioTestCase):
             missing = await session.call_tool("completar_tarea", {"task_id": "no-existe-999"})
             self.assertFalse(missing.isError)
             self.assertEqual(missing.structuredContent, {"matched": 0, "modified": 0})
+        finally:
+            await stack.aclose()
+
+    async def test_completar_tarea_estampa_completed_at_una_sola_vez(self) -> None:
+        session, stack = await self._open_session()
+        try:
+            title = f"mcp-contract-{uuid.uuid4()}"
+            created = await self._create_task(session, title)
+            task_id = created["task_id"]
+
+            await session.call_tool("completar_tarea", {"task_id": task_id})
+            after_first = await session.call_tool("buscar_tarea", {"task_id": task_id})
+            completed_at = after_first.structuredContent["task"]["completed_at"]
+            self.assertTrue(completed_at)
+
+            await session.call_tool("completar_tarea", {"task_id": task_id})
+            after_second = await session.call_tool("buscar_tarea", {"task_id": task_id})
+            self.assertEqual(after_second.structuredContent["task"]["completed_at"], completed_at)
         finally:
             await stack.aclose()
 

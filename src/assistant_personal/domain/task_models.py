@@ -26,6 +26,9 @@ class Task(BaseModel):
     agent_notes: list[dict[str, Any]] = Field(default_factory=list)
     is_deleted: bool = False
     deleted_at: str | None = None
+    created_at: str | None = None
+    due_date: str | None = None
+    completed_at: str | None = None
 
     @field_validator("title", mode="before")
     @classmethod
@@ -101,6 +104,30 @@ class Task(BaseModel):
             allowed_values_str = ", ".join(sorted(allowed_values))
             raise ValueError(f"Categoría no válida. Valores permitidos: {allowed_values_str}")
         return category_map[normalized_category]
+
+    @field_validator("due_date", "created_at", "completed_at", mode="before")
+    @classmethod
+    def validate_iso_date(cls, value: Any) -> str | None:
+        """Normaliza a "YYYY-MM-DDTHH:MM:SS" UTC para que ordenar/filtrar por estas fechas 
+        como string dé el orden cronológico correcto.
+
+        No interpreta lenguaje natural ("el viernes", "mañana") — eso es responsabilidad de quien
+        llama a la tool (el agente), no de este validador. Aquí solo se acepta ISO 8601 ya
+        estructurado; cualquier otra cosa se rechaza explícitamente en vez de guardarse mal.
+        """
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("La fecha debe ser un string ISO 8601 (ej. 2026-08-28 o 2026-08-28T00:00:00)")
+        try:
+            parsed = datetime.fromisoformat(value.strip())
+        except ValueError as exc:
+            raise ValueError(
+                "Fecha no válida, se espera formato ISO 8601 (ej. 2026-08-28 o 2026-08-28T00:00:00)"
+            ) from exc
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed.strftime("%Y-%m-%dT%H:%M:%S")
 
     @staticmethod
     def _serialize_value(value: Any) -> Any:

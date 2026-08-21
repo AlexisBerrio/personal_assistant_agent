@@ -403,6 +403,10 @@ estructurado (ítem 3.3) — metadata sin enforcement todavía, eso depende del 
 explícitos (`{"tasks": [...]}`, `{"task": {...} | None}`), no dependen del wrapping automático de
 FastMCP. Los retornos están tipados con modelos Pydantic reales (`Task` del dominio más modelos de
 respuesta por tool), así que el `outputSchema` que expone el protocolo MCP es real, no genérico.
+`Task` tiene tres fechas de primer nivel en formato ISO 8601: `created_at` (la fija el sistema),
+`due_date` (la da el usuario vía `crear_tarea`/`actualizar_tarea`, con validador que rechaza
+cualquier formato no-ISO — traducir lenguaje natural a esa fecha es responsabilidad de quien llama
+a la tool, no de la tool), `completed_at` (la fija `completar_tarea`, una sola vez).
 **Pendiente:** el mismatch `task_reference`/`task_id` entre el prompt del router y
 `TaskOrchestrator._dispatch` — completar/eliminar por descripción natural falla hoy, bloqueado hasta
 que exista el agente que interprete la referencia.

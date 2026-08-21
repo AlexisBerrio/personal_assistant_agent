@@ -1,5 +1,6 @@
 import inspect
 import uuid
+from datetime import datetime, timezone
 from typing import Any, cast
 
 from src.assistant_personal.config import get_settings
@@ -50,6 +51,9 @@ class TaskService:
         payload["task_id"] = payload.get("task_id") or str(uuid.uuid4())
         payload.setdefault("is_deleted", False)
         payload.setdefault("deleted_at", None)
+        # Sin importar lo que traiga el payload: la fecha de creación no es algo
+        # que el llamador deba poder fijar.
+        payload["created_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         return payload
 
     def _prepare_update_payload(self, updates: dict[str, Any]) -> dict[str, Any]:

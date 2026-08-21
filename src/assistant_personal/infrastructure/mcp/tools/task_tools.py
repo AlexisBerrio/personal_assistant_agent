@@ -86,6 +86,7 @@ def _build_task_payload(
     category: str | None = None,
     tags: list[str] | None = None,
     priority: dict[str, Any] | None = None,
+    due_date: str | None = None,
     dates: dict[str, Any] | None = None,
     recurrence: dict[str, Any] | None = None,
     context_metadata: dict[str, Any] | None = None,
@@ -99,6 +100,7 @@ def _build_task_payload(
         "category": category,
         "tags": tags or [],
         "priority": priority,
+        "due_date": due_date,
         "dates": dates or {},
         "recurrence": recurrence or {},
         "context_metadata": context_metadata or {},
@@ -115,6 +117,7 @@ def _build_update_payload(
     category: str | None = None,
     tags: list[str] | None = None,
     priority: dict[str, Any] | None = None,
+    due_date: str | None = None,
     dates: dict[str, Any] | None = None,
     recurrence: dict[str, Any] | None = None,
     context_metadata: dict[str, Any] | None = None,
@@ -132,6 +135,8 @@ def _build_update_payload(
         updates["category"] = category
     if tags is not None:
         updates["tags"] = tags
+    if due_date is not None:
+        updates["due_date"] = due_date
     if priority is not None:
         updates["priority"] = priority
     if dates is not None:
@@ -194,6 +199,7 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
         category: str | None = None,
         tags: list[str] | None = None,
         priority: dict[str, Any] | None = None,
+        due_date: str | None = None,
         dates: dict[str, Any] | None = None,
         recurrence: dict[str, Any] | None = None,
         context_metadata: dict[str, Any] | None = None,
@@ -206,6 +212,13 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
         cualquier otro valor no está soportado por el resto del sistema. `priority`, `dates`,
         `recurrence`, `context_metadata` son objetos libres sin un esquema fijo todavía; úsalos
         solo si el usuario dio esa información explícitamente, no inventes su contenido.
+
+        `due_date` (fecha de vencimiento) exige formato ISO 8601 ("2026-08-28" o
+        "2026-08-28T00:00:00") — un valor en otro formato se rechaza con error. Esta tool NO
+        interpreta lenguaje natural ("el viernes", "en dos semanas"): traducir lo que dijo el
+        usuario a una fecha ISO concreta es responsabilidad de quien llama a esta tool, no de la
+        tool misma. `created_at` lo fija el sistema automáticamente, no es un parámetro aquí.
+
         Devuelve la tarea creada completa, incluyendo el `task_id` generado.
         """
         provided = _provided_keys(
@@ -215,6 +228,7 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
             category=category,
             tags=tags,
             priority=priority,
+            due_date=due_date,
             dates=dates,
             recurrence=recurrence,
             context_metadata=context_metadata,
@@ -228,6 +242,7 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
             category=category,
             tags=tags,
             priority=priority,
+            due_date=due_date,
             dates=dates,
             recurrence=recurrence,
             context_metadata=context_metadata,
@@ -246,6 +261,7 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
         category: str | None = None,
         tags: list[str] | None = None,
         priority: dict[str, Any] | None = None,
+        due_date: str | None = None,
         dates: dict[str, Any] | None = None,
         recurrence: dict[str, Any] | None = None,
         context_metadata: dict[str, Any] | None = None,
@@ -257,6 +273,11 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
         el objeto completo. Valores válidos de `status`: "Pending", "In Progress", "Completed",
         "Deleted".
 
+        `due_date` exige formato ISO 8601 ("2026-08-28" o "2026-08-28T00:00:00"), se rechaza
+        cualquier otro formato. Traducir lenguaje natural ("el viernes") a esa fecha es
+        responsabilidad de quien llama a esta tool, no de la tool misma. `completed_at` no se
+        actualiza aquí — lo fija `completar_tarea` automáticamente.
+
         Devuelve: {"task": {...} | None}. Si `task_id` no existe, `task` es `None` — no lanza error.
         """
         provided = _provided_keys(
@@ -267,6 +288,7 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
             category=category,
             tags=tags,
             priority=priority,
+            due_date=due_date,
             dates=dates,
             recurrence=recurrence,
             context_metadata=context_metadata,
@@ -280,6 +302,7 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
             category=category,
             tags=tags,
             priority=priority,
+            due_date=due_date,
             dates=dates,
             recurrence=recurrence,
             context_metadata=context_metadata,
