@@ -108,7 +108,7 @@ class Task(BaseModel):
     @field_validator("due_date", "created_at", "completed_at", mode="before")
     @classmethod
     def validate_iso_date(cls, value: Any) -> str | None:
-        """Normaliza a "YYYY-MM-DDTHH:MM:SS" UTC para que ordenar/filtrar por estas fechas 
+        """Normaliza a "YYYY-MM-DDTHH:MM:SS" UTC para que ordenar/filtrar por estas fechas
         como string dé el orden cronológico correcto.
 
         No interpreta lenguaje natural ("el viernes", "mañana") — eso es responsabilidad de quien
