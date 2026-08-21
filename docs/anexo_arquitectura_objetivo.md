@@ -541,6 +541,26 @@ Si no se cumplen, el framework añade dependencia y complejidad conceptual sin r
 Mitigación de riesgo mientras se decide: mantener la orquestación detrás de un port de `domain/`, de modo
 que un motor de grafo sería un adaptador más y no una reescritura.
 
+**🔴 Vanguardia opcional — librerías de guardrails de IA (NeMo Guardrails, Guardrails AI, LLM Guard y
+similares):** resuelven un problema distinto al de `application/guardrails.py` (ítem 4.2). Los guardrails
+de 4.2 son deterministas y de ejecución (whitelist de tools, límite de pasos, presupuesto de tokens,
+confirmación de escrituras) — no necesitan librería, son lógica de negocio simple y testeable. Estas
+librerías atacan otra capa: rails sobre el *contenido* conversacional (jailbreak/prompt injection, temas
+prohibidos, PII, fact-checking de la respuesta) — parcialmente ya cubierto, sin dependencia externa, por
+las reglas de seguridad explícitas del ítem 2.15 en `classify_intent.prompt.md`.
+
+**Criterio concreto:** adoptar solo si se cumple alguna de estas condiciones:
+1. El asistente se expone a usuarios externos no confiables (hoy es de un solo usuario, contexto
+   pedagógico) y hace falta filtrar contenido/temas de forma más robusta que reglas de prompt escritas a mano.
+2. Los ataques de prompt injection detectados en el golden dataset (§A.10) empiezan a superar lo que 2.15
+   puede cubrir mantenible a mano, medido por una tasa de falsos negativos creciente en evaluaciones reales.
+3. Se necesitan rails declarativos/configurables (sin tocar código Python en cada cambio) porque el equipo
+   de mantenimiento crece más allá de una persona.
+
+Si no se cumple ninguna, mantener el enfoque actual: 4.2 (ejecución) + 2.15 (contenido, en el prompt) cubren
+el caso real con cero dependencias nuevas y sin la latencia/opacidad extra de otra capa de LLM-as-guardrail.
+Documentar la decisión junto con la de state graph (ítem 4.5) cuando llegue el momento de evaluarla.
+
 ### Definition of Done (Fase 4)
 
 - [x] El router devuelve un objeto Pydantic validado; una salida inválida nunca propaga a la ejecución
@@ -1054,7 +1074,7 @@ auditada; ninguna tool acepta filtros que cruzen tenants.
 | 4.2 | Guardrails: whitelist de tools, límite de pasos, presupuesto de tokens, confirmación de escrituras | 🟡 | §A.8 | ✅ Hecho — `application/guardrails.py`: `Guardrails.evaluate_step(tool_name, steps_used, tokens_used, confirmed)` decide `ALLOW`/`DENY_TOOL_NOT_WHITELISTED`/`DENY_STEP_BUDGET_EXCEEDED`/`DENY_TOKEN_BUDGET_EXCEEDED`/`NEEDS_CONFIRMATION`, en ese orden. `build_default_guardrails()` toma la whitelist de `TOOL_SCOPES` real (`task_tools.py`, ítem 3.3) en vez de duplicarla — un test contra el diccionario real detecta si una tool nueva se agrega sin decidir su scope. No depende de que 4.3 exista: es una política pura, sin I/O, probada con una secuencia de pasos simulada (10 tests nuevos, `test_guardrails.py`). Queda lista para que 4.3 la consuma tal cual |
 | 4.3 | Agente con tools MCP: ejecutor principal de toda acción que el router no pueda despachar con el 100% de lo necesario (criterio de 4.11), no un fallback raro | 🟡 | §A.8 | |
 | 4.4 | Port de orquestación en `domain/` (habilita cambiar de motor sin reescribir) | 🟢 | §A.8 | |
-| 4.5 | Documento de decisión: evaluar los 4 criterios de state graph y registrar la conclusión | 🟢 | §A.8 | |
+| 4.5 | Documento de decisión: evaluar los criterios de state graph (4) y de librerías de guardrails de IA (3, NeMo Guardrails/Guardrails AI/similares) y registrar la conclusión de ambos | 🟢 | §A.8 | |
 | 4.6 | LLM-as-judge calibrado para la respuesta final | 🟡 | §A.12 | |
 | 4.7 | Soporte de solicitudes multi-intención: ejecutar varias acciones de dominio en un mismo turno | 🟡 | §A.12 | Mitigado desde Fase 2 (ítem 2.8): 2+ acciones → `clarify` explícito en vez de ejecutar una y descartar la otra. La ejecución real es 4.9, que depende de 4.3 |
 | 4.8 | Reordenar responsabilidades de `infrastructure/` mezcladas por la forma orgánica en que creció (router vs. LLM genérico, protocols vs. lógica de reglas) | 🟡 | §A.8 | Deuda anotada, no bug — el disparador natural es cuando arranque 4.3 y el agente necesite el mismo cliente LLM base |
