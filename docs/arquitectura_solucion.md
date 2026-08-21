@@ -261,10 +261,11 @@ personal_assistant_agent/
         └── run_eval.py            # tests/test_eval_router.py lo envuelve con @pytest.mark.eval
 ```
 
-**No implementado todavía (vs. la v1.0 de este documento):** `application/guardrails.py` (Fase 4, ítem
-4.2), `interfaces/alexa.py` (Fase 6), un endpoint `api/` propiamente dicho más allá de `app.py` (ítem
-4.10). Tampoco existe una taxonomía de errores de dominio centralizada (`domain/errores.py`) — hoy los
-handlers de `app.py` traducen excepciones ad hoc; formalizarla es una mejora razonable, no bloqueante.
+**No implementado todavía (vs. la v1.0 de este documento):** `interfaces/alexa.py` (Fase 6), un endpoint
+`api/` propiamente dicho más allá de `app.py` (ítem 4.10). Tampoco existe una taxonomía de errores de
+dominio centralizada (`domain/errores.py`) — hoy los handlers de `app.py` traducen excepciones ad hoc;
+formalizarla es una mejora razonable, no bloqueante. `application/guardrails.py` (ítem 4.2) sí existe ya
+— política pura sin agente que la consuma todavía (depende de 4.3).
 
 **Sobre `tests/` sin subcarpetas por tipo (`unit/`, `integration/`, `contract/`, `e2e/`):** es una decisión
 deliberada, no una carencia. Para un proyecto de este tamaño, el patrón más común en la industria Python es
@@ -509,7 +510,7 @@ nada porque los tres procesos siguen el mismo criterio (`or Adaptador()` con def
 
 | Extensión | Depende de | Qué se añade | Qué NO cambia |
 | --- | --- | --- | --- |
-| Agente de fallback con tools (4.3) | 3.1 (hecho) | `Agent` + guardrails (4.2) | Router, tools MCP, repositorios |
+| Agente con tools (4.3) — ejecutor principal, no fallback (ver §A.8) | 3.1 (hecho), 4.2 (hecho) | `Agent` que consume `Guardrails.evaluate_step` | Router, tools MCP, repositorios |
 | `multi_task` (4.9) | 4.3 | Ruta nueva en `IntentClassification` + descomposición en el agente | Contrato del router, `_dispatch` de acciones simples |
 | Endpoint conversacional (4.10) | 4.3, 4.9 | Ruta HTTP que expone `TaskOrchestrator` | `TaskOrchestrator`, router, MCP |
 | Canal Alexa (Fase 6) | 4.10 | `interfaces/alexa.py` + política de respuesta breve | Orquestador, tools |
