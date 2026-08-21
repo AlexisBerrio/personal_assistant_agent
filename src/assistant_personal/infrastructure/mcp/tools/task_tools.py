@@ -87,10 +87,7 @@ def _build_task_payload(
     tags: list[str] | None = None,
     priority: dict[str, Any] | None = None,
     due_date: str | None = None,
-    dates: dict[str, Any] | None = None,
     recurrence: dict[str, Any] | None = None,
-    context_metadata: dict[str, Any] | None = None,
-    steps: list[dict[str, Any]] | None = None,
     agent_notes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
@@ -101,10 +98,7 @@ def _build_task_payload(
         "tags": tags or [],
         "priority": priority,
         "due_date": due_date,
-        "dates": dates or {},
         "recurrence": recurrence or {},
-        "context_metadata": context_metadata or {},
-        "steps": steps or [],
         "agent_notes": agent_notes or [],
     }
 
@@ -118,10 +112,7 @@ def _build_update_payload(
     tags: list[str] | None = None,
     priority: dict[str, Any] | None = None,
     due_date: str | None = None,
-    dates: dict[str, Any] | None = None,
     recurrence: dict[str, Any] | None = None,
-    context_metadata: dict[str, Any] | None = None,
-    steps: list[dict[str, Any]] | None = None,
     agent_notes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     updates: dict[str, Any] = {}
@@ -139,14 +130,8 @@ def _build_update_payload(
         updates["due_date"] = due_date
     if priority is not None:
         updates["priority"] = priority
-    if dates is not None:
-        updates["dates"] = dates
     if recurrence is not None:
         updates["recurrence"] = recurrence
-    if context_metadata is not None:
-        updates["context_metadata"] = context_metadata
-    if steps is not None:
-        updates["steps"] = steps
     if agent_notes is not None:
         updates["agent_notes"] = agent_notes
     return updates
@@ -200,18 +185,15 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
         tags: list[str] | None = None,
         priority: dict[str, Any] | None = None,
         due_date: str | None = None,
-        dates: dict[str, Any] | None = None,
         recurrence: dict[str, Any] | None = None,
-        context_metadata: dict[str, Any] | None = None,
-        steps: list[dict[str, Any]] | None = None,
         agent_notes: list[dict[str, Any]] | None = None,
     ) -> Task:
         """Crea una nueva tarea. Solo `title` es obligatorio.
 
         `status` acepta: "Pending" (default si se omite), "In Progress", "Completed", "Deleted" —
-        cualquier otro valor no está soportado por el resto del sistema. `priority`, `dates`,
-        `recurrence`, `context_metadata` son objetos libres sin un esquema fijo todavía; úsalos
-        solo si el usuario dio esa información explícitamente, no inventes su contenido.
+        cualquier otro valor no está soportado por el resto del sistema. `priority`/`recurrence`
+        son objetos libres sin un esquema fijo todavía; úsalos solo si el usuario dio esa
+        información explícitamente, no inventes su contenido.
 
         `due_date` (fecha de vencimiento) exige formato ISO 8601 ("2026-08-28" o
         "2026-08-28T00:00:00") — un valor en otro formato se rechaza con error. Esta tool NO
@@ -229,10 +211,7 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
             tags=tags,
             priority=priority,
             due_date=due_date,
-            dates=dates,
             recurrence=recurrence,
-            context_metadata=context_metadata,
-            steps=steps,
             agent_notes=agent_notes,
         )
         call = service.create_task_async(_build_task_payload(
@@ -243,10 +222,7 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
             tags=tags,
             priority=priority,
             due_date=due_date,
-            dates=dates,
             recurrence=recurrence,
-            context_metadata=context_metadata,
-            steps=steps,
             agent_notes=agent_notes,
         ))
         created = await _audited("crear_tarea", provided, call)
@@ -262,10 +238,7 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
         tags: list[str] | None = None,
         priority: dict[str, Any] | None = None,
         due_date: str | None = None,
-        dates: dict[str, Any] | None = None,
         recurrence: dict[str, Any] | None = None,
-        context_metadata: dict[str, Any] | None = None,
-        steps: list[dict[str, Any]] | None = None,
         agent_notes: list[dict[str, Any]] | None = None,
     ) -> TareaResponse:
         """Actualiza una tarea existente por `task_id`. Actualización parcial: solo se tocan los
@@ -289,10 +262,7 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
             tags=tags,
             priority=priority,
             due_date=due_date,
-            dates=dates,
             recurrence=recurrence,
-            context_metadata=context_metadata,
-            steps=steps,
             agent_notes=agent_notes,
         )
         updates = _build_update_payload(
@@ -303,10 +273,7 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
             tags=tags,
             priority=priority,
             due_date=due_date,
-            dates=dates,
             recurrence=recurrence,
-            context_metadata=context_metadata,
-            steps=steps,
             agent_notes=agent_notes,
         )
 

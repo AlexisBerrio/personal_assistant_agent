@@ -19,10 +19,7 @@ class Task(BaseModel):
     category: str | None = None
     tags: list[str] = Field(default_factory=list)
     priority: dict[str, Any] | None = None
-    dates: dict[str, Any] = Field(default_factory=dict)
     recurrence: dict[str, Any] = Field(default_factory=dict)
-    context_metadata: dict[str, Any] = Field(default_factory=dict)
-    steps: list[dict[str, Any]] = Field(default_factory=list)
     agent_notes: list[dict[str, Any]] = Field(default_factory=list)
     is_deleted: bool = False
     deleted_at: str | None = None
