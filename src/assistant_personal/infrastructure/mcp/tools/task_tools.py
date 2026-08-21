@@ -4,14 +4,48 @@ from collections.abc import Awaitable
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel
 
 from src.assistant_personal.application.task_service import TaskService
+from src.assistant_personal.domain.task_models import Task
 from src.assistant_personal.infrastructure.observabilidad import get_logger
 
 logger = get_logger(__name__)
 
-# Scopes que cada tool exigirá cuando exista autenticación real (§A.11, Fase 6-7). Hoy es solo
-# metadata sin enforcement — deja el terreno preparado para no tener que decidir esto bajo presión.
+
+class HealthCheckResponse(BaseModel):
+    status: str
+    service: str
+    database: str
+
+
+class ListarTareasResponse(BaseModel):
+    tasks: list[Task]
+
+
+class TareaResponse(BaseModel):
+    task: Task | None
+
+
+class CompletarTareaResponse(BaseModel):
+    matched: int
+    modified: int
+
+
+class DeletedTaskInfo(BaseModel):
+    """`delete_task_async` no devuelve una `Task` completa, solo un recibo de la eliminación."""
+
+    task_id: str
+    deleted: bool
+    deleted_at: str | None = None
+
+
+class EliminarTareaResponse(BaseModel):
+    task: DeletedTaskInfo | None
+
+
+# Scopes que cada tool exigirá cuando exista autenticación real, sin enforcement todavía — deja
+# el terreno preparado para no tener que decidir esto bajo presión más adelante.
 TOOL_SCOPES: dict[str, str] = {
     "health_check": "read",
     "listar_tareas": "read",
@@ -117,30 +151,30 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
     """Registra todas las herramientas relacionadas con tareas en el servidor MCP."""
 
     @mcp.tool()
-    async def health_check() -> dict[str, Any]:
+    async def health_check() -> HealthCheckResponse:
         """Verifica el estado del servidor MCP y su conexión a Mongo.
 
         Devuelve: {"status": "ok"|"degraded", "service": str, "database": "connected"|"disconnected"}.
         Nunca falla — un problema de conexión se refleja en el contenido, no en un error de la tool.
         """
 
-        async def _call() -> dict[str, Any]:
+        async def _call() -> HealthCheckResponse:
             repository = service.repository
             result = repository.check_connection()
             if hasattr(result, "__await__"):
                 result = await result
             mongo_status = bool(result)
 
-            return {
-                "status": "ok" if mongo_status else "degraded",
-                "service": "assistant-mcp-server",
-                "database": "connected" if mongo_status else "disconnected",
-            }
+            return HealthCheckResponse(
+                status="ok" if mongo_status else "degraded",
+                service="assistant-mcp-server",
+                database="connected" if mongo_status else "disconnected",
+            )
 
         return await _audited("health_check", set(), _call())
 
     @mcp.tool()
-    async def listar_tareas() -> dict[str, Any]:
+    async def listar_tareas() -> ListarTareasResponse:
         """Devuelve las tareas activas (status distinto de "Deleted") del usuario.
 
         Devuelve: {"tasks": [...]}. No acepta filtros (fecha, estado, categoría) todavía — siempre
@@ -148,7 +182,7 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
         esta tool no las trae todas.
         """
         tasks = await _audited("listar_tareas", set(), service.list_tasks_async())
-        return {"tasks": tasks}
+        return ListarTareasResponse(tasks=[Task.model_validate(task) for task in tasks])
 
     @mcp.tool()
     async def crear_tarea(
@@ -163,7 +197,7 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
         context_metadata: dict[str, Any] | None = None,
         steps: list[dict[str, Any]] | None = None,
         agent_notes: list[dict[str, Any]] | None = None,
-    ) -> dict[str, Any]:
+    ) -> Task:
         """Crea una nueva tarea. Solo `title` es obligatorio.
 
         `status` acepta: "Pending" (default si se omite), "In Progress", "Completed", "Deleted" —
@@ -198,7 +232,8 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
             steps=steps,
             agent_notes=agent_notes,
         ))
-        return await _audited("crear_tarea", provided, call)
+        created = await _audited("crear_tarea", provided, call)
+        return Task.model_validate(created)
 
     @mcp.tool()
     async def actualizar_tarea(
@@ -214,7 +249,7 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
         context_metadata: dict[str, Any] | None = None,
         steps: list[dict[str, Any]] | None = None,
         agent_notes: list[dict[str, Any]] | None = None,
-    ) -> dict[str, Any]:
+    ) -> TareaResponse:
         """Actualiza una tarea existente por `task_id`. Actualización parcial: solo se tocan los
         campos que se pasen con valor, el resto de la tarea queda igual — no hace falta reenviar
         el objeto completo. Valores válidos de `status`: "Pending", "In Progress", "Completed",
@@ -251,33 +286,35 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
         )
 
         task = await _audited("actualizar_tarea", provided, service.update_task_async(task_id, updates))
-        return {"task": task}
+        return TareaResponse(task=Task.model_validate(task) if task is not None else None)
 
     @mcp.tool()
-    async def completar_tarea(task_id: str) -> dict[str, Any]:
+    async def completar_tarea(task_id: str) -> CompletarTareaResponse:
         """Marca una tarea como completada (status "Completed") por su `task_id`.
 
         Devuelve: {"matched": int, "modified": int}. Si `task_id` no existe, devuelve
         {"matched": 0, "modified": 0} sin lanzar error. Idempotente: repetir la llamada sobre una
         tarea ya completada devuelve {"matched": 1, "modified": 0}.
         """
-        return await _audited("completar_tarea", {"task_id"}, service.complete_task_async(task_id))
+        result = await _audited("completar_tarea", {"task_id"}, service.complete_task_async(task_id))
+        return CompletarTareaResponse.model_validate(result)
 
     @mcp.tool()
-    async def buscar_tarea(task_id: str) -> dict[str, Any]:
+    async def buscar_tarea(task_id: str) -> TareaResponse:
         """Busca una tarea concreta por su `task_id` exacto (no acepta título ni descripción).
 
         Devuelve: {"task": {...} | None}. Si no existe, `task` es `None` — no lanza error.
         """
         task = await _audited("buscar_tarea", {"task_id"}, service.get_task_async(task_id))
-        return {"task": task}
+        return TareaResponse(task=Task.model_validate(task) if task is not None else None)
 
     @mcp.tool()
-    async def eliminar_tarea(task_id: str) -> dict[str, Any]:
+    async def eliminar_tarea(task_id: str) -> EliminarTareaResponse:
         """Elimina una tarea por su `task_id` exacto — soft delete: queda marcada como "Deleted",
         no desaparece de Mongo, y ya no aparece en `listar_tareas`.
 
-        Devuelve: {"task": {...} | None}. Si `task_id` no existe, `task` es `None` — no lanza error.
+        Devuelve: {"task": {"task_id", "deleted", "deleted_at"} | None} — no la tarea completa,
+        solo un recibo de la eliminación. Si `task_id` no existe, `task` es `None`, sin error.
         """
         task = await _audited("eliminar_tarea", {"task_id"}, service.delete_task_async(task_id))
-        return {"task": task}
+        return EliminarTareaResponse(task=DeletedTaskInfo.model_validate(task) if task is not None else None)

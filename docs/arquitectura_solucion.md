@@ -401,8 +401,11 @@ Cada tool declara un scope (`read`/`write`, `TOOL_SCOPES`) y audita su invocaci�
 estructurado (ítem 3.3) — metadata sin enforcement todavía, eso depende del `Principal` de Fase 6-7.
 `listar_tareas`/`buscar_tarea`/`actualizar_tarea` devuelven siempre un objeto con nombres de campo
 explícitos (`{"tasks": [...]}`, `{"task": {...} | None}`), no dependen del wrapping automático de
-FastMCP (ítem 3.5). **Pendiente:** el mismatch `task_reference`/`task_id` entre el prompt del router y
-`TaskOrchestrator._dispatch` — completar/eliminar por descripción natural falla hoy (ítem 3.7).
+FastMCP. Los retornos están tipados con modelos Pydantic reales (`Task` del dominio más modelos de
+respuesta por tool), así que el `outputSchema` que expone el protocolo MCP es real, no genérico.
+**Pendiente:** el mismatch `task_reference`/`task_id` entre el prompt del router y
+`TaskOrchestrator._dispatch` — completar/eliminar por descripción natural falla hoy, bloqueado hasta
+que exista el agente que interprete la referencia.
 
 **Invariantes de seguridad de las tools:**
 
