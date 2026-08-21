@@ -2,6 +2,8 @@ import unittest
 
 import structlog
 
+from src.assistant_personal.application.agent.agent import AgentStepResult
+from src.assistant_personal.application.agent.guardrails import Guardrails, GuardrailsConfig, build_default_guardrails
 from src.assistant_personal.application.agent.orchestrator import TaskOrchestrator
 from src.assistant_personal.application.memory.agent_context import ShortTermMemory
 from src.assistant_personal.domain.entities import IntentAction, IntentDecision, UserProfileExtraction, UserProfileFact
@@ -198,6 +200,51 @@ class FakeDeleteTaskRouter:
         )
 
 
+class FakeCompleteByReferenceRouter:
+    def extract_profile_facts(self, _message, context=None):
+        return UserProfileExtraction()
+
+    def route(self, _message, context=None):
+        return IntentDecision(
+            action=IntentAction.COMPLETE_TASK,
+            payload={"task_reference": "la tarea del banco"},
+            confidence=1.0,
+            source="llm",
+        )
+
+
+class FakeDeleteByReferenceRouter:
+    def extract_profile_facts(self, _message, context=None):
+        return UserProfileExtraction()
+
+    def route(self, _message, context=None):
+        return IntentDecision(
+            action=IntentAction.DELETE_TASK,
+            payload={"task_reference": "la tarea del dentista"},
+            confidence=1.0,
+            source="llm",
+        )
+
+
+class FakeAgent:
+    """Doble del agente (ítem 4.3): evita una llamada real al LLM resolver en los tests del
+    orquestador — la resolución en sí ya se prueba de forma aislada en `test_agent.py`."""
+
+    def __init__(self, task_id="t-agent", task_title="Tarea resuelta", resolved=True, message=None, guardrails=None):
+        self.calls = []
+        self._task_id = task_id
+        self._task_title = task_title
+        self._resolved = resolved
+        self._message = message
+        self.guardrails = guardrails or build_default_guardrails()
+
+    async def resolve_task_reference_to_id(self, task_reference):
+        self.calls.append(task_reference)
+        if not self._resolved:
+            return AgentStepResult(resolved=False, message=self._message or "No se pudo resolver la referencia.")
+        return AgentStepResult(resolved=True, task_id=self._task_id, task_title=self._task_title)
+
+
 class FlakyService(FakeService):
     def __init__(self):
         super().__init__()
@@ -252,6 +299,49 @@ class TaskOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["action"], "delete_task")
         self.assertEqual(response["result"]["task_id"], "t-99")
         self.assertEqual(service.calls[0], ("delete", "t-99"))
+
+    async def test_completes_task_resolved_via_task_reference_by_the_agent(self):
+        service = FakeService()
+        agent = FakeAgent(task_id="t-42", task_title="Pagar el banco")
+        orchestrator = TaskOrchestrator(service=service, router=FakeCompleteByReferenceRouter(), agent=agent)
+
+        response = await orchestrator.handle_message_async("termina la tarea del banco")
+
+        self.assertTrue(response["success"])
+        self.assertEqual(agent.calls, ["la tarea del banco"])
+        self.assertEqual(service.calls[0], ("complete", "t-42"))
+
+    async def test_deletes_task_resolved_via_task_reference_by_the_agent(self):
+        service = FakeService()
+        agent = FakeAgent(task_id="t-7", task_title="Ir al dentista")
+        orchestrator = TaskOrchestrator(service=service, router=FakeDeleteByReferenceRouter(), agent=agent)
+
+        response = await orchestrator.handle_message_async("elimina la tarea del dentista")
+
+        self.assertTrue(response["success"])
+        self.assertEqual(service.calls[0], ("delete", "t-7"))
+
+    async def test_task_reference_the_agent_cannot_resolve_returns_its_message_as_clarify(self):
+        service = FakeService()
+        agent = FakeAgent(resolved=False, message="No logré identificar la tarea.")
+        orchestrator = TaskOrchestrator(service=service, router=FakeDeleteByReferenceRouter(), agent=agent)
+
+        response = await orchestrator.handle_message_async("elimina la tarea del dentista")
+
+        self.assertFalse(response["success"])
+        self.assertIn("No logré identificar la tarea.", response["message"])
+        self.assertEqual(service.calls, [])
+
+    async def test_task_reference_write_is_denied_when_guardrails_reject_the_tool(self):
+        service = FakeService()
+        deny_all = Guardrails(GuardrailsConfig(allowed_tools=frozenset(), write_tools=frozenset()))
+        agent = FakeAgent(task_id="t-42", guardrails=deny_all)
+        orchestrator = TaskOrchestrator(service=service, router=FakeCompleteByReferenceRouter(), agent=agent)
+
+        response = await orchestrator.handle_message_async("termina la tarea del banco")
+
+        self.assertFalse(response["success"])
+        self.assertEqual(service.calls, [])
 
     def test_retries_once_when_a_specialist_fails(self):
         service = FlakyService()

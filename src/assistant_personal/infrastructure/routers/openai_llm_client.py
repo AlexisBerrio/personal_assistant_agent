@@ -7,7 +7,7 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from src.assistant_personal.config import get_settings
-from src.assistant_personal.domain.entities import IntentClassification, UserProfileExtraction
+from src.assistant_personal.domain.entities import IntentClassification, TaskReferenceResolution, UserProfileExtraction
 from src.assistant_personal.infrastructure.observabilidad import get_tracer
 from src.assistant_personal.infrastructure.prompts.loader import LoadedPrompt, load_prompt
 
@@ -244,6 +244,37 @@ class OpenAIProfileFactExtractor(_OpenAITextClient):
         payload = await self._invoke_model(system_prompt, self._build_user_prompt(text, context))
         parsed = self._parse_response(payload)
         return UserProfileExtraction.model_validate(parsed)
+
+
+class OpenAITaskReferenceResolver(_OpenAITextClient):
+    """Resuelve una referencia en lenguaje natural a un `task_id` concreto (ítem 4.3/3.7) —
+    único componente responsable de esa interpretación, sin repartirla con el router."""
+
+    _expects_json_response = True
+
+    def _build_candidate_tasks_text(self, candidate_tasks: list[dict[str, Any]]) -> str:
+        if not candidate_tasks:
+            return "(el usuario no tiene tareas activas)"
+        lines = []
+        for task in candidate_tasks:
+            line = f"- task_id={task.get('task_id')}: {task.get('title')}"
+            if task.get("description"):
+                line += f" — {task['description']}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    async def resolve_task_reference(
+        self, task_reference: str, candidate_tasks: list[dict[str, Any]]
+    ) -> TaskReferenceResolution:
+        self._ensure_ready()
+        system_prompt = load_prompt("agent/resolve_task_reference")
+        user_prompt = (
+            f"Referencia del usuario: {task_reference}\n\n"
+            f"Tareas activas:\n{self._build_candidate_tasks_text(candidate_tasks)}"
+        )
+        payload = await self._invoke_model(system_prompt, user_prompt)
+        parsed = self._parse_response(payload)
+        return TaskReferenceResolution.model_validate(parsed)
 
 
 class OpenAISessionSummarizer(_OpenAITextClient):

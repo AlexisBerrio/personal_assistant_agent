@@ -60,3 +60,14 @@ class UserProfileExtraction(BaseModel):
     profile_facts: list[UserProfileFact] = Field(default_factory=list, description="Hechos de perfil detectados")
 
 
+class TaskReferenceResolution(BaseModel):
+    """Resultado de que el agente intente resolver una referencia en lenguaje natural
+    contra las tareas activas del usuario."""
+
+    task_id: str | None = Field(
+        default=None, description="task_id de la tarea que coincide con certeza, o null si ninguna coincide"
+    )
+    confidence: float = Field(ge=0.0, le=1.0, description="Confianza de que task_id es la tarea correcta")
+    reasoning: str | None = Field(default=None, description="Justificación breve de la coincidencia (o de su ausencia)")
+
+

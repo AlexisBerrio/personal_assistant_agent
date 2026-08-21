@@ -8,6 +8,8 @@ from typing import Any
 
 import structlog
 
+from src.assistant_personal.application.agent.agent import Agent
+from src.assistant_personal.application.agent.guardrails import StepDecision
 from src.assistant_personal.application.memory.agent_context import AgentContext
 from src.assistant_personal.application.memory.context_builder import ContextBuilder
 from src.assistant_personal.domain.repositories.long_term_memory_repository import LongTermMemoryRepository
@@ -35,9 +37,11 @@ class TaskOrchestrator:
         tenant_id: str | None = None,
         user_id: str | None = None,
         profile_confidence_threshold: float = 0.7,
+        agent: Agent | None = None,
     ) -> None:
         self.service = service
         self.router = router or ProductionIntentRouter()
+        self.agent = agent or Agent(service=service)
         self.max_retries = max_retries
         self.session_repository = session_repository
         self.session_id = session_id or f"session-{uuid.uuid4()}"
@@ -310,20 +314,48 @@ class TaskOrchestrator:
             return {"success": True, "action": intent.action, "result": result}
 
         if intent.action == "complete_task":
-            task_id = intent.payload.get("task_id")
-            if not task_id:
-                raise ValueError("Guardrails: falta el identificador de tarea")
+            task_id = await self._resolve_task_id(intent, write_tool="completar_tarea")
             result = await self._invoke_service("complete_task", task_id)
             return {"success": True, "action": intent.action, "result": result}
 
         if intent.action == "delete_task":
-            task_id = intent.payload.get("task_id")
-            if not task_id:
-                raise ValueError("Guardrails: falta el identificador de tarea")
+            task_id = await self._resolve_task_id(intent, write_tool="eliminar_tarea")
             result = await self._invoke_service("delete_task", task_id)
             return {"success": True, "action": intent.action, "result": result}
 
         return {"success": False, "action": "clarify", "reason": "No se pudo ejecutar la acción"}
+
+    async def _resolve_task_id(self, intent: Any, *, write_tool: str) -> str:
+        """Devuelve el `task_id` a usar en `complete_task`/`delete_task`.
+
+        Si el router ya extrajo un `task_id` exacto, se usa tal cual. Si en cambio solo
+        hay `task_reference`, el agente lo resuelve buscando en Mongo vía MCP — responsabilidad
+        que es enteramente suya, sin repartirla con el router..
+
+        La escritura resultante se evalúa con `confirmed=True`: el mensaje original del usuario
+        ya era una orden explícita de completar/eliminar; lo único que faltaba era identificar *cuál*
+        tarea, no si proceder. Una confirmación interactiva real ("¿confirmas?") requiere un
+        round-trip de conversación que no existe todavía.
+        """
+        task_id = intent.payload.get("task_id")
+        if task_id:
+            return str(task_id)
+
+        task_reference = intent.payload.get("task_reference")
+        if not task_reference:
+            raise ValueError("Guardrails: falta el identificador de tarea")
+
+        step = await self.agent.resolve_task_reference_to_id(task_reference)
+        if not step.resolved or not step.task_id:
+            raise ValueError(step.message or "No pude identificar a qué tarea te refieres.")
+
+        decision = self.agent.guardrails.evaluate_step(
+            tool_name=write_tool, steps_used=1, tokens_used=0, confirmed=True
+        )
+        if decision != StepDecision.ALLOW:
+            raise ValueError("Guardrails: no se pudo autorizar la operación de escritura.")
+
+        return step.task_id
 
     async def _invoke_service(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
         async_method = getattr(self.service, f"{method_name}_async", None)

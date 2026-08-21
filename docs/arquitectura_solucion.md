@@ -238,7 +238,7 @@ personal_assistant_agent/
 │   │                             # long_term_memory_repository, document_search_repository, llm_client
 │   ├── application/             # casos de uso, depende solo de domain — subcarpetas por sub-tema (ítem 4.15)
 │   │   ├── tasks/task_service.py
-│   │   ├── agent/                # orchestrator.py (TaskOrchestrator) + guardrails.py (ítem 4.2)
+│   │   ├── agent/                # orchestrator.py (TaskOrchestrator) + guardrails.py (4.2) + agent.py (4.3)
 │   │   └── memory/                # agent_context.py (ShortTermMemory/LongTermMemory/AgentContext)
 │   │                              # + context_builder.py (presupuesto de tokens + resumen incremental)
 │   ├── infrastructure/          # implementa los puertos, único lugar con I/O
@@ -263,8 +263,8 @@ personal_assistant_agent/
 **No implementado todavía (vs. la v1.0 de este documento):** `interfaces/alexa.py` (Fase 6), un endpoint
 `api/` propiamente dicho más allá de `app.py` (ítem 4.10). Tampoco existe una taxonomía de errores de
 dominio centralizada (`domain/errores.py`) — hoy los handlers de `app.py` traducen excepciones ad hoc;
-formalizarla es una mejora razonable, no bloqueante. `application/agent/guardrails.py` (ítem 4.2) sí existe ya
-— política pura sin agente que la consuma todavía (depende de 4.3).
+formalizarla es una mejora razonable, no bloqueante. `application/agent/{guardrails,agent}.py` (ítems 4.2,
+4.3) ya existen y están conectados: `Agent` consume `Guardrails.evaluate_step` en cada paso.
 
 **Sobre `tests/` sin subcarpetas por tipo (`unit/`, `integration/`, `contract/`, `e2e/`):** es una decisión
 deliberada, no una carencia. Para un proyecto de este tamaño, el patrón más común en la industria Python es
@@ -457,13 +457,15 @@ flowchart TD
     CONF -->|no| CLAR["clarify"]
     CONF -->|sí, general_knowledge| ANS["answer_general_knowledge"]
     CONF -->|sí, small_talk| TALK["answer_small_talk<br/>(siempre generada, nunca texto fijo)"]
-    CONF -->|sí, orchestrator, 1 acción| EXEC
-    CONF -.->|sí, multi_task, objetivo 4.9| AGENT["Agente con tools MCP<br/>(no implementado — 4.3)"]
+    CONF -->|sí, orchestrator, acción completa| EXEC
+    CONF -->|sí, complete_task/delete_task con task_reference| AGENT["Agente (4.3):<br/>listar_tareas + LLM resolver<br/>→ task_id"]
+    AGENT -->|resuelto, guardrails ALLOW| EXEC
+    AGENT -.->|no resuelto / guardrail deny| CLAR
+    CONF -.->|sí, multi_task, objetivo 4.9| AGENT
     EXEC --> LOG["Log estructurado:<br/>interaccion_completada<br/>(12+ campos, incl. contexto_tokens)"]
     ANS --> LOG
     TALK --> LOG
     CLAR --> LOG
-    AGENT -.-> LOG
     LOG --> OUT(["Respuesta al usuario"])
 ```
 
@@ -473,7 +475,8 @@ flowchart TD
 | --- | --- | --- |
 | Resuelta por reglas | 0 tokens | ✅ (`_check_fast_rules`) |
 | Con clasificación LLM | ~590 tokens de prompt + variable | ✅ `eval-router` mide `coste_medio_tokens` |
-| Con agente de fallback (F4) | Acotado por presupuesto de pasos | Objetivo, no implementado |
+| Con agente (resolución de `task_reference`, 4.3) | 1 llamada LLM (`resolve_task_reference`) + `listar_tareas` | ✅ verificado real (Mongo local + LLM real) |
+| Con agente (`multi_task`, F4) | Acotado por presupuesto de pasos (`Guardrails`) | Objetivo, no implementado (ítem 4.9) |
 
 ## 11. Taxonomía de errores
 
@@ -509,7 +512,7 @@ nada porque los tres procesos siguen el mismo criterio (`or Adaptador()` con def
 
 | Extensión | Depende de | Qué se añade | Qué NO cambia |
 | --- | --- | --- | --- |
-| Agente con tools (4.3) — ejecutor principal, no fallback (ver §A.8) | 3.1 (hecho), 4.2 (hecho) | `Agent` que consume `Guardrails.evaluate_step` | Router, tools MCP, repositorios |
+| Agente con tools (4.3) — ejecutor principal, no fallback (ver §A.8) | 3.1, 4.2 (ambos hechos) | ✅ Hecho, alcance: resolución de `task_reference` (3.7). `multi_task`/confirmación interactiva quedan para 4.9/4.10 | Router, tools MCP, repositorios |
 | `multi_task` (4.9) | 4.3 | Ruta nueva en `IntentClassification` + descomposición en el agente | Contrato del router, `_dispatch` de acciones simples |
 | Endpoint conversacional (4.10) | 4.3, 4.9 | Ruta HTTP que expone `TaskOrchestrator` | `TaskOrchestrator`, router, MCP |
 | Canal Alexa (Fase 6) | 4.10 | `interfaces/alexa.py` + política de respuesta breve | Orquestador, tools |
