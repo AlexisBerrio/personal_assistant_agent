@@ -118,7 +118,11 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
 
     @mcp.tool()
     async def health_check() -> dict[str, Any]:
-        """Verifica el estado del servidor MCP y sus dependencias (base de datos, conexiones)."""
+        """Verifica el estado del servidor MCP y su conexión a Mongo.
+
+        Devuelve: {"status": "ok"|"degraded", "service": str, "database": "connected"|"disconnected"}.
+        Nunca falla — un problema de conexión se refleja en el contenido, no en un error de la tool.
+        """
 
         async def _call() -> dict[str, Any]:
             repository = service.repository
@@ -137,7 +141,12 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
 
     @mcp.tool()
     async def listar_tareas() -> dict[str, Any]:
-        """Devuelve las tareas activas del asistente personal."""
+        """Devuelve las tareas activas (status distinto de "Deleted") del usuario.
+
+        Devuelve: {"tasks": [...]}. No acepta filtros (fecha, estado, categoría) todavía — siempre
+        trae el mismo conjunto. Limitada a 10 resultados como máximo: si el usuario tiene más,
+        esta tool no las trae todas.
+        """
         tasks = await _audited("listar_tareas", set(), service.list_tasks_async())
         return {"tasks": tasks}
 
@@ -155,7 +164,14 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
         steps: list[dict[str, Any]] | None = None,
         agent_notes: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Crea una nueva tarea con los campos principales del modelo de negocio."""
+        """Crea una nueva tarea. Solo `title` es obligatorio.
+
+        `status` acepta: "Pending" (default si se omite), "In Progress", "Completed", "Deleted" —
+        cualquier otro valor no está soportado por el resto del sistema. `priority`, `dates`,
+        `recurrence`, `context_metadata` son objetos libres sin un esquema fijo todavía; úsalos
+        solo si el usuario dio esa información explícitamente, no inventes su contenido.
+        Devuelve la tarea creada completa, incluyendo el `task_id` generado.
+        """
         provided = _provided_keys(
             title=title,
             description=description,
@@ -199,7 +215,13 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
         steps: list[dict[str, Any]] | None = None,
         agent_notes: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Actualiza una tarea existente por task_id usando los campos principales del modelo de negocio."""
+        """Actualiza una tarea existente por `task_id`. Actualización parcial: solo se tocan los
+        campos que se pasen con valor, el resto de la tarea queda igual — no hace falta reenviar
+        el objeto completo. Valores válidos de `status`: "Pending", "In Progress", "Completed",
+        "Deleted".
+
+        Devuelve: {"task": {...} | None}. Si `task_id` no existe, `task` es `None` — no lanza error.
+        """
         provided = _provided_keys(
             task_id=task_id,
             title=title,
@@ -233,17 +255,29 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
 
     @mcp.tool()
     async def completar_tarea(task_id: str) -> dict[str, Any]:
-        """Marca una tarea como completada."""
+        """Marca una tarea como completada (status "Completed") por su `task_id`.
+
+        Devuelve: {"matched": int, "modified": int}. Si `task_id` no existe, devuelve
+        {"matched": 0, "modified": 0} sin lanzar error. Idempotente: repetir la llamada sobre una
+        tarea ya completada devuelve {"matched": 1, "modified": 0}.
+        """
         return await _audited("completar_tarea", {"task_id"}, service.complete_task_async(task_id))
 
     @mcp.tool()
     async def buscar_tarea(task_id: str) -> dict[str, Any]:
-        """Busca una tarea concreta por su task_id."""
+        """Busca una tarea concreta por su `task_id` exacto (no acepta título ni descripción).
+
+        Devuelve: {"task": {...} | None}. Si no existe, `task` es `None` — no lanza error.
+        """
         task = await _audited("buscar_tarea", {"task_id"}, service.get_task_async(task_id))
         return {"task": task}
 
     @mcp.tool()
     async def eliminar_tarea(task_id: str) -> dict[str, Any]:
-        """Elimina (soft delete) una tarea existente por su task_id."""
+        """Elimina una tarea por su `task_id` exacto — soft delete: queda marcada como "Deleted",
+        no desaparece de Mongo, y ya no aparece en `listar_tareas`.
+
+        Devuelve: {"task": {...} | None}. Si `task_id` no existe, `task` es `None` — no lanza error.
+        """
         task = await _audited("eliminar_tarea", {"task_id"}, service.delete_task_async(task_id))
         return {"task": task}
