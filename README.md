@@ -68,7 +68,7 @@ tests/
 ### 1. Instalar el proyecto
 
 ```powershell
-uv sync --extra dev --extra llm --extra mcp
+uv sync --extra dev --extra llm --extra mcp --extra otel
 ```
 
 Requiere [`uv`](https://docs.astral.sh/uv/) instalado. Crea un entorno virtual (`.venv`) e instala el
@@ -197,6 +197,24 @@ Ejemplo de documento para MongoDB:
 ```powershell
 uv run python -m src.assistant_personal.interfaces.cli
 ```
+
+### 10. (Opcional) Ver trazas con OpenTelemetry + Jaeger
+
+Apagado por defecto — requiere el extra `otel` (ya en el `uv sync` del paso 1) y un backend de trazas
+local:
+
+```powershell
+docker compose up -d jaeger
+```
+
+Activa `OTEL_ENABLED=true` en tu `.env` (ver `.env.example`) y usa el CLI o la API con normalidad. Cada
+turno del CLI genera un `trace_id` con spans anidados (`orquestador.ejecutar` → `router.clasificar` →
+`llm.completar` si tocó al LLM → `memoria.cargar`); la API queda instrumentada automáticamente
+(FastAPI + Mongo) vía `FastAPIInstrumentor`/`PymongoInstrumentor`. Ver las trazas en
+http://localhost:16686 (selecciona el servicio `assistant-personal`).
+
+Con `OTEL_ENABLED=false` (o sin Jaeger arriba) nada se rompe: el exportador falla en silencio y el resto
+del sistema funciona igual.
 
 ## Siguientes pasos
 
