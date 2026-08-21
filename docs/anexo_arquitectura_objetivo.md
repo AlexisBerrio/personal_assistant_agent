@@ -477,7 +477,7 @@ todavía.
 | Patrón | Ventaja principal | Coste real | Veredicto |
 | --- | --- | --- | --- |
 | **Router + orquestador (actual)** | Predecible, barato, evaluable, pedagógico | Requiere código explícito por intención | 🟢 **Mantener y profundizar** (Fases 2–4) |
-| **Single-agent-with-tools** (el LLM elige la tool vía MCP) | Menos código de routing; absorbe intenciones nuevas sin tocar código | Coste por llamada más alto, latencia mayor, comportamiento menos predecible, requiere guardrails desde el día uno | 🟡 **Añadir como fallback**, no como sustituto |
+| **Single-agent-with-tools** (el LLM elige la tool vía MCP) | Menos código de routing; absorbe intenciones nuevas sin tocar código | Coste por llamada más alto, latencia mayor, comportamiento menos predecible, requiere guardrails desde el día uno | 🟡 **Añadir detrás del router** (ítem 4.3): el router sigue filtrando lo determinista gratis, pero el agente — no un camino raro — ejecuta todo lo que quede por interpretar |
 | **State graph (LangGraph)** | Estados y transiciones explícitos, checkpointing, flujos multi-turno complejos | Framework grande, opinionado, con su propio modelo mental; oscurece la arquitectura hexagonal que el proyecto quiere enseñar | 🔴 **Vanguardia opcional** — criterio abajo |
 
 ### Evolución recomendada por fases
@@ -494,16 +494,16 @@ cliente MCP externo. Esto elimina la duplicación de reglas de negocio y es la p
 cualquier migración futura de patrón de agente: si las tools están bien definidas, cambiar quién las
 invoca es un cambio local.
 
-**Fase 4 — Patrón híbrido: router primero, agente como fallback** 🟡
+**Fase 4 — Patrón híbrido: router recomienda, agente ejecuta** 🟡
 La evolución de mejor relación coste/beneficio:
 
 ```mermaid
 graph TD
-    MSG["Mensaje de usuario"] --> RULES["Reglas rápidas"]
-    RULES -->|coincide| EXEC["Ejecutar tool MCP"]
+    MSG["Mensaje de usuario"] --> RULES["Reglas rápidas<br/>(hard rules, ítem 4.11)"]
+    RULES -->|comando exacto, sin nada que interpretar| EXEC["Ejecutar tool MCP directo"]
     RULES -->|no coincide| CLS["LLM clasificador pequeño"]
-    CLS -->|confianza alta, 1 acción| EXEC
-    CLS -->|confianza media| AGENT["Agente con tools MCP<br/>presupuesto máx. N pasos"]
+    CLS -->|acción completa, cero interpretación pendiente| EXEC
+    CLS -->|falta interpretar texto libre: referencia, filtro, fecha| AGENT["Agente con tools MCP<br/>presupuesto máx. N pasos"]
     CLS -->|multi_task: 2+ acciones| AGENT
     CLS -->|confianza baja| CLAR["clarify: preguntar"]
     AGENT --> GUARD["Guardrails:<br/>whitelist de tools,<br/>límite de pasos,<br/>confirmación de escrituras"]
@@ -519,9 +519,13 @@ degrada a `clarify` porque no hay quién ejecute varias acciones en un turno; co
 `multi_task` deja de ser un callejón sin salida — el router entrega la intención completa y el agente la
 descompone en llamadas MCP secuenciales, con los mismos guardrails que cualquier otro camino del agente.
 
-Así el 90 % del tráfico sigue por la ruta barata y determinista, y solo los casos genuinamente ambiguos o
-multi-paso pagan un agente. Guardrails obligatorios: whitelist de tools por rol, límite duro de pasos,
-confirmación humana para operaciones destructivas, timeout y presupuesto de tokens por interacción.
+**El agente no es un camino raro para casos ambiguos: es quien ejecuta la mayoría de las acciones vía MCP**,
+siguiendo la recomendación del router. La ruta barata (reglas duras / LLM sin ambigüedad, EXEC directo) solo
+cubre el subconjunto real y acotado de comandos que no requieren interpretar nada del mensaje — el criterio
+exacto ya está fijado en el ítem 4.11: el router invoca una tool directo únicamente si tiene el 100 % de lo
+necesario sin interpretar lenguaje natural. Cualquier referencia difusa, filtro en texto libre o fecha
+relativa cae al agente. Guardrails obligatorios para el agente: whitelist de tools por rol, límite duro de
+pasos, confirmación humana para operaciones destructivas, timeout y presupuesto de tokens por interacción.
 
 **Criterio concreto para migrar a un state graph (LangGraph o equivalente):** adoptar **solo si se cumplen
 al menos dos** de estas condiciones, medidas con datos y no por intuición:
@@ -546,8 +550,8 @@ que un motor de grafo sería un adaptador más y no una reescritura.
       cierto para el camino conversacional (orquestador, ítem 3.1); `app.py` (CRUD estructurado) sigue
       llamando a `TaskService` directo — pendiente decidir si eso es aceptable o si también debe pasar
       por MCP (ver ítem 4.10).
-- [ ] El agente de fallback tiene límite de pasos, whitelist de tools y presupuesto de tokens, con test
-      que verifica que se respetan.
+- [ ] El agente tiene límite de pasos, whitelist de tools y presupuesto de tokens, con test que verifica
+      que se respetan.
 - [ ] El router puede emitir `multi_task` (2+ acciones en un mensaje) y el agente las ejecuta en secuencia
       vía MCP, en vez de degradar siempre a `clarify` (ítem 4.9).
 - [x] Las reglas rápidas solo hacen match en operaciones sin parámetros por interpretar; cualquier filtro
@@ -973,6 +977,8 @@ de sesión persiste demostrablemente; ningún `print`; ningún secreto en el rep
 | 1.7 | `tenant_id` en todas las entidades e índices (valor `"default"`) | 🟢 | §A.13 | ✅ Hecho — `Task` (`domain/task_models.py`) tiene `tenant_id: str = "default"`. `MongoTaskRepository`/`MongoSessionRepository` reciben `tenant_id` opcional (fijo en `"default"`), lo aplican en todos los filtros (`_active_task_filter`, `_session_filter`) y lo escriben en `create_task_async`/`_record_history`/`_upsert_session`. Índices compuestos en `client.py`: `personal_tasks` pasa de `{task_id:1}` a `{tenant_id:1, task_id:1}` único; `conversation_sessions` gana su primer índice, `{tenant_id:1, session_id:1}` único (antes no tenía ninguno). `TaskOrchestrator` gana un atributo `tenant_id` real (constructor, default `"default"`) que reemplaza el string mágico que había quedado hardcodeado en el log de 1.5. Verificado contra Mongo real: índices confirmados con `getIndexes()`, índice viejo pre-1.7 (`task_id_1`, sobrevivió a la recreación del contenedor porque el volumen de Docker persiste) detectado y eliminado explícitamente. 48/48 en verde, `ruff`/`mypy` limpios |
 | 1.8 | Port `DocumentSearchRepository` con adaptador `$text` | 🟢 | §A.10 | ✅ Hecho — `domain/repositories/document_search_repository.py` (nuevo): port `buscar(consulta, filtros, limite)`. `MongoTextSearchRepository` (nuevo, `infrastructure/persistence/mongo/`) lo implementa con `$text` sobre `title`/`description` de `personal_tasks`, respetando `tenant_id` como cualquier otro filtro. Índice de texto agregado en `client.py._ensure_task_indexes`. `tests/test_mongo_document_search_integration.py` (nuevo) verifica búsqueda real por palabra y aislamiento por tenant contra Mongo real — usa `MongoConnection` (no un cliente crudo) porque `$text` exige que el índice exista antes de consultar, y solo `MongoConnection.get_db()` lo crea. 50/50 en verde, `ruff`/`mypy` limpios. *(Pendiente, no es parte de este ítem: la otra mitad del DoD de §A.10 — "registrar por escrito qué consultas de usuario fallan con búsqueda de texto" — depende de uso real, no de código; queda para cuando haya tráfico real que analizar)* |
 | 1.9 | Tests E2E de API con `httpx.AsyncClient` | 🟡 | §A.12 | ✅ Hecho — `tests/test_api_e2e.py` (nuevo): ejercita `app.py` completo por HTTP (`httpx.AsyncClient` + `ASGITransport`, no `TestClient` síncrono) contra Mongo real — ciclo CRUD completo, `X-Request-ID` en cada respuesta, 400/404 con `request_id` en el body. Como `ASGITransport` nunca dispara el `lifespan` de FastAPI, el test sustituye `app.dependency_overrides[get_service]` por un `TaskService` apuntado al Mongo local desechable — si no, `get_service` caería a su fallback (`TaskService()` sin argumentos → Atlas de producción, el mismo incidente de 0.13). Se agregó `[tool.pytest.ini_options] pythonpath = ["."]` a `pyproject.toml`: sin eso, `from app import app` fallaba con `ModuleNotFoundError` bajo pytest (que inserta `tests/` en `sys.path`, no la raíz del repo). **Bug real encontrado y corregido**: `MongoTaskRepository.create_task_async` pasaba el mismo dict a `insert_one` y al valor de retorno; Motor muta ese dict in-place inyectándole `_id` (`ObjectId`), lo que rompía la serialización JSON de FastAPI con un `TypeError` — nunca se había detectado porque el único test que antes ejercitaba esa ruta HTTP completa (`test_task_service.py`) está excluido por el bug de MCP. Corregido pasando una copia a `insert_one`. 56/56 en verde, `ruff`/`mypy` limpios |
+| 1.10 | *(hallazgo, Fase 3)* `mypy` fuera del scope de CI (`domain`/`application`, ítem 1.2) tiene 2 errores reales sin corregir en `infrastructure/` | 🟡 | §A.6 | Deuda, confirmada vigente el 2026-08-21: `mongo_repository.py:71` (`Sequence[str]` sin `.append`) y `task_tools.py:155` (`health_check` asigna una `Coroutine[Any, bool]` a una variable `bool`, falta `await` explícito en el chequeo dinámico). Ninguno rompe en runtime (el segundo funciona porque `hasattr(result, "__await__")` lo cubre antes de usarlo) pero ambos fallarían si `mypy --strict` se extendiera a `infrastructure/` tal como prevé §A.6 |
+| 1.11 | *(hallazgo, Fase 3)* `tests/test_task_service.py` sigue excluido de CI sin dueño ni fecha | 🟡 | §A.12 | Deuda documentada en prosa desde Fase 0 (ver nota bajo el DoD de esta fase) pero nunca con ítem propio. El bug de wiring MCP que lo bloqueaba se resolvió en 3.1 — sigue excluido solo por inercia, no por una razón técnica vigente. Decidir: reescribirlo contra el `McpTaskServiceClient` real o borrarlo si `test_mcp_tools_contract.py`/`test_api_e2e.py` ya cubren lo mismo |
 
 **DoD de fase:** CI bloquea PRs defectuosos; todo I/O del camino de FastAPI es async; existen métricas de
 coste por interacción.
@@ -1033,13 +1039,19 @@ de arriba.
 **DoD de fase:** ninguna acción se puede ejecutar sin pasar por una tool MCP; cada invocación queda
 auditada; ninguna tool acepta filtros que cruzen tenants.
 
+> **Validado (2026-08-21):** las tres cláusulas se cumplen — `TaskOrchestrator` y el cliente MCP externo
+> comparten la única vía de ejecución (3.1); toda invocación pasa por `_audited` (3.3); ninguna tool expone
+> `tenant_id` como parámetro, verificado por test (3.4). 3.7 queda abierto a propósito: no es deuda de esta
+> fase, es una dependencia declarada de 4.3. Hallazgos sin mapear detectados durante la fase, ahora
+> formalizados como 1.10 y 1.11 (abajo, en Fase 1 — son deuda de tipado/tests preexistente, no de MCP).
+
 ### Fase 4 — Arquitectura de agentes
 
 | # | Cambio | Nivel | Área | Estado |
 | --- | --- | --- | --- | --- |
 | 4.1 | Adelantar tracing OpenTelemetry si no se hizo ya (depurar agentes sin traces es inviable) | 🟡 | §A.5 | |
 | 4.2 | Guardrails: whitelist de tools, límite de pasos, presupuesto de tokens, confirmación de escrituras | 🟡 | §A.8 | |
-| 4.3 | Agente con tools MCP **como fallback** para confianza media | 🟡 | §A.8 | |
+| 4.3 | Agente con tools MCP: ejecutor principal de toda acción que el router no pueda despachar con el 100% de lo necesario (criterio de 4.11), no un fallback raro | 🟡 | §A.8 | |
 | 4.4 | Port de orquestación en `domain/` (habilita cambiar de motor sin reescribir) | 🟢 | §A.8 | |
 | 4.5 | Documento de decisión: evaluar los 4 criterios de state graph y registrar la conclusión | 🟢 | §A.8 | |
 | 4.6 | LLM-as-judge calibrado para la respuesta final | 🟡 | §A.12 | |
@@ -1053,9 +1065,10 @@ auditada; ninguna tool acepta filtros que cruzen tenants.
 es mecánico (una tool más completa), no depende de que exista el agente. 4.11 sigue dependiendo de
 que 3.11 exista para que las lecturas filtradas puedan ejecutarse una vez el agente decida hacerlo.
 
-**DoD de fase:** el patrón híbrido funciona con la ruta barata cubriendo la mayoría del tráfico; los
-guardrails están testeados; la decisión sobre state graph está documentada con criterios, no con
-preferencia.
+**DoD de fase:** el patrón híbrido funciona — la ruta barata resuelve gratis solo lo que no requiere
+interpretar nada (criterio de 4.11), y el agente ejecuta el resto de las acciones vía MCP siguiendo la
+recomendación del router, no como excepción; los guardrails están testeados; la decisión sobre state graph
+está documentada con criterios, no con preferencia.
 
 ### Fase 5 — RAG y contexto avanzado
 
