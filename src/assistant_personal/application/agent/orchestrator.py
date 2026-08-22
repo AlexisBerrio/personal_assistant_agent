@@ -326,8 +326,6 @@ class TaskOrchestrator:
             return await self._dispatch_to_agent(intent, message, context)
 
         if intent.action in ("complete_task", "delete_task"):
-            if not intent.payload.get("task_id") and not intent.payload.get("task_reference"):
-                raise ValueError("Guardrails: falta el identificador de tarea")
             return await self._dispatch_to_agent(intent, message, context)
 
         return {"success": False, "action": "clarify", "reason": "No se pudo ejecutar la acción"}
