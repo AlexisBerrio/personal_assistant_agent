@@ -212,6 +212,14 @@ class FakeListTasksWithFilterRouter:
         )
 
 
+class FakeMultiTaskRouter:
+    def extract_profile_facts(self, _message, context=None):
+        return UserProfileExtraction()
+
+    def route(self, _message, context=None):
+        return IntentDecision(action=IntentAction.MULTI_TASK, payload={}, confidence=0.9, source="llm")
+
+
 class FakeDeleteTaskRouter:
     def extract_profile_facts(self, _message, context=None):
         return UserProfileExtraction()
@@ -354,6 +362,18 @@ class TaskOrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(response["success"])
         self.assertEqual(response["message"], "Tienes 2 tareas sin finalizar: ...")
+        self.assertEqual(len(agent.calls), 1)
+        self.assertEqual(service.calls, [])
+
+    async def test_dispatches_multi_task_to_the_agent(self):
+        service = FakeService()
+        agent = FakeAgent(message="Creé la tarea del banco y completé la del dentista.")
+        orchestrator = TaskOrchestrator(service=service, router=FakeMultiTaskRouter(), agent=agent)
+
+        response = await orchestrator.handle_message_async("crea una tarea para el banco y completa la del dentista")
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["message"], "Creé la tarea del banco y completé la del dentista.")
         self.assertEqual(len(agent.calls), 1)
         self.assertEqual(service.calls, [])
 

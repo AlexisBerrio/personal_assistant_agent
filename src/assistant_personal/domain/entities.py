@@ -11,6 +11,7 @@ class IntentAction(str, Enum):
     CREATE_TASK = "create_task"  # Registrar una nueva tarea.
     COMPLETE_TASK = "complete_task"  # Marcar una tarea como completada.
     DELETE_TASK = "delete_task"  # Eliminar una tarea.
+    MULTI_TASK = "multi_task"  # 2+ acciones de dominio distintas en el mismo mensaje.
     ASK_KNOWLEDGE_BASE = "ask_knowledge_base"  # El usuario pregunta información general.
     SMALL_TALK = "small_talk"  # Conversación casual o saludo.
     CLARIFY = "clarify"  # La solicitud es ambigua o incomprensible.

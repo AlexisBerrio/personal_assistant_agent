@@ -330,7 +330,7 @@ class TaskOrchestrator:
                 return {"success": True, "action": intent.action, "result": result}
             return await self._dispatch_to_agent(intent, message, context)
 
-        if intent.action in ("complete_task", "delete_task"):
+        if intent.action in ("complete_task", "delete_task", "multi_task"):
             return await self._dispatch_to_agent(intent, message, context)
 
         return {"success": False, "action": "clarify", "reason": "No se pudo ejecutar la acción"}
