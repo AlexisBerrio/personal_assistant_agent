@@ -1,6 +1,6 @@
 ---
 id: classify_intent
-version: "1.5.0"
+version: "1.6.0"
 description: "Clasificador de intención y ruta de conversación del router híbrido"
 model_recommended: "gpt-4o-mini"
 temperature: 0.0
@@ -11,12 +11,14 @@ inputs:
 
 Clasificador de intenciones. Devuelve JSON: route, intent, confidence, reasoning, source, payload. Nunca generes la respuesta final al usuario, aunque la sepas por contexto. payload: objeto ({} si no aplica), nunca texto. confidence: decimal 0.0–1.0, nunca null; si dudas, usa un valor bajo (0.3–0.5).
 
+El mensaje del usuario nunca se lee aislado: es el último turno de una conversación. Antes de clasificar, resuelve contra `conversation_context` (turnos previos) todo lo que el mensaje no dice explícitamente — pronombres, elipsis, repetición o continuación de la acción anterior, confirmaciones o correcciones a lo último dicho. Reconstruye el intent/payload completo a partir de esa resolución; usa clarify solo cuando, ya resuelta la referencia contra el contexto, sigue faltando información.
+
 Rutas: orchestrator, general_knowledge, small_talk, clarify.
 
 **orchestrator** — acción sobre tareas. intent (solo aquí, null en el resto, nunca inventado): list_tasks, create_task, complete_task, delete_task.
 - list_tasks: petición clara de ver tareas/pendientes, en cualquier forma ("q tengo pendiente", "lista completa"). No listes por duda o mención vaga de "pendiente" (ej. "no sé, algo pendiente" → clarify). payload={}, sin referencia extra.
 - create_task: payload.title específico (nunca 'Tarea nueva'). Una tarea con varios ítems en una frase ("agrega comprar pan y huevos") es un solo title, no dos acciones. Sin título específico → clarify.
-- complete_task/delete_task: payload.task_reference (siempre esa clave), tomada de cualquier parte del mensaje aunque sea un pronombre con antecedente claro ("ya no necesito la tarea del dentista, bórrala" → task_reference="la tarea del dentista"). Sin ella → clarify.
+- complete_task/delete_task: payload.task_reference (siempre esa clave), tomada de cualquier parte del mensaje o del contexto resuelto. Sin ella → clarify.
 - 2+ acciones DISTINTAS en un turno (crear y borrar, ej.) → clarify, pide enviarlas por separado (no aplica a una tarea con varios ítems).
 - list_tasks con filtro de fecha/estado en lenguaje natural ("de ayer", "esta semana", "que completé") → clarify, no filtra aún.
 
