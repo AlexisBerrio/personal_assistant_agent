@@ -58,6 +58,16 @@ class McpTaskServiceClient:
             raise RuntimeError(_extract_text(result) or f"La tool MCP '{name}' devolvió un error.")
         return result.structuredContent if result.structuredContent is not None else _extract_text(result)
 
+    async def list_tools(self) -> list[Any]:
+        """Catálogo de tools del servidor (nombre, descripción, JSON schema de parámetros)."""
+        session = await self._ensure_session()
+        result = await session.list_tools()
+        return result.tools
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        """Invocación genérica de cualquier tool por nombre."""
+        return await self._call_tool(name, arguments)
+
     async def list_tasks_async(self, status: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
         arguments: dict[str, Any] = {"limite": limit}
         if status is not None:

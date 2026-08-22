@@ -2,8 +2,7 @@ import unittest
 
 import structlog
 
-from src.assistant_personal.application.agent.agent import AgentStepResult
-from src.assistant_personal.application.agent.guardrails import Guardrails, GuardrailsConfig, build_default_guardrails
+from src.assistant_personal.application.agent.agent import AgentResult
 from src.assistant_personal.application.agent.orchestrator import TaskOrchestrator
 from src.assistant_personal.application.memory.agent_context import ShortTermMemory
 from src.assistant_personal.domain.entities import IntentAction, IntentDecision, UserProfileExtraction, UserProfileFact
@@ -175,6 +174,11 @@ class FakeCreateTaskRouter:
 
 
 class FakeCreateWithoutTitleRouter:
+    """`source='rule'` a propósito: simula una regla exacta que, por un bug, produjo un
+    `create_task` sin título — el chequeo de la ruta barata debe rechazarlo sin tocar el
+    servicio ni el agente. Un `create_task` real vía LLM sin título nunca llega aquí: pasa por
+    el agente (ver `test_dispatches_llm_classified_create_task_to_the_agent`)."""
+
     def extract_profile_facts(self, _message, context=None):
         return UserProfileExtraction()
 
@@ -183,7 +187,7 @@ class FakeCreateWithoutTitleRouter:
             action=IntentAction.CREATE_TASK,
             payload={},
             confidence=1.0,
-            source="llm",
+            source="rule",
         )
 
 
@@ -226,23 +230,36 @@ class FakeDeleteByReferenceRouter:
         )
 
 
+class FakeCreateTaskViaLlmRouter:
+    """A diferencia de `FakeCreateTaskRouter` (source='rule'), simula un `create_task` que pasó
+    por el clasificador LLM — el caso que ahora debe entregarse entero al agente, porque el
+    mensaje podría traer atributos (prioridad, fecha, categoría) que una regla no interpreta."""
+
+    def extract_profile_facts(self, _message, context=None):
+        return UserProfileExtraction()
+
+    def route(self, _message, context=None):
+        return IntentDecision(
+            action=IntentAction.CREATE_TASK,
+            payload={"title": "Llamar al banco"},
+            confidence=1.0,
+            source="llm",
+        )
+
+
 class FakeAgent:
-    """Doble del agente (ítem 4.3): evita una llamada real al LLM resolver en los tests del
-    orquestador — la resolución en sí ya se prueba de forma aislada en `test_agent.py`."""
+    """Doble del agente: evita el bucle de tool-calling real en los tests del orquestador — el
+    bucle en sí ya se prueba de forma aislada en `test_agent.py`."""
 
-    def __init__(self, task_id="t-agent", task_title="Tarea resuelta", resolved=True, message=None, guardrails=None):
+    def __init__(self, message="Listo.", tool_calls=None, steps_used=0):
         self.calls = []
-        self._task_id = task_id
-        self._task_title = task_title
-        self._resolved = resolved
         self._message = message
-        self.guardrails = guardrails or build_default_guardrails()
+        self._tool_calls = tool_calls or []
+        self._steps_used = steps_used
 
-    async def resolve_task_reference_to_id(self, task_reference):
-        self.calls.append(task_reference)
-        if not self._resolved:
-            return AgentStepResult(resolved=False, message=self._message or "No se pudo resolver la referencia.")
-        return AgentStepResult(resolved=True, task_id=self._task_id, task_title=self._task_title)
+    async def handle(self, message, context=None):
+        self.calls.append((message, context))
+        return AgentResult(message=self._message, tool_calls=self._tool_calls, steps_used=self._steps_used)
 
 
 class FlakyService(FakeService):
@@ -300,48 +317,43 @@ class TaskOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["result"]["task_id"], "t-99")
         self.assertEqual(service.calls[0], ("delete", "t-99"))
 
-    async def test_completes_task_resolved_via_task_reference_by_the_agent(self):
+    async def test_dispatches_complete_task_by_reference_to_the_agent(self):
         service = FakeService()
-        agent = FakeAgent(task_id="t-42", task_title="Pagar el banco")
+        agent = FakeAgent(message="Completé la tarea de pagar el banco.")
         orchestrator = TaskOrchestrator(service=service, router=FakeCompleteByReferenceRouter(), agent=agent)
 
         response = await orchestrator.handle_message_async("termina la tarea del banco")
 
         self.assertTrue(response["success"])
-        self.assertEqual(agent.calls, ["la tarea del banco"])
-        self.assertEqual(service.calls[0], ("complete", "t-42"))
+        self.assertEqual(response["message"], "Completé la tarea de pagar el banco.")
+        self.assertEqual(len(agent.calls), 1)
+        self.assertEqual(agent.calls[0][0], "termina la tarea del banco")
+        self.assertEqual(service.calls, [])  # el orquestador no toca el service directo en este camino
 
-    async def test_deletes_task_resolved_via_task_reference_by_the_agent(self):
+    async def test_dispatches_delete_task_by_reference_to_the_agent(self):
         service = FakeService()
-        agent = FakeAgent(task_id="t-7", task_title="Ir al dentista")
+        agent = FakeAgent(message="Eliminé la tarea del dentista.")
         orchestrator = TaskOrchestrator(service=service, router=FakeDeleteByReferenceRouter(), agent=agent)
 
         response = await orchestrator.handle_message_async("elimina la tarea del dentista")
 
         self.assertTrue(response["success"])
-        self.assertEqual(service.calls[0], ("delete", "t-7"))
+        self.assertEqual(response["message"], "Eliminé la tarea del dentista.")
 
-    async def test_task_reference_the_agent_cannot_resolve_returns_its_message_as_clarify(self):
+    async def test_dispatches_llm_classified_create_task_to_the_agent(self):
+        """A diferencia de un `create_task` resuelto por regla exacta, uno que pasó por el
+        clasificador LLM podría traer atributos en lenguaje natural (prioridad, fecha,
+        categoría) — eso ya no lo despacha el orquestador directo, se lo entrega al agente."""
         service = FakeService()
-        agent = FakeAgent(resolved=False, message="No logré identificar la tarea.")
-        orchestrator = TaskOrchestrator(service=service, router=FakeDeleteByReferenceRouter(), agent=agent)
+        agent = FakeAgent(message="Creé la tarea con los detalles que diste.")
+        orchestrator = TaskOrchestrator(service=service, router=FakeCreateTaskViaLlmRouter(), agent=agent)
 
-        response = await orchestrator.handle_message_async("elimina la tarea del dentista")
+        response = await orchestrator.handle_message_async("crea una tarea urgente para llamar al banco mañana")
 
-        self.assertFalse(response["success"])
-        self.assertIn("No logré identificar la tarea.", response["message"])
+        self.assertTrue(response["success"])
+        self.assertEqual(response["message"], "Creé la tarea con los detalles que diste.")
         self.assertEqual(service.calls, [])
-
-    async def test_task_reference_write_is_denied_when_guardrails_reject_the_tool(self):
-        service = FakeService()
-        deny_all = Guardrails(GuardrailsConfig(allowed_tools=frozenset(), write_tools=frozenset()))
-        agent = FakeAgent(task_id="t-42", guardrails=deny_all)
-        orchestrator = TaskOrchestrator(service=service, router=FakeCompleteByReferenceRouter(), agent=agent)
-
-        response = await orchestrator.handle_message_async("termina la tarea del banco")
-
-        self.assertFalse(response["success"])
-        self.assertEqual(service.calls, [])
+        self.assertEqual(len(agent.calls), 1)
 
     def test_retries_once_when_a_specialist_fails(self):
         service = FlakyService()
@@ -353,7 +365,7 @@ class TaskOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(service.failures, 2)
         self.assertEqual(response["result"]["title"], "Tarea para revisar")
 
-    def test_create_task_without_title_returns_clarify_instead_of_generic_task(self):
+    def test_create_task_via_rule_without_title_returns_clarify_instead_of_generic_task(self):
         service = FakeService()
         orchestrator = TaskOrchestrator(service=service, router=FakeCreateWithoutTitleRouter())
 

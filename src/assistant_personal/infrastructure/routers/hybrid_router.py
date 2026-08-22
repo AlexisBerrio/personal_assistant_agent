@@ -109,7 +109,7 @@ class ProductionIntentRouter:
         self.last_llm_metadata: dict[str, Any] | None = None
 
     async def route(self, user_message: str, context: str | None = None) -> IntentDecision:
-        """Envoltorio del span `router.clasificar` (ítem 4.1) alrededor de `_route`, para no
+        """Envoltorio del span `router.clasificar` alrededor de `_route`, para no
         re-indentar toda la lógica de reglas/LLM bajo un único `with`."""
         with tracer.start_as_current_span("router.clasificar") as span:
             decision = await self._route(user_message, context)

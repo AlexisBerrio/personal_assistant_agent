@@ -63,7 +63,7 @@ def _provided_keys(**kwargs: Any) -> set[str]:
 
 
 async def _audited(tool_name: str, provided_params: set[str], call: Awaitable[Any]) -> Any:
-    """Registra invocación y resultado de una tool MCP para auditoría (ítem 3.3).
+    """Registra invocación y resultado de una tool MCP para auditoría.
 
     `provided_params` son solo las claves de los argumentos recibidos, nunca sus valores: pueden
     ser texto libre del usuario y no deben quedar en el log.

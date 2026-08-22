@@ -238,7 +238,8 @@ personal_assistant_agent/
 │   │                             # long_term_memory_repository, document_search_repository, llm_client
 │   ├── application/             # casos de uso, depende solo de domain — subcarpetas por sub-tema (ítem 4.15)
 │   │   ├── tasks/task_service.py
-│   │   ├── agent/                # orchestrator.py (TaskOrchestrator) + guardrails.py (4.2) + agent.py (4.3)
+│   │   ├── agent/                # orchestrator.py (TaskOrchestrator) + guardrails.py (4.2)
+│   │   │                        # + agent.py (4.3, bucle de tool-calling real)
 │   │   └── memory/                # agent_context.py (ShortTermMemory/LongTermMemory/AgentContext)
 │   │                              # + context_builder.py (presupuesto de tokens + resumen incremental)
 │   ├── infrastructure/          # implementa los puertos, único lugar con I/O
@@ -457,11 +458,12 @@ flowchart TD
     CONF -->|no| CLAR["clarify"]
     CONF -->|sí, general_knowledge| ANS["answer_general_knowledge"]
     CONF -->|sí, small_talk| TALK["answer_small_talk<br/>(siempre generada, nunca texto fijo)"]
-    CONF -->|sí, orchestrator, acción completa| EXEC
-    CONF -->|sí, complete_task/delete_task con task_reference| AGENT["Agente (4.3):<br/>listar_tareas + LLM resolver<br/>→ task_id"]
-    AGENT -->|resuelto, guardrails ALLOW| EXEC
-    AGENT -.->|no resuelto / guardrail deny| CLAR
-    CONF -.->|sí, multi_task, objetivo 4.9| AGENT
+    CONF -->|sí, create_task por regla exacta, o complete/delete con task_id| EXEC
+    CONF -->|sí, create_task vía LLM, o complete/delete con task_reference| AGENT["Agente (4.3):<br/>bucle de tool-calling real<br/>(list_tools + call_tool)"]
+    AGENT -->|decide invocar tool, guardrails ALLOW| MCPTOOL["tool MCP real"]
+    MCPTOOL --> AGENT
+    AGENT -->|respuesta final| LOG
+    CONF -.->|sí, multi_task, objetivo 4.9 — el agente ya soporta<br/>varios pasos, falta que el router lo enrute| AGENT
     EXEC --> LOG["Log estructurado:<br/>interaccion_completada<br/>(12+ campos, incl. contexto_tokens)"]
     ANS --> LOG
     TALK --> LOG
@@ -475,8 +477,8 @@ flowchart TD
 | --- | --- | --- |
 | Resuelta por reglas | 0 tokens | ✅ (`_check_fast_rules`) |
 | Con clasificación LLM | ~590 tokens de prompt + variable | ✅ `eval-router` mide `coste_medio_tokens` |
-| Con agente (resolución de `task_reference`, 4.3) | 1 llamada LLM (`resolve_task_reference`) + `listar_tareas` | ✅ verificado real (Mongo local + LLM real) |
-| Con agente (`multi_task`, F4) | Acotado por presupuesto de pasos (`Guardrails`) | Objetivo, no implementado (ítem 4.9) |
+| Con agente (tool-calling real) | 1+ llamadas LLM con `tools=`, una por vuelta del bucle, acotado por `Guardrails.max_steps` | ✅ verificado real (MCP real + LLM real): resolución de `task_reference` y creación con atributos ricos, incluida auto-corrección tras un error de validación de una tool |
+| Con agente (`multi_task`, F4) | Mismo bucle — el mecanismo ya existe | Falta el lado del router (ítem 4.9) |
 
 ## 11. Taxonomía de errores
 
@@ -512,7 +514,7 @@ nada porque los tres procesos siguen el mismo criterio (`or Adaptador()` con def
 
 | Extensión | Depende de | Qué se añade | Qué NO cambia |
 | --- | --- | --- | --- |
-| Agente con tools (4.3) — ejecutor principal, no fallback (ver §A.8) | 3.1, 4.2 (ambos hechos) | ✅ Hecho, alcance: resolución de `task_reference` (3.7). `multi_task`/confirmación interactiva quedan para 4.9/4.10 | Router, tools MCP, repositorios |
+| Agente con tools — ejecutor principal, no fallback | 3.1, 4.2 (ambos hechos) | ✅ Hecho: bucle real de tool-calling (catálogo desde `list_tools()`, el LLM decide qué invocar). Cubre `task_reference` y atributos ricos en `create_task` sin ítem aparte. Confirmación interactiva real queda para 4.10 (ítem 4.16) | Router, tools MCP, repositorios |
 | `multi_task` (4.9) | 4.3 | Ruta nueva en `IntentClassification` + descomposición en el agente | Contrato del router, `_dispatch` de acciones simples |
 | Endpoint conversacional (4.10) | 4.3, 4.9 | Ruta HTTP que expone `TaskOrchestrator` | `TaskOrchestrator`, router, MCP |
 | Canal Alexa (Fase 6) | 4.10 | `interfaces/alexa.py` + política de respuesta breve | Orquestador, tools |

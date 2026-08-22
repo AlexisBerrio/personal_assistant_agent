@@ -9,7 +9,6 @@ from typing import Any
 import structlog
 
 from src.assistant_personal.application.agent.agent import Agent
-from src.assistant_personal.application.agent.guardrails import StepDecision
 from src.assistant_personal.application.memory.agent_context import AgentContext
 from src.assistant_personal.application.memory.context_builder import ContextBuilder
 from src.assistant_personal.domain.repositories.long_term_memory_repository import LongTermMemoryRepository
@@ -41,7 +40,7 @@ class TaskOrchestrator:
     ) -> None:
         self.service = service
         self.router = router or ProductionIntentRouter()
-        self.agent = agent or Agent(service=service)
+        self.agent = agent or Agent(mcp_client=service)
         self.max_retries = max_retries
         self.session_repository = session_repository
         self.session_id = session_id or f"session-{uuid.uuid4()}"
@@ -147,8 +146,8 @@ class TaskOrchestrator:
             return {"success": True, "action": "ask_knowledge_base", "message": answer, "result": answer}
 
         try:
-            result = await self._execute_with_retries(intent)
-            assistant_response = self._format_public_message(intent.action, result)
+            result = await self._execute_with_retries(intent, message, context_summary)
+            assistant_response = result.get("message") or self._format_public_message(intent.action, result)
             await self.context.short_term_memory.add_turn_async(message, assistant_response, session_id=self.session_id)
             self._log_interaction(
                 request_id=request_id, started_at=started_at,
@@ -287,75 +286,61 @@ class TaskOrchestrator:
 
         return str(result)
 
-    async def _execute_with_retries(self, intent: Any) -> dict[str, Any]:
+    async def _execute_with_retries(self, intent: Any, message: str, context: str) -> dict[str, Any]:
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
-                return await self._dispatch(intent)
+                return await self._dispatch(intent, message, context)
             except ValueError as exc:
                 last_error = exc
                 if attempt >= self.max_retries:
                     raise
         raise last_error or ValueError("No se pudo completar la acción")
 
-    async def _dispatch(self, intent: Any) -> dict[str, Any]:
+    async def _dispatch(self, intent: Any, message: str, context: str) -> dict[str, Any]:
+        """Despacha una acción ya clasificada.
+
+        El camino barato (sin agente) solo aplica cuando el router ya tiene el 100% de lo
+        necesario sin haber tenido que interpretar nada: `create_task` resuelto por una regla
+        exacta, o `complete_task`/`delete_task` con `task_id` explícito. Cualquier otro caso —
+        `task_reference` en vez de `task_id`, o un `create_task` que pasó por el clasificador LLM
+        y podría traer atributos en lenguaje natural (prioridad, fecha, categoría...) — se le
+        entrega entero al agente, que decide qué tool(s) invocar.
+        """
         if intent.action == "list_tasks":
             tasks = await self._invoke_service("list_tasks")
             return {"success": True, "action": intent.action, "result": tasks}
 
         if intent.action == "create_task":
-            title = intent.payload.get("title")
-            task_payload = {"title": title}
-            if not title or not title.strip():
-                raise ValueError(
-                    "Entiendo que quieres crear una tarea, pero me falta el título. ¿Qué tarea deseas crear?"
-                )
-            result = await self._invoke_service("create_task", task_payload)
-            return {"success": True, "action": intent.action, "result": result}
+            if intent.source == "rule":
+                title = intent.payload.get("title")
+                if not title or not title.strip():
+                    raise ValueError(
+                        "Entiendo que quieres crear una tarea, pero me falta el título. ¿Qué tarea deseas crear?"
+                    )
+                result = await self._invoke_service("create_task", {"title": title})
+                return {"success": True, "action": intent.action, "result": result}
+            return await self._dispatch_to_agent(intent, message, context)
 
-        if intent.action == "complete_task":
-            task_id = await self._resolve_task_id(intent, write_tool="completar_tarea")
-            result = await self._invoke_service("complete_task", task_id)
-            return {"success": True, "action": intent.action, "result": result}
-
-        if intent.action == "delete_task":
-            task_id = await self._resolve_task_id(intent, write_tool="eliminar_tarea")
-            result = await self._invoke_service("delete_task", task_id)
-            return {"success": True, "action": intent.action, "result": result}
+        if intent.action in ("complete_task", "delete_task"):
+            if intent.payload.get("task_id"):
+                method = "complete_task" if intent.action == "complete_task" else "delete_task"
+                result = await self._invoke_service(method, str(intent.payload["task_id"]))
+                return {"success": True, "action": intent.action, "result": result}
+            if not intent.payload.get("task_reference"):
+                raise ValueError("Guardrails: falta el identificador de tarea")
+            return await self._dispatch_to_agent(intent, message, context)
 
         return {"success": False, "action": "clarify", "reason": "No se pudo ejecutar la acción"}
 
-    async def _resolve_task_id(self, intent: Any, *, write_tool: str) -> str:
-        """Devuelve el `task_id` a usar en `complete_task`/`delete_task`.
-
-        Si el router ya extrajo un `task_id` exacto, se usa tal cual. Si en cambio solo
-        hay `task_reference`, el agente lo resuelve buscando en Mongo vía MCP — responsabilidad
-        que es enteramente suya, sin repartirla con el router..
-
-        La escritura resultante se evalúa con `confirmed=True`: el mensaje original del usuario
-        ya era una orden explícita de completar/eliminar; lo único que faltaba era identificar *cuál*
-        tarea, no si proceder. Una confirmación interactiva real ("¿confirmas?") requiere un
-        round-trip de conversación que no existe todavía.
-        """
-        task_id = intent.payload.get("task_id")
-        if task_id:
-            return str(task_id)
-
-        task_reference = intent.payload.get("task_reference")
-        if not task_reference:
-            raise ValueError("Guardrails: falta el identificador de tarea")
-
-        step = await self.agent.resolve_task_reference_to_id(task_reference)
-        if not step.resolved or not step.task_id:
-            raise ValueError(step.message or "No pude identificar a qué tarea te refieres.")
-
-        decision = self.agent.guardrails.evaluate_step(
-            tool_name=write_tool, steps_used=1, tokens_used=0, confirmed=True
-        )
-        if decision != StepDecision.ALLOW:
-            raise ValueError("Guardrails: no se pudo autorizar la operación de escritura.")
-
-        return step.task_id
+    async def _dispatch_to_agent(self, intent: Any, message: str, context: str) -> dict[str, Any]:
+        agent_result = await self.agent.handle(message, context=context)
+        return {
+            "success": True,
+            "action": intent.action,
+            "result": {"tool_calls": agent_result.tool_calls, "steps_used": agent_result.steps_used},
+            "message": agent_result.message,
+        }
 
     async def _invoke_service(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
         async_method = getattr(self.service, f"{method_name}_async", None)
