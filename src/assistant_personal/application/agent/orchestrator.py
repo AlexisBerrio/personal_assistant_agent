@@ -276,7 +276,11 @@ class TaskOrchestrator:
             return "Tarea creada"
 
         if action == "list_tasks":
-            return "Aquí tienes tus tareas."
+            tasks = result.get("result") if isinstance(result, dict) else None
+            if not tasks:
+                return "No tienes tareas pendientes."
+            lines = [f"- {task.get('title', 'Sin título')} ({task.get('status', 'Pending')})" for task in tasks]
+            return "Tus tareas:\n" + "\n".join(lines)
 
         if action == "complete_task":
             return "Tarea completada."
@@ -301,11 +305,10 @@ class TaskOrchestrator:
         """Despacha una acción ya clasificada.
 
         El camino barato (sin agente) solo aplica cuando el router ya tiene el 100% de lo
-        necesario sin haber tenido que interpretar nada: `create_task` resuelto por una regla
-        exacta, o `complete_task`/`delete_task` con `task_id` explícito. Cualquier otro caso —
-        `task_reference` en vez de `task_id`, o un `create_task` que pasó por el clasificador LLM
-        y podría traer atributos en lenguaje natural (prioridad, fecha, categoría...) — se le
-        entrega entero al agente, que decide qué tool(s) invocar.
+        necesario sin haber tenido que interpretar nada: `list_tasks`, o `create_task` resuelto
+        por una regla exacta. Un `create_task` que pasó por el clasificador LLM y podría
+        traer atributos en lenguaje natural (prioridad, fecha, categoría...) tampoco toma el
+        camino barato.
         """
         if intent.action == "list_tasks":
             tasks = await self._invoke_service("list_tasks")
@@ -323,11 +326,7 @@ class TaskOrchestrator:
             return await self._dispatch_to_agent(intent, message, context)
 
         if intent.action in ("complete_task", "delete_task"):
-            if intent.payload.get("task_id"):
-                method = "complete_task" if intent.action == "complete_task" else "delete_task"
-                result = await self._invoke_service(method, str(intent.payload["task_id"]))
-                return {"success": True, "action": intent.action, "result": result}
-            if not intent.payload.get("task_reference"):
+            if not intent.payload.get("task_id") and not intent.payload.get("task_reference"):
                 raise ValueError("Guardrails: falta el identificador de tarea")
             return await self._dispatch_to_agent(intent, message, context)
 

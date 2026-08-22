@@ -191,6 +191,14 @@ class FakeCreateWithoutTitleRouter:
         )
 
 
+class FakeListTasksRouter:
+    def extract_profile_facts(self, _message, context=None):
+        return UserProfileExtraction()
+
+    def route(self, _message, context=None):
+        return IntentDecision(action=IntentAction.LIST_TASKS, payload={}, confidence=1.0, source="rule")
+
+
 class FakeDeleteTaskRouter:
     def extract_profile_facts(self, _message, context=None):
         return UserProfileExtraction()
@@ -306,16 +314,38 @@ class TaskOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["result"]["title"], "Tarea para estudiar")
         self.assertEqual(service.calls[0][0], "create")
 
-    def test_deletes_task_through_the_orchestrator(self):
+    def test_list_tasks_message_reflects_the_real_tasks_not_a_fixed_string(self):
         service = FakeService()
-        orchestrator = TaskOrchestrator(service=service, router=FakeDeleteTaskRouter())
+        orchestrator = TaskOrchestrator(service=service, router=FakeListTasksRouter())
 
-        response = orchestrator.handle_message("borra la tarea t-99")
+        response = orchestrator.handle_message("muéstrame mis tareas")
 
         self.assertTrue(response["success"])
-        self.assertEqual(response["action"], "delete_task")
-        self.assertEqual(response["result"]["task_id"], "t-99")
-        self.assertEqual(service.calls[0], ("delete", "t-99"))
+        self.assertIn("Tarea inicial", response["message"])
+
+    def test_list_tasks_message_when_there_are_no_tasks(self):
+        service = FakeService()
+        service.list_tasks = lambda: []
+        orchestrator = TaskOrchestrator(service=service, router=FakeListTasksRouter())
+
+        response = orchestrator.handle_message("muéstrame mis tareas")
+
+        self.assertEqual(response["message"], "No tienes tareas pendientes.")
+
+    async def test_dispatches_delete_task_with_task_id_to_the_agent_too(self):
+        """Aunque el payload traiga un `task_id` exacto, no hay un camino determinista aparte:
+        un usuario real nunca escribe el id alfanumérico, así que también se le entrega al
+        agente en vez de invocar el servicio directo."""
+        service = FakeService()
+        agent = FakeAgent(message="Eliminé la tarea t-99.")
+        orchestrator = TaskOrchestrator(service=service, router=FakeDeleteTaskRouter(), agent=agent)
+
+        response = await orchestrator.handle_message_async("borra la tarea t-99")
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["message"], "Eliminé la tarea t-99.")
+        self.assertEqual(len(agent.calls), 1)
+        self.assertEqual(service.calls, [])
 
     async def test_dispatches_complete_task_by_reference_to_the_agent(self):
         service = FakeService()
