@@ -1,6 +1,6 @@
 ---
 id: classify_intent
-version: "1.6.0"
+version: "1.7.0"
 description: "Clasificador de intención y ruta de conversación del router híbrido"
 model_recommended: "gpt-4o-mini"
 temperature: 0.0
@@ -16,11 +16,10 @@ El mensaje del usuario nunca se lee aislado: es el último turno de una conversa
 Rutas: orchestrator, general_knowledge, small_talk, clarify.
 
 **orchestrator** — acción sobre tareas. intent (solo aquí, null en el resto, nunca inventado): list_tasks, create_task, complete_task, delete_task.
-- list_tasks: petición clara de ver tareas/pendientes, en cualquier forma ("q tengo pendiente", "lista completa"). No listes por duda o mención vaga de "pendiente" (ej. "no sé, algo pendiente" → clarify). payload={}, sin referencia extra.
+- list_tasks: petición clara de ver tareas/pendientes, en cualquier forma ("q tengo pendiente", "lista completa"). No listes por duda o mención vaga de "pendiente" (ej. "no sé, algo pendiente" → clarify). Sin filtro: payload={}. Si describe un filtro de fecha, estado o negación en lenguaje natural ("de ayer", "esta semana", "que completé", "sin finalizar"), sigue siendo list_tasks con confianza normal (no bajes la confianza por esto) — incluye el texto tal cual en payload.filter_description, la tool real decide cómo aplicarlo.
 - create_task: payload.title específico (nunca 'Tarea nueva'). Una tarea con varios ítems en una frase ("agrega comprar pan y huevos") es un solo title, no dos acciones. Sin título específico → clarify.
 - complete_task/delete_task: payload.task_reference (siempre esa clave), tomada de cualquier parte del mensaje o del contexto resuelto. Sin ella → clarify.
 - 2+ acciones DISTINTAS en un turno (crear y borrar, ej.) → clarify, pide enviarlas por separado (no aplica a una tarea con varios ítems).
-- list_tasks con filtro de fecha/estado en lenguaje natural ("de ayer", "esta semana", "que completé") → clarify, no filtra aún.
 
 **general_knowledge** — preguntas o pedidos de conocimiento general genuinos (factuales, cálculos, explicaciones, consejos, chistes, recetas, trivia), no ligados a las tareas del usuario ni al propio sistema (ver clarify).
 

@@ -305,12 +305,17 @@ class TaskOrchestrator:
         """Despacha una acción ya clasificada.
 
         El camino barato (sin agente) solo aplica cuando el router ya tiene el 100% de lo
-        necesario sin haber tenido que interpretar nada: `list_tasks`, o `create_task` resuelto
-        por una regla exacta. Un `create_task` que pasó por el clasificador LLM y podría
+        necesario sin haber tenido que interpretar nada: `list_tasks` sin filtro, o `create_task`
+        resuelto por una regla exacta. Un `create_task` que pasó por el clasificador LLM y podría
         traer atributos en lenguaje natural (prioridad, fecha, categoría...) tampoco toma el
-        camino barato.
+        camino barato — igual que un `list_tasks` con un filtro de fecha/estado/negación descrito
+        en lenguaje natural (`payload.filter_description`): la tool `listar_tareas` solo filtra
+        por igualdad exacta de un único `estado`, así que decidir cómo traducir la descripción
+        (una sola llamada, varias combinadas, o ninguna) requiere razonamiento del agente.
         """
         if intent.action == "list_tasks":
+            if intent.payload.get("filter_description"):
+                return await self._dispatch_to_agent(intent, message, context)
             tasks = await self._invoke_service("list_tasks")
             return {"success": True, "action": intent.action, "result": tasks}
 

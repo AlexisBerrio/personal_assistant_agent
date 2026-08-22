@@ -199,6 +199,19 @@ class FakeListTasksRouter:
         return IntentDecision(action=IntentAction.LIST_TASKS, payload={}, confidence=1.0, source="rule")
 
 
+class FakeListTasksWithFilterRouter:
+    def extract_profile_facts(self, _message, context=None):
+        return UserProfileExtraction()
+
+    def route(self, _message, context=None):
+        return IntentDecision(
+            action=IntentAction.LIST_TASKS,
+            payload={"filter_description": "sin finalizar"},
+            confidence=0.9,
+            source="llm",
+        )
+
+
 class FakeDeleteTaskRouter:
     def extract_profile_facts(self, _message, context=None):
         return UserProfileExtraction()
@@ -331,6 +344,18 @@ class TaskOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         response = orchestrator.handle_message("muéstrame mis tareas")
 
         self.assertEqual(response["message"], "No tienes tareas pendientes.")
+
+    async def test_dispatches_list_tasks_with_filter_description_to_the_agent(self):
+        service = FakeService()
+        agent = FakeAgent(message="Tienes 2 tareas sin finalizar: ...")
+        orchestrator = TaskOrchestrator(service=service, router=FakeListTasksWithFilterRouter(), agent=agent)
+
+        response = await orchestrator.handle_message_async("tengo tareas sin finalizar?")
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["message"], "Tienes 2 tareas sin finalizar: ...")
+        self.assertEqual(len(agent.calls), 1)
+        self.assertEqual(service.calls, [])
 
     async def test_dispatches_delete_task_with_task_id_to_the_agent_too(self):
         """Aunque el payload traiga un `task_id` exacto, no hay un camino determinista aparte:
