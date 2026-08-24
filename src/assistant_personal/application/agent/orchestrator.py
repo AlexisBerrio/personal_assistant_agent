@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import time
 import uuid
 from typing import Any
@@ -19,6 +20,19 @@ from src.assistant_personal.infrastructure.routers.hybrid_router import Producti
 
 logger = get_logger(__name__)
 tracer = get_tracer(__name__)
+
+_PENDING_CONFIRMATION_KEY = "pending_confirmation"
+_AFFIRMATIVE_CONFIRMATIONS = {
+    "si", "sí", "s", "confirmo", "confirmado", "dale", "hazlo", "ok", "de acuerdo", "adelante", "claro", "yes",
+}
+_NEGATIVE_CONFIRMATIONS = {"no", "cancela", "cancelar", "no gracias", "mejor no", "detente"}
+
+
+def _normalize_confirmation_text(text: str) -> str:
+    normalized = text.lower().strip()
+    for char in [",", ".", "!", "?", ";", ":", "¿", "¡"]:
+        normalized = normalized.replace(char, " ")
+    return " ".join(normalized.split())
 
 
 class TaskOrchestrator:
@@ -103,6 +117,12 @@ class TaskOrchestrator:
         # turno, comprime los turnos acumulados de turnos anteriores si ya llegaron al umbral.
         await self.context.maybe_summarize_session_async(session_id=self.session_id)
         context_summary = await self.context.build_context_summary_async(session_id=self.session_id)
+
+        pending_confirmation = await self._get_pending_confirmation()
+        if pending_confirmation is not None:
+            return await self._resolve_pending_confirmation(
+                pending_confirmation, message, request_id=request_id, started_at=started_at
+            )
 
         peek_fast_rule_action = getattr(self.router, "peek_fast_rule_action", None)
         fast_action = peek_fast_rule_action(message) if peek_fast_rule_action else None
@@ -222,6 +242,58 @@ class TaskOrchestrator:
             contexto_tokens=self.context.last_context_tokens,
             resultado=resultado,
         )
+
+    async def _get_pending_confirmation(self) -> dict[str, Any] | None:
+        raw = await self.context.short_term_memory.get_item_async(_PENDING_CONFIRMATION_KEY, session_id=self.session_id)
+        if not raw:
+            return None
+        try:
+            parsed: dict[str, Any] = json.loads(raw)
+            return parsed
+        except json.JSONDecodeError:
+            return None
+
+    async def _clear_pending_confirmation(self) -> None:
+        await self.context.short_term_memory.add_async(_PENDING_CONFIRMATION_KEY, "", session_id=self.session_id)
+
+    async def _resolve_pending_confirmation(
+        self, pending: dict[str, Any], message: str, *, request_id: str, started_at: float
+    ) -> dict[str, Any]:
+        """Responde a un mensaje que llega mientras hay una escritura irreversible pendiente de
+        confirmación — sin pasar por clasificación ni por el agente de nuevo."""
+        await self._clear_pending_confirmation()
+        normalized = _normalize_confirmation_text(message)
+
+        if normalized in _NEGATIVE_CONFIRMATIONS:
+            response_message = "Entendido, no hice ningún cambio."
+            await self.context.short_term_memory.add_turn_async(message, response_message, session_id=self.session_id)
+            self._log_interaction(
+                request_id=request_id, started_at=started_at,
+                intencion="confirmation_cancelled", confianza=None, uso_llm=False, llm_metadata=None,
+                resultado="confirmacion_cancelada",
+            )
+            return {"success": True, "action": "confirmation_cancelled", "message": response_message}
+
+        if normalized in _AFFIRMATIVE_CONFIRMATIONS:
+            agent_result = await self.agent.execute_confirmed_tool(pending["tool"], pending["arguments"])
+            await self.context.short_term_memory.add_turn_async(
+                message, agent_result.message, session_id=self.session_id
+            )
+            self._log_interaction(
+                request_id=request_id, started_at=started_at,
+                intencion="confirmation_confirmed", confianza=None, uso_llm=False, llm_metadata=None,
+                resultado="success",
+            )
+            return {
+                "success": True,
+                "action": "confirmation_confirmed",
+                "message": agent_result.message,
+                "result": {"tool_calls": agent_result.tool_calls, "steps_used": agent_result.steps_used},
+            }
+
+        # Ni sí ni no: se descarta la confirmación pendiente (más seguro que volver a preguntar
+        # y arriesgar ejecutar la acción equivocada) y el mensaje se procesa como uno nuevo.
+        return await self._handle_message(message, request_id=request_id, started_at=started_at)
 
     async def _maybe_await(self, value: Any) -> Any:
         """Soporta routers síncronos y async: el port `LLMClient` es async de punta a punta en
@@ -350,6 +422,18 @@ class TaskOrchestrator:
 
     async def _dispatch_to_agent(self, intent: Any, message: str, context: str) -> dict[str, Any]:
         agent_result = await self.agent.handle(message, context=context)
+        if agent_result.pending_confirmation is not None:
+            # No se ejecutó ninguna escritura todavía — queda pendiente hasta que el usuario
+            # confirme en un turno posterior.
+            await self.context.short_term_memory.add_async(
+                _PENDING_CONFIRMATION_KEY, json.dumps(agent_result.pending_confirmation), session_id=self.session_id
+            )
+            return {
+                "success": True,
+                "action": "needs_confirmation",
+                "result": {"tool_calls": agent_result.tool_calls, "steps_used": agent_result.steps_used},
+                "message": agent_result.message,
+            }
         return {
             "success": True,
             "action": intent.action,

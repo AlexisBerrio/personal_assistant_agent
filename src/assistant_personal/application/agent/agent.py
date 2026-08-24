@@ -16,6 +16,15 @@ tracer = get_tracer(__name__)
 # Tools que existen en el servidor MCP pero no tiene sentido ofrecerle al agente como una acción de negocio.
 _EXCLUDED_FROM_CATALOG = {"health_check"}
 
+_CONFIRMATION_VERBS: dict[str, str] = {
+    "eliminar_tarea": "eliminar la tarea",
+    "completar_tarea": "marcar como completada la tarea",
+}
+_CONFIRMED_SUCCESS_MESSAGES: dict[str, str] = {
+    "eliminar_tarea": "Tarea eliminada.",
+    "completar_tarea": "Tarea completada.",
+}
+
 
 class McpToolCatalog(Protocol):
     async def list_tools(self) -> list[Any]: ...
@@ -36,6 +45,16 @@ class AgentResult:
     message: str
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     steps_used: int = 0
+    # No-`None` solo cuando el turno se detuvo porque una tool de escritura irreversible
+    # necesita confirmación explícita del usuario antes de ejecutarse.
+    pending_confirmation: dict[str, Any] | None = None
+
+
+def _build_confirmation_prompt(tool_name: str, arguments: dict[str, Any]) -> str:
+    accion = _CONFIRMATION_VERBS.get(tool_name, f"ejecutar {tool_name}")
+    referencia = arguments.get("task_id") or arguments.get("title") or ""
+    detalle = f" ({referencia})" if referencia else ""
+    return f"¿Confirmas que quieres {accion}{detalle}?"
 
 
 def _mcp_tool_to_openai_schema(tool: Any) -> dict[str, Any]:
@@ -75,6 +94,30 @@ class Agent:
             ]
         return self._tools_schema_cache
 
+    async def execute_confirmed_tool(self, tool_name: str, arguments: dict[str, Any]) -> AgentResult:
+        """Ejecuta directamente una tool que quedó pendiente de confirmación — el
+        usuario ya confirmó en un turno posterior, así que no vuelve a pasar por el LLM: se
+        ejecuta la misma tool con los mismos argumentos que el agente propuso originalmente."""
+        with tracer.start_as_current_span("agent.confirmar") as span:
+            span.set_attribute("tool", tool_name)
+            decision = self.guardrails.evaluate_step(
+                tool_name=tool_name, steps_used=0, tokens_used=0, confirmed=True
+            )
+            tool_call_entry = {"tool": tool_name, "arguments": arguments, "decision": decision.value}
+            if decision != StepDecision.ALLOW:
+                logger.warning("agent_guardrail_bloqueo", tool=tool_name, decision=decision.value)
+                return AgentResult(message=f"No autorizado: {decision.value}", tool_calls=[tool_call_entry])
+
+            try:
+                await self.mcp_client.call_tool(tool_name, arguments)
+            except Exception as exc:
+                return AgentResult(
+                    message=f"Error ejecutando la tool: {exc}", tool_calls=[tool_call_entry], steps_used=1
+                )
+
+            message = _CONFIRMED_SUCCESS_MESSAGES.get(tool_name, "Listo.")
+            return AgentResult(message=message, tool_calls=[tool_call_entry], steps_used=1)
+
     async def handle(self, message: str, context: str | None = None) -> AgentResult:
         with tracer.start_as_current_span("agent.razonar") as span:
             tools_schema = await self._get_tools_schema()
@@ -113,8 +156,22 @@ class Agent:
                         arguments = {}
 
                     decision = self.guardrails.evaluate_step(
-                        tool_name=tool_name, steps_used=steps_used, tokens_used=tokens_used, confirmed=True
+                        tool_name=tool_name, steps_used=steps_used, tokens_used=tokens_used, confirmed=False
                     )
+                    if decision == StepDecision.NEEDS_CONFIRMATION:
+                        logger.info("agent_requiere_confirmacion", tool=tool_name)
+                        span.set_attribute("pasos_usados", steps_used)
+                        span.set_attribute("tokens_usados", tokens_used)
+                        span.set_attribute("requiere_confirmacion", True)
+                        tool_calls_log.append(
+                            {"tool": tool_name, "arguments": arguments, "decision": decision.value}
+                        )
+                        return AgentResult(
+                            message=_build_confirmation_prompt(tool_name, arguments),
+                            tool_calls=tool_calls_log,
+                            steps_used=steps_used,
+                            pending_confirmation={"tool": tool_name, "arguments": arguments},
+                        )
                     if decision != StepDecision.ALLOW:
                         logger.warning("agent_guardrail_bloqueo", tool=tool_name, decision=decision.value)
                         result_text = f"No autorizado: {decision.value}"

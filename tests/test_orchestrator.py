@@ -298,15 +298,26 @@ class FakeAgent:
     """Doble del agente: evita el bucle de tool-calling real en los tests del orquestador — el
     bucle en sí ya se prueba de forma aislada en `test_agent.py`."""
 
-    def __init__(self, message="Listo.", tool_calls=None, steps_used=0):
+    def __init__(self, message="Listo.", tool_calls=None, steps_used=0, pending_confirmation=None):
         self.calls = []
+        self.confirmed_calls = []
         self._message = message
         self._tool_calls = tool_calls or []
         self._steps_used = steps_used
+        self._pending_confirmation = pending_confirmation
 
     async def handle(self, message, context=None):
         self.calls.append((message, context))
-        return AgentResult(message=self._message, tool_calls=self._tool_calls, steps_used=self._steps_used)
+        return AgentResult(
+            message=self._message,
+            tool_calls=self._tool_calls,
+            steps_used=self._steps_used,
+            pending_confirmation=self._pending_confirmation,
+        )
+
+    async def execute_confirmed_tool(self, tool_name, arguments):
+        self.confirmed_calls.append((tool_name, arguments))
+        return AgentResult(message="Tarea eliminada.", tool_calls=[{"tool": tool_name, "arguments": arguments}], steps_used=1)
 
 
 class FlakyService(FakeService):
@@ -432,6 +443,75 @@ class TaskOrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(response["success"])
         self.assertEqual(response["message"], "Eliminé la tarea del dentista.")
+
+    async def test_pending_confirmation_is_not_executed_until_the_user_confirms(self):
+        """ítem 4.16: cuando el agente propone una escritura irreversible, el orquestador no
+        debe ejecutar nada todavía — solo devolver la pregunta y guardar la confirmación
+        pendiente en la sesión."""
+        service = FakeService()
+        agent = FakeAgent(
+            message="¿Confirmas que quieres eliminar la tarea (t-9)? Responde sí o no.",
+            pending_confirmation={"tool": "eliminar_tarea", "arguments": {"task_id": "t-9"}},
+        )
+        orchestrator = TaskOrchestrator(service=service, router=FakeDeleteByReferenceRouter(), agent=agent)
+
+        response = await orchestrator.handle_message_async("elimina la tarea del dentista")
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["action"], "needs_confirmation")
+        self.assertEqual(response["message"], "¿Confirmas que quieres eliminar la tarea (t-9)? Responde sí o no.")
+        self.assertEqual(agent.confirmed_calls, [])
+
+    async def test_confirming_a_pending_write_executes_it_without_reclassifying(self):
+        service = FakeService()
+        agent = FakeAgent(
+            message="¿Confirmas que quieres eliminar la tarea (t-9)? Responde sí o no.",
+            pending_confirmation={"tool": "eliminar_tarea", "arguments": {"task_id": "t-9"}},
+        )
+        orchestrator = TaskOrchestrator(service=service, router=FakeDeleteByReferenceRouter(), agent=agent)
+        await orchestrator.handle_message_async("elimina la tarea del dentista")
+
+        response = await orchestrator.handle_message_async("sí")
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["action"], "confirmation_confirmed")
+        self.assertEqual(response["message"], "Tarea eliminada.")
+        self.assertEqual(agent.confirmed_calls, [("eliminar_tarea", {"task_id": "t-9"})])
+        # Un solo `handle()` real (el que propuso la acción) — confirmar no vuelve a clasificar
+        # ni a pasar por el bucle completo del agente.
+        self.assertEqual(len(agent.calls), 1)
+
+    async def test_declining_a_pending_write_cancels_it_without_executing(self):
+        service = FakeService()
+        agent = FakeAgent(
+            message="¿Confirmas que quieres eliminar la tarea (t-9)? Responde sí o no.",
+            pending_confirmation={"tool": "eliminar_tarea", "arguments": {"task_id": "t-9"}},
+        )
+        orchestrator = TaskOrchestrator(service=service, router=FakeDeleteByReferenceRouter(), agent=agent)
+        await orchestrator.handle_message_async("elimina la tarea del dentista")
+
+        response = await orchestrator.handle_message_async("no")
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["action"], "confirmation_cancelled")
+        self.assertEqual(agent.confirmed_calls, [])
+
+    async def test_an_unrelated_reply_drops_the_pending_confirmation_and_is_handled_normally(self):
+        service = FakeService()
+        agent = FakeAgent(
+            message="¿Confirmas que quieres eliminar la tarea (t-9)? Responde sí o no.",
+            pending_confirmation={"tool": "eliminar_tarea", "arguments": {"task_id": "t-9"}},
+        )
+        orchestrator = TaskOrchestrator(service=service, router=FakeDeleteByReferenceRouter(), agent=agent)
+        await orchestrator.handle_message_async("elimina la tarea del dentista")
+
+        response = await orchestrator.handle_message_async("cuál es la capital de Colombia")
+
+        self.assertEqual(agent.confirmed_calls, [])
+        # El mensaje no confirmatorio se reprocesa como uno nuevo — mismo router de este test
+        # (`FakeDeleteByReferenceRouter`), así que vuelve a proponer la misma escritura.
+        self.assertEqual(response["action"], "needs_confirmation")
+        self.assertEqual(len(agent.calls), 2)
 
     async def test_dispatches_llm_classified_create_task_to_the_agent(self):
         """A diferencia de un `create_task` resuelto por regla exacta, uno que pasó por el

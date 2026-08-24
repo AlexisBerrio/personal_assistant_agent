@@ -75,7 +75,7 @@ para el CRUD estructurado de `app.py` (`/tasks`, ítem 4.20): ambos ejecutan a t
 ```mermaid
 graph TB
     U["Usuario<br/>(propietario de las tareas)"]
-    DEV["Desarrollador / estudiante<br/>(consumidor pedagógico)"]
+    DEV["Desarrollador<br/>(consumidor)"]
 
     subgraph SYS["personal_assistant_agent"]
         CORE["Asistente personal<br/>API REST + CLI + servidor MCP"]
@@ -85,7 +85,7 @@ graph TB
     OAI["OpenAI API<br/>clasificación y redacción"]
     ALX["Alexa Skills Kit<br/>(Fase 6, no construido)"]
     MCPC["Clientes MCP externos<br/>(Claude Desktop, IDE)"]
-    OBSB["Jaeger (local)<br/>trazas OTLP — ítem 4.1"]
+    OBSB["Jaeger (local)<br/>trazas OTLP"]
 
     U -->|"HTTP: CRUD + POST /chat"| CORE
     U -->|"lenguaje natural"| CORE

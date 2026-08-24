@@ -28,6 +28,10 @@ class GuardrailsConfig:
 
     allowed_tools: frozenset[str]
     write_tools: frozenset[str]
+    # Subconjunto de `write_tools` que exige confirmación explícita del usuario antes de
+    # ejecutarse — no todas las escrituras: crear/actualizar son reversibles (se puede editar o
+    # borrar después) y ya se evaluó el costo de esa fricción. Solo las irreversibles.
+    confirmation_required_tools: frozenset[str] = frozenset()
     max_steps: int = 5
     max_tokens: int = 4000
 
@@ -54,9 +58,15 @@ class Guardrails:
             return StepDecision.DENY_STEP_BUDGET_EXCEEDED
         if tokens_used >= self.config.max_tokens:
             return StepDecision.DENY_TOKEN_BUDGET_EXCEEDED
-        if tool_name in self.config.write_tools and not confirmed:
+        if tool_name in self.config.confirmation_required_tools and not confirmed:
             return StepDecision.NEEDS_CONFIRMATION
         return StepDecision.ALLOW
+
+
+# Escrituras irreversibles: una vez ejecutadas, no hay una acción de "deshacer" en la API real
+# (borrar una tarea la elimina; completarla no tiene un "descompletar"). `crear_tarea`/
+# `actualizar_tarea` quedan fuera a propósito — son reversibles.
+_TOOLS_THAT_REQUIRE_CONFIRMATION = frozenset({"completar_tarea", "eliminar_tarea"})
 
 
 def build_default_guardrails(max_steps: int = 5, max_tokens: int = 4000) -> Guardrails:
@@ -66,10 +76,14 @@ def build_default_guardrails(max_steps: int = 5, max_tokens: int = 4000) -> Guar
 
     allowed_tools = frozenset(TOOL_SCOPES.keys())
     write_tools = frozenset(name for name, scope in TOOL_SCOPES.items() if scope == "write")
+    # Intersección con `write_tools`, no la constante sola: si una tool se renombra o se quita,
+    # esto no deja un nombre huérfano en la whitelist de confirmación.
+    confirmation_required_tools = _TOOLS_THAT_REQUIRE_CONFIRMATION & write_tools
     return Guardrails(
         GuardrailsConfig(
             allowed_tools=allowed_tools,
             write_tools=write_tools,
+            confirmation_required_tools=confirmation_required_tools,
             max_steps=max_steps,
             max_tokens=max_tokens,
         )

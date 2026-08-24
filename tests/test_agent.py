@@ -178,6 +178,36 @@ class AgentHandleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("más pasos", result.message.lower())
         self.assertEqual(len(llm.calls), 1)  # no siguió preguntándole al LLM tras agotar el presupuesto
 
+    async def test_a_tool_that_needs_confirmation_stops_the_turn_without_executing(self):
+        mcp_client = FakeMcpClient(tools=[_COMPLETAR_TAREA_TOOL])
+        llm = FakeAgentLLM(
+            responses=[(FakeLLMMessage(tool_calls=[_tool_call("call-1", "completar_tarea", '{"task_id": "t-9"}')]), 50)]
+        )
+        agent = Agent(mcp_client=mcp_client, llm=llm, guardrails=build_default_guardrails())
+
+        result = await agent.handle("termina la tarea t-9")
+
+        self.assertEqual(mcp_client.calls, [])  # nunca se ejecutó, solo se preguntó
+        self.assertEqual(result.pending_confirmation, {"tool": "completar_tarea", "arguments": {"task_id": "t-9"}})
+        self.assertIn("confirmas", result.message.lower())
+
+    async def test_a_write_tool_outside_the_confirmation_set_executes_directly(self):
+        """`crear_tarea` es una escritura pero no está en el subconjunto que exige
+        confirmación (ítem 4.16: solo las irreversibles) — se ejecuta sin preguntar."""
+        mcp_client = FakeMcpClient(tools=[_CREAR_TAREA_TOOL], call_results={"crear_tarea": {"title": "x"}})
+        llm = FakeAgentLLM(
+            responses=[
+                (FakeLLMMessage(tool_calls=[_tool_call("call-1", "crear_tarea", '{"title": "x"}')]), 50),
+                (FakeLLMMessage(content="Listo."), 10),
+            ]
+        )
+        agent = Agent(mcp_client=mcp_client, llm=llm, guardrails=build_default_guardrails())
+
+        result = await agent.handle("crea una tarea x")
+
+        self.assertEqual(mcp_client.calls, [("crear_tarea", {"title": "x"})])
+        self.assertIsNone(result.pending_confirmation)
+
     async def test_handles_malformed_tool_arguments_without_crashing(self):
         mcp_client = FakeMcpClient(tools=[_CREAR_TAREA_TOOL], call_results={"crear_tarea": {"title": "x"}})
         llm = FakeAgentLLM(
@@ -192,6 +222,37 @@ class AgentHandleTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.message, "Listo.")
         self.assertEqual(mcp_client.calls, [("crear_tarea", {})])
+
+
+class AgentExecuteConfirmedToolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_executes_the_tool_and_returns_a_success_message(self):
+        mcp_client = FakeMcpClient(tools=[_COMPLETAR_TAREA_TOOL], call_results={"completar_tarea": {"matched": 1}})
+        agent = Agent(mcp_client=mcp_client, llm=FakeAgentLLM(responses=[]), guardrails=build_default_guardrails())
+
+        result = await agent.execute_confirmed_tool("completar_tarea", {"task_id": "t-9"})
+
+        self.assertEqual(mcp_client.calls, [("completar_tarea", {"task_id": "t-9"})])
+        self.assertEqual(result.message, "Tarea completada.")
+        self.assertEqual(result.steps_used, 1)
+
+    async def test_a_tool_no_longer_whitelisted_is_denied_not_executed(self):
+        agent = Agent(
+            mcp_client=FakeMcpClient(tools=[]),
+            llm=FakeAgentLLM(responses=[]),
+            guardrails=Guardrails(GuardrailsConfig(allowed_tools=frozenset(), write_tools=frozenset())),
+        )
+
+        result = await agent.execute_confirmed_tool("eliminar_tarea", {"task_id": "t-9"})
+
+        self.assertIn("no autorizado", result.message.lower())
+
+    async def test_surfaces_a_tool_error_without_crashing(self):
+        mcp_client = FakeMcpClient(tools=[_COMPLETAR_TAREA_TOOL], call_results={"completar_tarea": RuntimeError("no existe")})
+        agent = Agent(mcp_client=mcp_client, llm=FakeAgentLLM(responses=[]), guardrails=build_default_guardrails())
+
+        result = await agent.execute_confirmed_tool("completar_tarea", {"task_id": "t-9"})
+
+        self.assertIn("no existe", result.message)
 
 
 if __name__ == "__main__":

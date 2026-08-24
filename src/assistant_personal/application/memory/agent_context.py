@@ -126,6 +126,18 @@ class ShortTermMemory:
         )
         return [(turn["user_message"], turn["assistant_response"]) for turn in summary.get("turns", [])]
 
+    async def get_item_async(self, key: str, session_id: str = "default") -> str | None:
+        """Lee un único item de contexto por clave, sin recortar a `max_items` de instancia —
+        usado por estado de control de un solo turno (ítem 4.16: confirmación pendiente de
+        escritura) que debe seguir siendo legible aunque otros items se hayan agregado después."""
+        summary = await self._invoke_repository_async(
+            "get_context_summary", session_id, max_turns=1, max_items=20
+        )
+        for item in summary.get("items", []):
+            if item.get("key") == key:
+                return item.get("value") or None
+        return None
+
     async def get_raw_session_async(self, session_id: str = "default", max_turns: int = 10) -> dict[str, Any]:
         """Sesión sin recortar a `max_turns`/`max_items` de instancia — usado por `ContextBuilder`, que
             decide cuánto entra según presupuesto de tokens, no un conteo fijo."""

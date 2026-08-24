@@ -12,6 +12,7 @@ def _make_guardrails(max_steps: int = 5, max_tokens: int = 4000) -> Guardrails:
     config = GuardrailsConfig(
         allowed_tools=frozenset({"listar_tareas", "crear_tarea", "eliminar_tarea"}),
         write_tools=frozenset({"crear_tarea", "eliminar_tarea"}),
+        confirmation_required_tools=frozenset({"eliminar_tarea"}),
         max_steps=max_steps,
         max_tokens=max_tokens,
     )
@@ -41,12 +42,19 @@ class GuardrailsTests(unittest.TestCase):
 
     def test_a_write_tool_without_confirmation_needs_confirmation(self):
         guardrails = _make_guardrails()
-        decision = guardrails.evaluate_step(tool_name="crear_tarea", steps_used=0, tokens_used=0)
+        decision = guardrails.evaluate_step(tool_name="eliminar_tarea", steps_used=0, tokens_used=0)
         self.assertEqual(decision, StepDecision.NEEDS_CONFIRMATION)
 
     def test_a_write_tool_with_confirmation_is_allowed(self):
         guardrails = _make_guardrails()
-        decision = guardrails.evaluate_step(tool_name="crear_tarea", steps_used=0, tokens_used=0, confirmed=True)
+        decision = guardrails.evaluate_step(tool_name="eliminar_tarea", steps_used=0, tokens_used=0, confirmed=True)
+        self.assertEqual(decision, StepDecision.ALLOW)
+
+    def test_a_write_tool_outside_the_confirmation_set_does_not_need_confirmation(self):
+        """`write_tools` y `confirmation_required_tools` son conjuntos distintos (ítem 4.16):
+        no toda escritura exige confirmación, solo el subconjunto irreversible."""
+        guardrails = _make_guardrails()
+        decision = guardrails.evaluate_step(tool_name="crear_tarea", steps_used=0, tokens_used=0, confirmed=False)
         self.assertEqual(decision, StepDecision.ALLOW)
 
     def test_whitelist_is_checked_before_the_step_budget(self):
@@ -80,6 +88,14 @@ class BuildDefaultGuardrailsTests(unittest.TestCase):
         self.assertIn("crear_tarea", guardrails.config.write_tools)
         self.assertNotIn("listar_tareas", guardrails.config.write_tools)
         self.assertNotIn("buscar_tarea", guardrails.config.write_tools)
+
+    def test_default_guardrails_only_requires_confirmation_for_irreversible_writes(self):
+        """Solo `completar_tarea`/`eliminar_tarea` piden confirmación real — `crear_tarea` y
+        `actualizar_tarea` son reversibles y ya se evaluó el costo de esa fricción en 4.17."""
+        guardrails = build_default_guardrails()
+        self.assertEqual(guardrails.config.confirmation_required_tools, frozenset({"completar_tarea", "eliminar_tarea"}))
+        self.assertNotIn("crear_tarea", guardrails.config.confirmation_required_tools)
+        self.assertNotIn("actualizar_tarea", guardrails.config.confirmation_required_tools)
 
 
 if __name__ == "__main__":
