@@ -27,6 +27,12 @@ _EVAL_DIR = Path(__file__).resolve().parent
 # que se evalúa con el mismo modelo que produjo la respuesta no es fiable (ver rúbrica del prompt).
 _JUEZ_MODEL = "gpt-5-nano"
 
+# El timeout por defecto (`llm_request_timeout_seconds`, 5s) está calibrado para modelos rápidos
+# sin razonamiento (classify_intent, etc.). Un modelo de razonamiento como el juez piensa antes
+# de responder y puede tardar bastante más — subirlo solo para esta instancia, sin tocar el
+# default global de producción.
+_JUEZ_TIMEOUT_SECONDS = 60.0
+
 # Umbral de acuerdo juez-humano antes de confiar en el juez para cualquier uso futuro.
 _ACUERDO_MINIMO_PUNTUACION = 0.70  # dentro de +-1 punto sobre 5
 _ACUERDO_MINIMO_BOOLEANOS = 0.80  # correcta/util/en_espanol coinciden exacto
@@ -89,7 +95,7 @@ async def evaluar_caso(juez: OpenAIResponseJudge, caso: dict[str, Any]) -> CaseR
 async def ejecutar_calibracion(
     casos: list[dict[str, Any]], juez: OpenAIResponseJudge | None = None
 ) -> JudgeCalibrationReport:
-    juez = juez or OpenAIResponseJudge(model=_JUEZ_MODEL)
+    juez = juez or OpenAIResponseJudge(model=_JUEZ_MODEL, timeout=_JUEZ_TIMEOUT_SECONDS)
     resultados = [await evaluar_caso(juez, caso) for caso in casos]
 
     reporte = JudgeCalibrationReport(resultados=resultados)

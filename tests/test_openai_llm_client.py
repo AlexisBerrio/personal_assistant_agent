@@ -382,6 +382,20 @@ class OpenAITextClientResilienceTests(unittest.TestCase):
 
     @patch("src.assistant_personal.infrastructure.routers.openai_llm_client.AsyncOpenAI")
     @patch("src.assistant_personal.infrastructure.routers.openai_llm_client.get_settings")
+    def test_constructor_can_override_timeout_and_max_retries_per_instance(self, mock_get_settings, mock_async_openai):
+        """El default (`llm_request_timeout_seconds`) está calibrado para modelos rápidos — un
+        llamador con necesidades distintas (ej. un juez de razonamiento más lento) debe poder
+        pedir su propio timeout sin tocar la config global de producción."""
+        mock_get_settings.return_value = self._settings(llm_request_timeout_seconds=5.0, llm_max_retries=2)
+
+        _OpenAITextClient(timeout=60.0, max_retries=1)
+
+        mock_async_openai.assert_called_once_with(
+            api_key="sk-test-key", base_url=None, timeout=60.0, max_retries=1
+        )
+
+    @patch("src.assistant_personal.infrastructure.routers.openai_llm_client.AsyncOpenAI")
+    @patch("src.assistant_personal.infrastructure.routers.openai_llm_client.get_settings")
     def test_client_uses_default_resilience_settings_when_not_overridden(self, mock_get_settings, mock_async_openai):
         mock_get_settings.return_value = self._settings()
 

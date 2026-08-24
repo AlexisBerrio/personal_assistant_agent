@@ -36,7 +36,13 @@ class _OpenAITextClient:
     # rompería la respuesta en texto plano.
     _expects_json_response: bool = False
 
-    def __init__(self, model: str | None = None, api_key: str | None = None):
+    def __init__(
+        self,
+        model: str | None = None,
+        api_key: str | None = None,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+    ):
         settings = get_settings()
         provider = (settings.llm_provider or "openai").strip().lower()
         base_url: str | None = None
@@ -63,8 +69,8 @@ class _OpenAITextClient:
             self.client = AsyncOpenAI(
                 api_key=api_key_value,
                 base_url=base_url,
-                timeout=settings.llm_request_timeout_seconds,
-                max_retries=settings.llm_max_retries,
+                timeout=timeout if timeout is not None else settings.llm_request_timeout_seconds,
+                max_retries=max_retries if max_retries is not None else settings.llm_max_retries,
             )
         except Exception as exc:
             raise RuntimeError("Unable to initialize OpenAI client") from exc
