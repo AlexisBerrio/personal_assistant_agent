@@ -24,6 +24,7 @@ EXPECTED_TOOLS_REQUIRED_PARAMS = {
     "completar_tarea": {"task_id"},
     "buscar_tarea": {"task_id"},
     "eliminar_tarea": {"task_id"},
+    "historial_tarea": {"task_id"},
 }
 
 
@@ -204,6 +205,29 @@ class McpToolsContractTests(unittest.IsolatedAsyncioTestCase):
             missing = await session.call_tool("buscar_tarea", {"task_id": "no-existe-999"})
             self.assertFalse(missing.isError)
             self.assertIsNone(missing.structuredContent["task"])
+        finally:
+            await stack.aclose()
+
+    async def test_historial_tarea_devuelve_los_cambios_registrados(self) -> None:
+        session, stack = await self._open_session()
+        try:
+            title = f"mcp-contract-{uuid.uuid4()}"
+            created = await self._create_task(session, title)
+
+            empty = await session.call_tool("historial_tarea", {"task_id": created["task_id"]})
+            self.assertFalse(empty.isError)
+            self.assertEqual(empty.structuredContent["history"], [])
+
+            await session.call_tool("actualizar_tarea", {"task_id": created["task_id"], "title": f"{title}-v2"})
+
+            history = await session.call_tool("historial_tarea", {"task_id": created["task_id"]})
+            self.assertFalse(history.isError)
+            self.assertEqual(len(history.structuredContent["history"]), 1)
+            self.assertEqual(history.structuredContent["history"][0]["task_id"], created["task_id"])
+
+            missing = await session.call_tool("historial_tarea", {"task_id": "no-existe-999"})
+            self.assertFalse(missing.isError)
+            self.assertEqual(missing.structuredContent["history"], [])
         finally:
             await stack.aclose()
 

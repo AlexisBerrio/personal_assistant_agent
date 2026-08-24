@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import unittest
 import uuid
 
 import httpx
 from motor.motor_asyncio import AsyncIOMotorClient
 
-from app import app, get_service
-from src.assistant_personal.application.tasks.task_service import TaskService
-from src.assistant_personal.infrastructure.persistence.mongo.client import MongoConnection
-from src.assistant_personal.infrastructure.persistence.mongo.mongo_repository import MongoTaskRepository
+from app import app, get_mcp_client
+from src.assistant_personal.infrastructure.mcp.client import McpTaskServiceClient
 
 LOCAL_MONGO_URI = "mongodb://localhost:27018"
 # Puerto 27018: mismo motivo que en los demás tests de integración.
@@ -36,38 +35,42 @@ def _local_mongo_is_reachable() -> bool:
 )
 class ApiEndToEndTests(unittest.IsolatedAsyncioTestCase):
     """Ejercita `app.py` completo por HTTP con `httpx.AsyncClient` (no `TestClient` síncrono):
-    middleware de `request_id`, exception handlers y el flujo CRUD real contra Mongo.
+    middleware de `request_id`, exception handlers y el flujo CRUD real — vía el protocolo MCP
+    real (ítem 4.10: el CRUD ya no llama a `TaskService` en proceso, mismo criterio que `/chat`).
 
     Crítico: `httpx.ASGITransport` NUNCA dispara el `lifespan` de FastAPI, así que
-    `get_service` caería a su fallback (`TaskService()` sin argumentos → Mongo de `.env`,
-    potencialmente Atlas de producción). Por eso este test sustituye
-    `app.dependency_overrides[get_service]` por un servicio explícitamente apuntado al Mongo
-    local desechable, antes de enviar una sola petición.
+    `get_mcp_client` caería a su fallback (`request.app.state.mcp_client`, inexistente sin
+    lifespan). Por eso este test sustituye `app.dependency_overrides[get_mcp_client]` por un
+    cliente MCP real explícitamente apuntado al Mongo local desechable (mismo patrón que
+    `test_mcp_client_integration.py`), nunca al Atlas de `.env`.
+
+    La sesión stdio del cliente MCP se conecta perezosamente en el primer uso, dentro de la
+    misma task que hace la llamada — y debe cerrarse (`aclose()`) al final de esa misma task, no
+    en `asyncTearDown` (corre en una task distinta bajo `IsolatedAsyncioTestCase`, lo que rompe
+    los cancel scopes de `anyio` que usa `stdio_client` internamente). Por eso cada test cierra
+    su propio cliente al final, en vez de compartir una limpieza centralizada.
     """
 
     db_name = "assistant_personal_test"
 
     async def asyncSetUp(self) -> None:
-        self.connection = MongoConnection(mongo_uri=LOCAL_MONGO_URI, db_name=self.db_name)
-
-        async def _get_db(db_name: str):
-            return await self.connection.get_db(db_name)
-
-        repository = MongoTaskRepository(db_name=self.db_name, get_db_fn=_get_db)
-        self.test_service = TaskService(db_name=self.db_name, repository=repository)
-        app.dependency_overrides[get_service] = lambda: self.test_service
+        self.env = {**os.environ, "MONGO_URI": LOCAL_MONGO_URI, "MONGO_DB_NAME": self.db_name}
+        self.mcp_client = McpTaskServiceClient(env=self.env)
+        app.dependency_overrides[get_mcp_client] = lambda: self.mcp_client
 
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
         self.created_task_ids: list[str] = []
 
     async def asyncTearDown(self) -> None:
-        app.dependency_overrides.pop(get_service, None)
+        app.dependency_overrides.pop(get_mcp_client, None)
         await self.client.aclose()
 
-        db = self.connection.client[self.db_name]
+        motor_client = AsyncIOMotorClient(LOCAL_MONGO_URI)
+        db = motor_client[self.db_name]
         if self.created_task_ids:
             await db.personal_tasks.delete_many({"task_id": {"$in": self.created_task_ids}})
             await db.task_history.delete_many({"task_id": {"$in": self.created_task_ids}})
+        motor_client.close()
 
     async def _create_task(self, title: str) -> dict:
         response = await self.client.post("/tasks", json={"title": title})
@@ -120,11 +123,15 @@ class ApiEndToEndTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(after_delete_response.status_code, 404)
         self.assertIn("request_id", after_delete_response.json())
 
+        await self.mcp_client.aclose()
+
     async def test_creating_task_without_title_returns_400_with_request_id(self) -> None:
         response = await self.client.post("/tasks", json={"title": "   "})
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("request_id", response.json())
+
+        await self.mcp_client.aclose()
 
     async def test_getting_unknown_task_returns_404_with_request_id(self) -> None:
         response = await self.client.get(f"/tasks/no-existe-{uuid.uuid4().hex[:8]}")
@@ -132,12 +139,16 @@ class ApiEndToEndTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 404)
         self.assertIn("request_id", response.json())
 
+        await self.mcp_client.aclose()
+
     async def test_updating_task_with_empty_payload_returns_400(self) -> None:
         created = await self._create_task(f"Tarea E2E {uuid.uuid4().hex[:8]}")
 
         response = await self.client.patch(f"/tasks/{created['task_id']}", json={})
 
         self.assertEqual(response.status_code, 400)
+
+        await self.mcp_client.aclose()
 
 
 if __name__ == "__main__":

@@ -65,9 +65,10 @@ construible recién cuando el endpoint conversacional de §9.1 exista).
 | Atender por voz (Fase 6) | Adaptador de canal, mismo orquestador *(objetivo, no implementado)* | `interfaces/alexa.py` |
 
 **Regla de oro de la solución:** una capacidad se implementa **una sola vez**, en `application/`, y se
-expone por tantos adaptadores como canales existan. Ningún canal contiene reglas de negocio. Hoy esto es
-cierto para el camino conversacional (CLI y `POST /chat` comparten el mismo `TaskOrchestrator`); el CRUD
-estructurado de `app.py` (`/tasks`) sigue siendo la excepción deliberada (`TaskService` directo, ver ADR-03).
+expone por tantos adaptadores como canales existan. Ningún canal contiene reglas de negocio. Esto es
+cierto tanto para el camino conversacional (CLI y `POST /chat` comparten el mismo `TaskOrchestrator`) como
+para el CRUD estructurado de `app.py` (`/tasks`, ítem 4.20): ambos ejecutan a través del mismo
+`McpTaskServiceClient`, ninguno llama a `TaskService` en proceso (ver ADR-03).
 
 ## 3. Contexto del sistema (C4 nivel 1)
 
@@ -139,10 +140,11 @@ graph TB
     style datos fill:#f8f4f0,stroke:#333
 ```
 
-**Esto ya es real, no aspiracional (ítem 3.1):** ni el CLI ni `POST /chat` (ítem 4.10) llaman a `TaskService`
-en proceso — ambos abren una conexión MCP real por stdio contra `mongo_mcp_server.py` como subproceso, y
-ejecutan las tools declaradas (`crear_tarea`, `listar_tareas`, `completar_tarea`). `app.py` sigue llamando a
-`TaskService` directo solo para el CRUD estructurado (`/tasks`) — ver ADR-03.
+**Esto ya es real, no aspiracional (ítem 3.1):** ningún camino — CLI, `POST /chat` (4.10), ni el CRUD
+estructurado de `/tasks` (4.20) — llama a `TaskService` en proceso. Los tres abren una conexión MCP real
+por stdio contra `mongo_mcp_server.py` como subproceso, y ejecutan las tools declaradas (`crear_tarea`,
+`listar_tareas`, `actualizar_tarea`, `completar_tarea`, `eliminar_tarea`, `buscar_tarea`,
+`historial_tarea`) — ver ADR-03.
 
 **Topología de despliegue por entorno**
 
@@ -168,11 +170,11 @@ acepta porque es el contenido pedagógico central y porque hace reversibles las 
 Fases 2–3. *Consecuencia:* hay que escribir código explícito por intención; a cambio el coste es acotado,
 el comportamiento es predecible y la calidad es medible con un dataset (`tests/eval/golden_router.jsonl`).
 
-**ADR-03 — MCP como capa canónica de tools.** ✅ Hecho para el camino conversacional (ítem 3.1, ver §4).
-Toda acción que el orquestador ejecuta pasa por una tool MCP real (protocolo stdio), nunca por un import
-directo de `TaskService`. **Pendiente:** `app.py` (CRUD HTTP) sigue siendo una excepción deliberada — no
-hay decisión tomada todavía sobre si el CRUD estructurado también debe pasar por MCP o si eso solo aplica
-al camino conversacional/agente (ver ítem 4.10).
+**ADR-03 — MCP como capa canónica de tools.** ✅ Hecho, sin excepciones (ítems 3.1, 4.20, ver §4). Toda
+acción — la que ejecuta el orquestador y el CRUD estructurado de `app.py` — pasa por una tool MCP real
+(protocolo stdio), nunca por un import directo de `TaskService`. `TaskService` sigue existiendo como
+implementación interna detrás de las tools (lo usa `mongo_mcp_server.py`), pero ya no tiene ningún
+consumidor público directo.
 
 **ADR-04 — MongoDB como único almacén.** ✅ Vigente.
 Tareas, sesiones y memoria de perfil viven en el mismo motor (`personal_tasks`, `conversation_sessions`,
@@ -376,12 +378,12 @@ idempotentemente en el arranque, pero no hay un mecanismo de migración de datos
 | --- | --- | --- | --- |
 | `GET` | `/health` | Liveness | — |
 | `POST` | `/chat` | Turno conversacional (ítem 4.10) | Router → agente → `McpTaskServiceClient` |
-| `POST` | `/tasks` | Crear tarea | CRUD estructurado, `TaskService` directo |
-| `GET` | `/tasks` | Listar tareas | CRUD estructurado, `TaskService` directo |
-| `GET` | `/tasks/{task_id}` | Obtener una | CRUD estructurado, `TaskService` directo |
-| `GET` | `/tasks/{task_id}/history` | Historial de cambios | CRUD estructurado, `TaskService` directo |
-| `PATCH` | `/tasks/{task_id}` | Actualizar parcialmente | CRUD estructurado, `TaskService` directo |
-| `DELETE` | `/tasks/{task_id}` | Borrado lógico | CRUD estructurado, `TaskService` directo |
+| `POST` | `/tasks` | Crear tarea | CRUD estructurado → `McpTaskServiceClient` (tool `crear_tarea`) |
+| `GET` | `/tasks` | Listar tareas | CRUD estructurado → `McpTaskServiceClient` (tool `listar_tareas`) |
+| `GET` | `/tasks/{task_id}` | Obtener una | CRUD estructurado → `McpTaskServiceClient` (tool `buscar_tarea`) |
+| `GET` | `/tasks/{task_id}/history` | Historial de cambios | CRUD estructurado → `McpTaskServiceClient` (tool `historial_tarea`) |
+| `PATCH` | `/tasks/{task_id}` | Actualizar parcialmente | CRUD estructurado → `McpTaskServiceClient` (tool `actualizar_tarea`/`completar_tarea`) |
+| `DELETE` | `/tasks/{task_id}` | Borrado lógico | CRUD estructurado → `McpTaskServiceClient` (tool `eliminar_tarea`) |
 
 Errores: handlers dedicados por tipo de excepción (`RequestValidationError`, `HTTPException`, `ValueError`,
 `RuntimeError`, catch-all) devuelven un mensaje genérico + `request_id`; el detalle completo (con
@@ -405,6 +407,7 @@ que usa internamente.
 | `completar_tarea` | `task_id` | Sí | Marca como completada |
 | `buscar_tarea` | `task_id` | Sí | Busca una tarea puntual |
 | `eliminar_tarea` | `task_id` | Sí | Elimina (soft delete) |
+| `historial_tarea` | `task_id` | Sí | Lee el historial de cambios |
 
 Cada tool declara un scope (`read`/`write`, `TOOL_SCOPES`) y audita su invocación por logger
 estructurado (ítem 3.3) — metadata sin enforcement todavía, eso depende del `Principal` de Fase 6-7.
@@ -416,9 +419,8 @@ respuesta por tool), así que el `outputSchema` que expone el protocolo MCP es r
 `due_date` (la da el usuario vía `crear_tarea`/`actualizar_tarea`, con validador que rechaza
 cualquier formato no-ISO — traducir lenguaje natural a esa fecha es responsabilidad de quien llama
 a la tool, no de la tool), `completed_at` (la fija `completar_tarea`, una sola vez).
-**Pendiente:** el mismatch `task_reference`/`task_id` entre el prompt del router y
-`TaskOrchestrator._dispatch` — completar/eliminar por descripción natural falla hoy, bloqueado hasta
-que exista el agente que interprete la referencia.
+La resolución de `task_reference` (completar/eliminar por descripción natural) la hace el agente en
+tiempo de ejecución — no es responsabilidad de las tools ni del router.
 
 **Invariantes de seguridad de las tools:**
 

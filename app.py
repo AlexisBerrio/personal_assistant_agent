@@ -11,10 +11,8 @@ from pydantic import BaseModel, Field
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from src.assistant_personal.application.agent.orchestrator import TaskOrchestrator
-from src.assistant_personal.application.tasks.task_service import TaskService
 from src.assistant_personal.config import get_settings
 from src.assistant_personal.domain.repositories.conversation_orchestrator import ConversationOrchestrator
-from src.assistant_personal.domain.task_models import Task
 from src.assistant_personal.infrastructure.mcp.client import McpTaskServiceClient
 from src.assistant_personal.infrastructure.observabilidad import configure_tracing, get_logger
 from src.assistant_personal.infrastructure.persistence.mongo.long_term_memory_repository import (
@@ -35,17 +33,16 @@ _API_USER_ID = "api-default"
 async def lifespan(app_instance: FastAPI):
     """Gestiona el ciclo de vida de recursos compartidos por la API."""
     configure_tracing()
-    app_instance.state.service = TaskService()
-    # Camino conversacional: MCP es la única vía de ejecución. Un solo cliente para toda la vida
-    # del proceso, conectado aquí (no perezoso en la
-    # primera petición): la sesión stdio debe entrar y salir en la misma task del lifespan, no
-    # en la task de una petición HTTP cualquiera — ver `McpTaskServiceClient.connect()`.
+    # MCP es la única vía de ejecución de acciones (ítem 3.1) — tanto para `/chat` como para el
+    # CRUD estructurado de `/tasks` (ítem 4.10). Un solo cliente para toda la vida del proceso,
+    # conectado aquí (no perezoso en la primera petición): la sesión stdio debe entrar y salir en
+    # la misma task del lifespan, no en la task de una petición HTTP cualquiera — ver
+    # `McpTaskServiceClient.connect()`.
     app_instance.state.mcp_client = McpTaskServiceClient()
     await app_instance.state.mcp_client.connect()
     app_instance.state.session_repository = MongoSessionRepository()
     app_instance.state.long_term_repository = MongoLongTermMemoryRepository()
     yield
-    app_instance.state.service = None
     await app_instance.state.mcp_client.aclose()
     app_instance.state.mcp_client = None
 
@@ -150,28 +147,27 @@ async def handle_unexpected_exception(request: Request, exc: Exception) -> JSONR
 app.add_middleware(RequestIdMiddleware)
 
 
-def get_service(request: Request) -> TaskService:
-    service = getattr(request.app.state, "service", None)
-    if service is None:
-        service = TaskService()
-        request.app.state.service = service
-    return service
+def get_mcp_client(request: Request) -> McpTaskServiceClient:
+    """Único punto de override para tests: tanto `/chat` como `/tasks` (CRUD) pasan por aquí —
+    MCP es la única vía de ejecución de acciones (ítem 3.1), sin excepción para el CRUD
+    estructurado (ítem 4.10, tras la migración fuera de `TaskService` directo)."""
+    return request.app.state.mcp_client
 
 
 def _record_audit_event(task_title: str, request_id: str) -> None:
     logger.info("task_created_audit", task_title=task_title, request_id=request_id)
 
 
-def get_orchestrator_factory(request: Request) -> Callable[[str], ConversationOrchestrator]:
+def get_orchestrator_factory(
+    request: Request, mcp_client: McpTaskServiceClient = Depends(get_mcp_client)
+) -> Callable[[str], ConversationOrchestrator]:
     """Devuelve una fábrica `session_id -> ConversationOrchestrator`, no la instancia — la
     sesión depende del payload de la petición (aún no parseado en el punto en que FastAPI
-    resuelve las dependencias), así que la construcción real ocurre dentro del endpoint.
-    Único punto de override para tests (evita spawnear el subproceso MCP real o llamar a un LLM
-    real, igual que `get_service` hace con `TaskService`)."""
+    resuelve las dependencias), así que la construcción real ocurre dentro del endpoint."""
 
     def _build(session_id: str) -> ConversationOrchestrator:
         return TaskOrchestrator(
-            service=request.app.state.mcp_client,
+            service=mcp_client,
             session_repository=request.app.state.session_repository,
             long_term_repository=request.app.state.long_term_repository,
             session_id=session_id,
@@ -264,25 +260,15 @@ class TaskCreateRequest(BaseModel):
         description="Prioridad de la tarea. Debe incluir un campo level con uno de: Low, Medium, High.",
         json_schema_extra={"example": {"level": "High", "score": 90}},
     )
-    dates: dict[str, Any] | None = Field(
+    due_date: str | None = Field(
         default=None,
-        description="Fechas asociadas a la tarea.",
-        json_schema_extra={"example": {"created_at": "2026-08-02T10:00:00", "due_date": "2026-08-05T12:00:00"}},
+        description="Fecha límite en formato ISO 8601 (ej. '2026-08-05' o '2026-08-05T12:00:00').",
+        json_schema_extra={"example": "2026-08-05T12:00:00"},
     )
     recurrence: dict[str, Any] | None = Field(
         default=None,
         description="Reglas de recurrencia si aplica.",
         json_schema_extra={"example": {"is_recurring": False, "frequency": None}},
-    )
-    context_metadata: dict[str, Any] | None = Field(
-        default=None,
-        description="Metadatos de contexto adicionales.",
-        json_schema_extra={"example": {"source": "manual", "location": "home"}},
-    )
-    steps: list[dict[str, Any]] = Field(
-        default_factory=list,
-        description="Pasos de ejecución de la tarea.",
-        json_schema_extra={"example": [{"step_id": 1, "text": "Revisar contenido", "is_completed": False}]},
     )
     agent_notes: list[dict[str, Any]] = Field(
         default_factory=list,
@@ -326,39 +312,16 @@ class TaskUpdateRequest(BaseModel):
         description="Prioridad de la tarea. Debe incluir un campo level con uno de: Low, Medium, High.",
         json_schema_extra={"example": {"level": "High", "score": 90}},
     )
-    dates: dict[str, Any] | None = Field(
+    due_date: str | None = Field(
         default=None,
-        description="Fechas actualizadas de la tarea, como la fecha límite.",
-        json_schema_extra={"example": {"due_date": "2026-08-05T12:00:00"}},
+        description="Fecha límite actualizada, en formato ISO 8601.",
+        json_schema_extra={"example": "2026-08-05T12:00:00"},
     )
     recurrence: dict[str, Any] | None = Field(
         default=None,
         description="Reglas de recurrencia actualizadas.",
         json_schema_extra={"example": {"is_recurring": False, "frequency": None}},
     )
-    context_metadata: dict[str, Any] | None = Field(
-        default=None,
-        description="Metadatos de contexto actualizados.",
-        json_schema_extra={"example": {"source": "manual", "location": "home"}},
-    )
-    steps: list[dict[str, Any]] | None = Field(
-        default=None,
-        description="Pasos de ejecución actualizados de la tarea.",
-        json_schema_extra={"example": [{"step_id": 1, "text": "Revisar contenido", "is_completed": False}]},
-    )
-
-
-async def _invoke_service_method(service: TaskService, method_name: str, *args: Any, **kwargs: Any) -> Any:
-    """Invoca un método del servicio, prefiriendo su variante async si existe."""
-    async_method = getattr(service, f"{method_name}_async", None)
-    if callable(async_method):
-        return await async_method(*args, **kwargs)
-
-    sync_method = getattr(service, method_name, None)
-    if callable(sync_method):
-        return sync_method(*args, **kwargs)
-
-    raise AttributeError(f"El servicio no implementa '{method_name}'")
 
 
 @app.get("/health")
@@ -372,89 +335,88 @@ async def create_task(
     payload: TaskCreateRequest,
     request: Request,
     background_tasks: BackgroundTasks,
-    service: TaskService = Depends(get_service),
-) -> dict[str, str]:
-    """Recibe una tarea desde el cliente y la guarda usando el servicio."""
-    if not payload.title.strip():
-        raise HTTPException(
-            status_code=400, detail="El título de la tarea es obligatorio")
+    mcp_client: McpTaskServiceClient = Depends(get_mcp_client),
+) -> dict[str, Any]:
+    """Recibe una tarea desde el cliente y la crea vía MCP (tool `crear_tarea`, ítem 4.10) — el
+    CRUD estructurado ya no llama a `TaskService` en proceso, mismo criterio que `/chat`."""
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="El título de la tarea es obligatorio")
 
-    if not payload.status.strip():
-        raise HTTPException(
-            status_code=400, detail="El estado de la tarea no puede estar vacío")
+    status = payload.status.strip()
+    if not status:
+        raise HTTPException(status_code=400, detail="El estado de la tarea no puede estar vacío")
 
-    task = Task(
-        title=payload.title.strip(),
-        description=payload.description,
-        status=payload.status.strip(),
-        category=payload.category,
-        tags=payload.tags,
-        priority=payload.priority,
-        dates=payload.dates or {},
-        recurrence=payload.recurrence or {},
-        context_metadata=payload.context_metadata or {},
-        steps=payload.steps,
-        agent_notes=payload.agent_notes,
-    )
+    tool_payload = {
+        "title": title,
+        "description": payload.description,
+        "status": status,
+        "category": payload.category,
+        "tags": payload.tags,
+        "priority": payload.priority,
+        "due_date": payload.due_date,
+        "recurrence": payload.recurrence,
+        "agent_notes": payload.agent_notes,
+    }
     try:
-        result = await _invoke_service_method(service, "create_task", task)
-    except ValueError as exc:
+        result = await mcp_client.create_task_async(tool_payload)
+    except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    request_id = getattr(request.state, "request_id",
-                         "") if request is not None else ""
+    request_id = getattr(request.state, "request_id", "") if request is not None else ""
     if background_tasks is not None:
-        background_tasks.add_task(_record_audit_event, task.title, request_id)
+        background_tasks.add_task(_record_audit_event, title, request_id)
 
     return result
 
 
 @app.get("/tasks")
-async def list_tasks(service: TaskService = Depends(get_service)) -> list[dict[str, object]]:
+async def list_tasks(mcp_client: McpTaskServiceClient = Depends(get_mcp_client)) -> list[dict[str, object]]:
     """Devuelve una lista de tareas almacenadas en MongoDB."""
-    return await _invoke_service_method(service, "list_tasks")
+    return await mcp_client.list_tasks_async()
 
 
 @app.get("/tasks/{task_id}")
-async def get_task(task_id: str, service: TaskService = Depends(get_service)) -> dict[str, object] | None:
+async def get_task(
+    task_id: str, mcp_client: McpTaskServiceClient = Depends(get_mcp_client)
+) -> dict[str, object] | None:
     """Devuelve una tarea concreta a partir de su task_id."""
-    task = await _invoke_service_method(service, "get_task", task_id)
+    task = await mcp_client.get_task_async(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Tarea no encontrada")
     return task
 
 
 @app.get("/tasks/{task_id}/history")
-async def get_task_history(task_id: str, service: TaskService = Depends(get_service)) -> list[dict[str, object]]:
+async def get_task_history(
+    task_id: str, mcp_client: McpTaskServiceClient = Depends(get_mcp_client)
+) -> list[dict[str, object]]:
     """Devuelve el historial de cambios de una tarea."""
-    history = await _invoke_service_method(service, "get_task_history", task_id)
+    history = await mcp_client.get_task_history_async(task_id)
     if not history:
-        raise HTTPException(
-            status_code=404, detail="No se encontró historial para la tarea")
+        raise HTTPException(status_code=404, detail="No se encontró historial para la tarea")
     return history
 
 
 @app.patch("/tasks/{task_id}")
 async def update_task(
-    task_id: str, payload: TaskUpdateRequest, service: TaskService = Depends(get_service)
+    task_id: str, payload: TaskUpdateRequest, mcp_client: McpTaskServiceClient = Depends(get_mcp_client)
 ) -> dict[str, object]:
     """Actualiza una tarea existente identificada por task_id.
 
     Si el payload incluye un estado "Completed", la tarea se marca como
     completada usando la misma ruta de actualización.
     """
-    payload_data = payload.model_dump(exclude_unset=True) if hasattr(
-        payload, "model_dump") else payload.dict(exclude_unset=True)
+    payload_data = payload.model_dump(exclude_unset=True)
     if not payload_data:
-        raise HTTPException(
-            status_code=400, detail="Se debe proporcionar al menos un campo para actualizar")
+        raise HTTPException(status_code=400, detail="Se debe proporcionar al menos un campo para actualizar")
 
     if str(payload_data.get("status", "")).strip().lower() == "completed":
-        return await _invoke_service_method(service, "complete_task", task_id)
+        return await mcp_client.complete_task_async(task_id)
 
     try:
-        updated_task = await _invoke_service_method(service, "update_task", task_id, payload_data)
-    except ValueError as exc:
+        updated_task = await mcp_client.update_task_async(task_id, payload_data)
+    except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if updated_task is None:
@@ -463,9 +425,11 @@ async def update_task(
 
 
 @app.delete("/tasks/{task_id}")
-async def delete_task(task_id: str, service: TaskService = Depends(get_service)) -> dict[str, object]:
+async def delete_task(
+    task_id: str, mcp_client: McpTaskServiceClient = Depends(get_mcp_client)
+) -> dict[str, object]:
     """Marca una tarea como eliminada sin borrarla de la base de datos."""
-    deleted_task = await _invoke_service_method(service, "delete_task", task_id)
+    deleted_task = await mcp_client.delete_task_async(task_id)
     if deleted_task is None:
         raise HTTPException(status_code=404, detail="Tarea no encontrada")
     return deleted_task

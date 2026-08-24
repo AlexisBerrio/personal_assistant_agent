@@ -90,6 +90,18 @@ class McpTaskServiceClient:
     async def create_task_async(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._call_tool("crear_tarea", payload)
 
+    async def get_task_async(self, task_id: str) -> dict[str, Any] | None:
+        result = await self._call_tool("buscar_tarea", {"task_id": task_id})
+        return (result or {}).get("task")
+
+    async def get_task_history_async(self, task_id: str) -> list[dict[str, Any]]:
+        result = await self._call_tool("historial_tarea", {"task_id": task_id})
+        return (result or {}).get("history", [])
+
+    async def update_task_async(self, task_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+        result = await self._call_tool("actualizar_tarea", {"task_id": task_id, **updates})
+        return (result or {}).get("task")
+
     async def complete_task_async(self, task_id: str) -> dict[str, Any]:
         return await self._call_tool("completar_tarea", {"task_id": task_id})
 

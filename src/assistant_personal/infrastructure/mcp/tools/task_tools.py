@@ -44,12 +44,17 @@ class EliminarTareaResponse(BaseModel):
     task: DeletedTaskInfo | None
 
 
+class HistorialTareaResponse(BaseModel):
+    history: list[dict[str, Any]]
+
+
 # Scopes que cada tool exigirá cuando exista autenticación real, sin enforcement todavía — deja
 # el terreno preparado para no tener que decidir esto bajo presión más adelante.
 TOOL_SCOPES: dict[str, str] = {
     "health_check": "read",
     "listar_tareas": "read",
     "buscar_tarea": "read",
+    "historial_tarea": "read",
     "crear_tarea": "write",
     "actualizar_tarea": "write",
     "completar_tarea": "write",
@@ -310,3 +315,15 @@ def register_task_tools(mcp: FastMCP, service: TaskService) -> None:
         """
         task = await _audited("eliminar_tarea", {"task_id"}, service.delete_task_async(task_id))
         return EliminarTareaResponse(task=DeletedTaskInfo.model_validate(task) if task is not None else None)
+
+    @mcp.tool()
+    async def historial_tarea(task_id: str) -> HistorialTareaResponse:
+        """Devuelve el historial de cambios de una tarea por su `task_id` exacto, más reciente
+        primero según el orden de escritura. Cada entrada: {task_id, tenant_id, timestamp,
+        changes: [{field, previous_value, new_value}, ...]}.
+
+        Devuelve: {"history": [...]} — lista vacía si la tarea no tiene cambios registrados o no
+        existe (no lanza error para un `task_id` inexistente).
+        """
+        history = await _audited("historial_tarea", {"task_id"}, service.get_task_history_async(task_id))
+        return HistorialTareaResponse(history=history)

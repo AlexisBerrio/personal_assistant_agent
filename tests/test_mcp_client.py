@@ -53,6 +53,41 @@ class McpTaskServiceClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {"task_id": "t-2", "title": "Comprar leche"})
         self.assertEqual(session.calls, [("crear_tarea", {"title": "Comprar leche"})])
 
+    async def test_get_task_unwraps_the_task_key(self) -> None:
+        session = FakeSession({"buscar_tarea": _ok({"task": {"task_id": "t-4", "title": "Comprar leche"}})})
+        client = McpTaskServiceClient(session=session)
+
+        task = await client.get_task_async("t-4")
+
+        self.assertEqual(task, {"task_id": "t-4", "title": "Comprar leche"})
+        self.assertEqual(session.calls, [("buscar_tarea", {"task_id": "t-4"})])
+
+    async def test_get_task_returns_none_when_the_task_does_not_exist(self) -> None:
+        session = FakeSession({"buscar_tarea": _ok({"task": None})})
+        client = McpTaskServiceClient(session=session)
+
+        task = await client.get_task_async("no-existe")
+
+        self.assertIsNone(task)
+
+    async def test_get_task_history_unwraps_the_history_key(self) -> None:
+        session = FakeSession({"historial_tarea": _ok({"history": [{"task_id": "t-5", "changes": []}]})})
+        client = McpTaskServiceClient(session=session)
+
+        history = await client.get_task_history_async("t-5")
+
+        self.assertEqual(history, [{"task_id": "t-5", "changes": []}])
+        self.assertEqual(session.calls, [("historial_tarea", {"task_id": "t-5"})])
+
+    async def test_update_task_forwards_task_id_and_updates_together(self) -> None:
+        session = FakeSession({"actualizar_tarea": _ok({"task": {"task_id": "t-6", "title": "Nuevo título"}})})
+        client = McpTaskServiceClient(session=session)
+
+        updated = await client.update_task_async("t-6", {"title": "Nuevo título"})
+
+        self.assertEqual(updated, {"task_id": "t-6", "title": "Nuevo título"})
+        self.assertEqual(session.calls, [("actualizar_tarea", {"task_id": "t-6", "title": "Nuevo título"})])
+
     async def test_complete_task_sends_task_id(self) -> None:
         session = FakeSession({"completar_tarea": _ok({"matched": 1, "modified": 1})})
         client = McpTaskServiceClient(session=session)
