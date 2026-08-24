@@ -1180,12 +1180,12 @@ exitoso** de esta fase — con la condición de reapertura ligada a Fase 6 dejad
 
 ### Fase 6 — Integración con Alexa
 
-| # | Cambio | Nivel | Área |
-| --- | --- | --- | --- |
-| 6.1 | Adaptador Alexa en `interfaces/`, reutilizando el orquestador sin cambios | 🟢 | §A.1 |
-| 6.2 | Autenticación por API key con hash (Alexa es cliente máquina) | 🟡 | §A.11 |
-| 6.3 | Rate limiting y presupuesto de LLM (primera exposición pública real) | 🟡 | §A.11 |
-| 6.4 | Ajuste de respuestas para canal de voz: más cortas, sin markdown | 🟢 | §A.1 |
+| # | Cambio | Nivel | Área | Estado |
+| --- | --- | --- | --- | --- |
+| 6.1 | Adaptador Alexa en `interfaces/`, reutilizando el orquestador sin cambios | 🟢 | §A.1 | ✅ Hecho — nuevo `interfaces/alexa.py`: traduce el request de Alexa Skills Kit y lo entrega a `TaskOrchestrator.handle_message_async`, el mismo que usa `/chat`  — sin lógica de negocio nueva, sin tocar el orquestador. Modelo de interacción: un único intent custom `MensajeIntent` con un slot `mensaje` que captura la frase libre del usuario (Alexa no tiene un tipo de slot de dictado totalmente libre para skills custom; ese es el patrón estándar para asistentes conversacionales). `session.sessionId` de Alexa se reutiliza como `session_id` del orquestador (prefijo `alexa-`, para no colisionar con sesiones de `/chat`) — memoria conversacional real entre turnos de voz, igual que HTTP. `LaunchRequest` (apertura de sesión sin frase todavía) se traduce a un saludo sintético (`"hola"`) que sí pasa por el router/LLM como cualquier saludo real — ni el mensaje de bienvenida es un texto fijo, mismo criterio que la política de no-respuestas-estáticas. Los intents de la propia plataforma (`AMAZON.StopIntent`/`CancelIntent`/`HelpIntent`, `SessionEndedRequest`) se resuelven sin pasar por el orquestador: no son mensajes de usuario que el router deba interpretar, son controles de la skill — mismo criterio que `/health` siendo determinista. Nuevo endpoint `POST /alexa` en `app.py`, deliberadamente mínimo (solo resuelve `get_orchestrator_factory`, la misma dependencia que `/chat`) — toda la traducción vive en `interfaces/alexa.py`, testeable sin FastAPI. **Sin autenticación todavía** (ver 6.2, sin cerrar) y **sin ajuste de formato para voz** (bullets de `list_tasks` se leerían literal — ver 6.4, sin cerrar): 6.1 es solo la tubería. 12 tests nuevos (`test_alexa_adapter.py`: 9, lógica de traducción sin HTTP; `test_api_alexa.py`: 3, HTTP real con orquestador falso, mismo patrón que `test_api_chat.py`) |
+| 6.2 | Autenticación por API key con hash (Alexa es cliente máquina) | 🟡 | §A.11 | Sin empezar — bloqueante antes de exponer `/alexa` fuera de localhost (§A.11: "ningún endpoint público sin autenticación") |
+| 6.3 | Rate limiting y presupuesto de LLM (primera exposición pública real) | 🟡 | §A.11 | Sin empezar |
+| 6.4 | Ajuste de respuestas para canal de voz: más cortas, sin markdown | 🟢 | §A.1 | Sin empezar — `_format_public_message` (orchestrator.py) devuelve listas con `- ` para `list_tasks`, pensado para texto; en voz se leería el guion literal |
 
 **DoD de fase:** Alexa funciona sin duplicar lógica de negocio; ningún endpoint público sin autenticación;
 existe límite de gasto.

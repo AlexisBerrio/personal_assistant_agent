@@ -19,6 +19,7 @@ from src.assistant_personal.infrastructure.persistence.mongo.long_term_memory_re
     MongoLongTermMemoryRepository,
 )
 from src.assistant_personal.infrastructure.persistence.mongo.session_repository import MongoSessionRepository
+from src.assistant_personal.interfaces.alexa import AlexaSkillRequest, handle_alexa_request
 
 logger = get_logger(__name__)
 
@@ -224,6 +225,20 @@ async def chat(
         success=bool(result.get("success", False)),
         action=result.get("action"),
     )
+
+
+@app.post("/alexa", response_model=None)
+async def alexa_webhook(
+    payload: AlexaSkillRequest,
+    request: Request,
+    build_orchestrator: Callable[[str], ConversationOrchestrator] = Depends(get_orchestrator_factory),
+) -> dict[str, Any]:
+    """Webhook de Alexa Skills Kit: mismas dependencias que `/chat`
+    (`get_orchestrator_factory`) — toda la traducción del formato de Alexa vive en
+    `interfaces/alexa.py`, sin lógica de negocio nueva aquí. Sin autenticación todavía.
+    """
+    request_id = getattr(request.state, "request_id", None)
+    return await handle_alexa_request(payload, build_orchestrator, request_id)
 
 
 class TaskCreateRequest(BaseModel):

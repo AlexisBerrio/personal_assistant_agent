@@ -62,7 +62,7 @@ construible recién cuando el endpoint conversacional de §9.1 exista).
 | Desambiguar en vez de adivinar | Intención `clarify` como salida de primera clase | `ProductionIntentRouter` |
 | Ser consumido por agentes externos | Servidor MCP con tools tipadas (stdio o HTTP) | `infrastructure/mcp/server.py` |
 | Responder en lenguaje natural a un frontend o canal de voz | Endpoint conversacional `POST /chat` (ítem 4.10) | `app.py` → `TaskOrchestrator` → `McpTaskServiceClient` |
-| Atender por voz (Fase 6) | Adaptador de canal, mismo orquestador *(objetivo, no implementado)* | `interfaces/alexa.py` |
+| Atender por voz (Fase 6) | Adaptador de canal, mismo orquestador (ítem 6.1, sin autenticación/formato de voz todavía — 6.2/6.4) | `interfaces/alexa.py` → `TaskOrchestrator` |
 
 **Regla de oro de la solución:** una capacidad se implementa **una sola vez**, en `application/`, y se
 expone por tantos adaptadores como canales existan. Ningún canal contiene reglas de negocio. Esto es
@@ -83,7 +83,7 @@ graph TB
 
     MDB[("MongoDB<br/>Atlas o local")]
     OAI["OpenAI API<br/>clasificación y redacción"]
-    ALX["Alexa Skills Kit<br/>(Fase 6, no construido)"]
+    ALX["Alexa Skills Kit<br/>(adaptador construido, ítem 6.1 —<br/>sin auth ni despliegue público, 6.2/6.3)"]
     MCPC["Clientes MCP externos<br/>(Claude Desktop, IDE)"]
     OBSB["Jaeger (local)<br/>trazas OTLP"]
 
@@ -267,10 +267,11 @@ personal_assistant_agent/
         └── run_eval.py            # tests/test_eval_router.py lo envuelve con @pytest.mark.eval
 ```
 
-**No implementado todavía (vs. la v1.0 de este documento):** `interfaces/alexa.py` (Fase 6). El endpoint
-conversacional (`POST /chat`, ítem 4.10) ya existe, dentro de `app.py` — no se movió a un módulo `api/`
-separado, es deuda cosmética anotada abajo (`app.py` bajo `src/`), no bloqueante. Tampoco existe una
-taxonomía de errores de
+**No implementado todavía (vs. la v1.0 de este documento):** `interfaces/alexa.py` ya existe (ítem 6.1) — falta
+autenticación (6.2), rate limiting/presupuesto (6.3) y el ajuste de formato para voz (6.4), así que sigue sin
+desplegarse públicamente. El endpoint conversacional (`POST /chat`, ítem 4.10) ya existe, dentro de `app.py`
+— no se movió a un módulo `api/` separado, es deuda cosmética anotada abajo (`app.py` bajo `src/`), no
+bloqueante. Tampoco existe una taxonomía de errores de
 dominio centralizada (`domain/errores.py`) — hoy los handlers de `app.py` traducen excepciones ad hoc;
 formalizarla es una mejora razonable, no bloqueante. `application/agent/{guardrails,agent}.py` (ítems 4.2,
 4.3) ya existen y están conectados: `Agent` consume `Guardrails.evaluate_step` en cada paso.
@@ -378,6 +379,7 @@ idempotentemente en el arranque, pero no hay un mecanismo de migración de datos
 | --- | --- | --- | --- |
 | `GET` | `/health` | Liveness | — |
 | `POST` | `/chat` | Turno conversacional (ítem 4.10) | Router → agente → `McpTaskServiceClient` |
+| `POST` | `/alexa` | Webhook Alexa Skills Kit (ítem 6.1, sin auth todavía) | `interfaces/alexa.py` → mismo `TaskOrchestrator` que `/chat` |
 | `POST` | `/tasks` | Crear tarea | CRUD estructurado → `McpTaskServiceClient` (tool `crear_tarea`) |
 | `GET` | `/tasks` | Listar tareas | CRUD estructurado → `McpTaskServiceClient` (tool `listar_tareas`) |
 | `GET` | `/tasks/{task_id}` | Obtener una | CRUD estructurado → `McpTaskServiceClient` (tool `buscar_tarea`) |
@@ -524,10 +526,10 @@ nada porque los tres procesos siguen el mismo criterio (`or Adaptador()` con def
 
 | Extensión | Depende de | Qué se añade | Qué NO cambia |
 | --- | --- | --- | --- |
-| Agente con tools — ejecutor principal, no fallback | 3.1, 4.2 (ambos hechos) | ✅ Hecho: bucle real de tool-calling (catálogo desde `list_tools()`, el LLM decide qué invocar). Cubre `task_reference` y atributos ricos en `create_task` sin ítem aparte. Confirmación interactiva real (ítem 4.16) sigue pendiente — ya es posible con 4.10 hecho, pero no se implementó todavía | Router, tools MCP, repositorios |
+| Agente con tools — ejecutor principal, no fallback | 3.1, 4.2 (ambos hechos) | ✅ Hecho: bucle real de tool-calling (catálogo desde `list_tools()`, el LLM decide qué invocar). Cubre `task_reference` y atributos ricos en `create_task` sin ítem aparte. Confirmación interactiva real (ítem 4.16) ✅ Hecho — escrituras irreversibles (`completar_tarea`/`eliminar_tarea`) piden confirmación explícita, resuelta por keyword o por el clasificador en lenguaje natural | Router, tools MCP, repositorios |
 | `multi_task` (4.9) | 4.3 | ✅ Hecho: ruta nueva en `IntentClassification` + descomposición en el agente | Contrato del router, `_dispatch` de acciones simples |
 | Endpoint conversacional (4.10) | 4.3, 4.9 (ambos hechos) | ✅ Hecho: `POST /chat` expone `TaskOrchestrator` vía MCP, con sesión gestionada por el cliente | `TaskOrchestrator`, router, MCP |
-| Canal Alexa (Fase 6) | 4.10 (hecho) | `interfaces/alexa.py` + política de respuesta breve | Orquestador, tools |
+| Canal Alexa (Fase 6) | 4.10 (hecho) | ✅ 6.1 hecho: `interfaces/alexa.py` + `POST /alexa`, mismo orquestador. Falta auth (6.2), rate limiting (6.3) y política de respuesta breve para voz (6.4) | Orquestador, tools |
 | `app.py` bajo `src/` (limpieza estructural) | Ninguna, cuando se priorice | Mover el entrypoint a `interfaces/api.py` | Rutas, lógica |
 | Proveedor LLM alternativo | Ninguna | Otro adaptador de `LLMClient` (ya soporta OpenAI/Ollama) | Todo lo demás |
 
