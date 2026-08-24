@@ -12,6 +12,8 @@ class IntentAction(str, Enum):
     COMPLETE_TASK = "complete_task"  # Marcar una tarea como completada.
     DELETE_TASK = "delete_task"  # Eliminar una tarea.
     MULTI_TASK = "multi_task"  # 2+ acciones de dominio distintas en el mismo mensaje.
+    CONFIRM_PENDING_ACTION = "confirm_pending_action"  # Resuelve afirmativamente una confirmación pendiente.
+    CANCEL_PENDING_ACTION = "cancel_pending_action"  # Resuelve negativamente una confirmación pendiente.
     ASK_KNOWLEDGE_BASE = "ask_knowledge_base"  # El usuario pregunta información general.
     SMALL_TALK = "small_talk"  # Conversación casual o saludo.
     CLARIFY = "clarify"  # La solicitud es ambigua o incomprensible.

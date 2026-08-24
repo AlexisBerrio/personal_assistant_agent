@@ -78,6 +78,62 @@ class FakeFastRuleSmallTalkRouter:
         return IntentDecision(action=IntentAction.SMALL_TALK, payload={"reply": "Hola."}, confidence=1.0, source="rule")
 
 
+class FakeConfirmPendingActionRouter:
+    """Simula que `classify_intent` reconoció una confirmación en lenguaje natural
+    ('por supuesto') contra el `pending_confirmation` que ya trae el contexto — igual que el
+    clasificador real, solo produce `confirm_pending_action` cuando el contexto de verdad trae
+    una confirmación pendiente; si no, clasifica el primer turno como el borrado por referencia
+    que la dispara."""
+
+    def extract_profile_facts(self, _message, context=None):
+        return UserProfileExtraction()
+
+    def route(self, _message, context=None):
+        if context and "pending_confirmation" in context:
+            return IntentDecision(action=IntentAction.CONFIRM_PENDING_ACTION, payload={}, confidence=0.9, source="llm")
+        return IntentDecision(
+            action=IntentAction.DELETE_TASK, payload={"task_reference": "la tarea del dentista"},
+            confidence=1.0, source="llm",
+        )
+
+
+class FakeCancelPendingActionRouter:
+    def extract_profile_facts(self, _message, context=None):
+        return UserProfileExtraction()
+
+    def route(self, _message, context=None):
+        if context and "pending_confirmation" in context:
+            return IntentDecision(action=IntentAction.CANCEL_PENDING_ACTION, payload={}, confidence=0.9, source="llm")
+        return IntentDecision(
+            action=IntentAction.DELETE_TASK, payload={"task_reference": "la tarea del dentista"},
+            confidence=1.0, source="llm",
+        )
+
+
+class FakeDeleteThenKnowledgeRouter:
+    """Primer turno: propone borrar por referencia (dispara la confirmación pendiente vía el
+    agente). Turnos siguientes: un mensaje sin relación con esa confirmación, clasificado
+    normalmente — usado para probar que la confirmación pendiente no se pierde."""
+
+    def extract_profile_facts(self, _message, context=None):
+        return UserProfileExtraction()
+
+    def route(self, _message, context=None):
+        if context and "pending_confirmation" in context:
+            return IntentDecision(
+                action=IntentAction.ASK_KNOWLEDGE_BASE,
+                payload={"query": "capital de Colombia", "answer": "Bogotá"},
+                confidence=1.0,
+                source="llm",
+            )
+        return IntentDecision(
+            action=IntentAction.DELETE_TASK,
+            payload={"task_reference": "la tarea del dentista"},
+            confidence=1.0,
+            source="llm",
+        )
+
+
 class FakeGenericContextRouter:
     def __init__(self):
         self.received_contexts = []
@@ -496,22 +552,64 @@ class TaskOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["action"], "confirmation_cancelled")
         self.assertEqual(agent.confirmed_calls, [])
 
-    async def test_an_unrelated_reply_drops_the_pending_confirmation_and_is_handled_normally(self):
+    async def test_a_reply_that_does_not_match_the_keyword_shortcut_falls_back_to_the_classifier(self):
+        """Una respuesta como 'por supuesto' no está en `_AFFIRMATIVE_CONFIRMATIONS` — en vez de
+        descartar la confirmación pendiente a ciegas, se deja que `classify_intent` la resuelva
+        con el contexto (que ya incluye la nota `pending_confirmation`)."""
         service = FakeService()
         agent = FakeAgent(
-            message="¿Confirmas que quieres eliminar la tarea (t-9)? Responde sí o no.",
+            message="¿Confirmas que quieres eliminar la tarea (t-9)?",
             pending_confirmation={"tool": "eliminar_tarea", "arguments": {"task_id": "t-9"}},
         )
-        orchestrator = TaskOrchestrator(service=service, router=FakeDeleteByReferenceRouter(), agent=agent)
+        orchestrator = TaskOrchestrator(
+            service=service, router=FakeConfirmPendingActionRouter(), agent=agent
+        )
         await orchestrator.handle_message_async("elimina la tarea del dentista")
 
-        response = await orchestrator.handle_message_async("cuál es la capital de Colombia")
+        response = await orchestrator.handle_message_async("por supuesto")
 
+        self.assertEqual(response["action"], "confirmation_confirmed")
+        self.assertEqual(agent.confirmed_calls, [("eliminar_tarea", {"task_id": "t-9"})])
+        self.assertEqual(len(agent.calls), 1)  # nunca se volvió a invocar el bucle del agente
+
+    async def test_the_classifier_can_also_cancel_a_pending_confirmation_in_natural_language(self):
+        service = FakeService()
+        agent = FakeAgent(
+            message="¿Confirmas que quieres eliminar la tarea (t-9)?",
+            pending_confirmation={"tool": "eliminar_tarea", "arguments": {"task_id": "t-9"}},
+        )
+        orchestrator = TaskOrchestrator(
+            service=service, router=FakeCancelPendingActionRouter(), agent=agent
+        )
+        await orchestrator.handle_message_async("elimina la tarea del dentista")
+
+        response = await orchestrator.handle_message_async("mejor ni te molestes")
+
+        self.assertEqual(response["action"], "confirmation_cancelled")
         self.assertEqual(agent.confirmed_calls, [])
-        # El mensaje no confirmatorio se reprocesa como uno nuevo — mismo router de este test
-        # (`FakeDeleteByReferenceRouter`), así que vuelve a proponer la misma escritura.
-        self.assertEqual(response["action"], "needs_confirmation")
-        self.assertEqual(len(agent.calls), 2)
+
+    async def test_an_unrelated_message_keeps_the_pending_confirmation_alive_for_a_later_turn(self):
+        """No perder el hilo: un mensaje que no tiene nada que ver con la confirmación pendiente
+        se procesa normalmente, y la confirmación sigue viva para poder resolverse después."""
+        service = FakeService()
+        agent = FakeAgent(
+            message="¿Confirmas que quieres eliminar la tarea (t-9)?",
+            pending_confirmation={"tool": "eliminar_tarea", "arguments": {"task_id": "t-9"}},
+        )
+        router = FakeDeleteThenKnowledgeRouter()
+        orchestrator = TaskOrchestrator(service=service, router=router, agent=agent)
+        await orchestrator.handle_message_async("elimina la tarea del dentista")
+
+        unrelated_response = await orchestrator.handle_message_async("cuál es la capital de Colombia")
+
+        self.assertEqual(unrelated_response["action"], "ask_knowledge_base")
+        self.assertEqual(agent.confirmed_calls, [])
+
+        confirm_response = await orchestrator.handle_message_async("sí")
+
+        self.assertEqual(confirm_response["action"], "confirmation_confirmed")
+        self.assertEqual(agent.confirmed_calls, [("eliminar_tarea", {"task_id": "t-9"})])
+        self.assertEqual(len(agent.calls), 1)  # nunca se volvió a invocar el bucle del agente
 
     async def test_dispatches_llm_classified_create_task_to_the_agent(self):
         """A diferencia de un `create_task` resuelto por regla exacta, uno que pasó por el
