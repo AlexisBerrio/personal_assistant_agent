@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from src.assistant_personal.application.agent.orchestrator import TaskOrchestrator
+from src.assistant_personal.domain.repositories.conversation_orchestrator import ConversationOrchestrator
 from src.assistant_personal.domain.repositories.long_term_memory_repository import LongTermMemoryRepository
 from src.assistant_personal.domain.repositories.session_memory_repository import SessionMemoryRepository
 from src.assistant_personal.infrastructure.mcp.client import McpTaskServiceClient
@@ -61,7 +62,7 @@ async def _handle_single_message_async(
     session_repository: SessionMemoryRepository | None = None,
     long_term_repository: LongTermMemoryRepository | None = None,
 ) -> None:
-    orchestrator = TaskOrchestrator(
+    orchestrator: ConversationOrchestrator = TaskOrchestrator(
         service=service,
         session_repository=session_repository or MongoSessionRepository(),
         long_term_repository=long_term_repository or MongoLongTermMemoryRepository(),
@@ -96,7 +97,7 @@ async def _run_interactive_loop_async(
     session_repository: SessionMemoryRepository | None = None,
     long_term_repository: LongTermMemoryRepository | None = None,
 ) -> None:
-    orchestrator = TaskOrchestrator(
+    orchestrator: ConversationOrchestrator = TaskOrchestrator(
         service=service,
         session_repository=session_repository or MongoSessionRepository(),
         long_term_repository=long_term_repository or MongoLongTermMemoryRepository(),
