@@ -4,7 +4,7 @@ import unittest
 
 import httpx
 
-from app import app, get_orchestrator_factory
+from app import app, get_alexa_signature_verifier, get_orchestrator_factory
 
 
 class FakeOrchestrator:
@@ -42,10 +42,19 @@ class AlexaEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.orchestrator = FakeOrchestrator(message="Tienes 2 tareas pendientes.")
         self.builder = OrchestratorBuilderSpy(self.orchestrator)
         app.dependency_overrides[get_orchestrator_factory] = lambda: self.builder
+        # La verificación de firma (ítem 6.2) tiene su propia cobertura en
+        # test_alexa_signature.py con una cadena de certificados sintética — aquí se desactiva
+        # para ejercitar solo el wiring del endpoint.
+        app.dependency_overrides[get_alexa_signature_verifier] = lambda: self._noop_verifier
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+
+    @staticmethod
+    async def _noop_verifier(raw_body: bytes, headers: object) -> None:
+        return None
 
     async def asyncTearDown(self) -> None:
         app.dependency_overrides.pop(get_orchestrator_factory, None)
+        app.dependency_overrides.pop(get_alexa_signature_verifier, None)
         await self.client.aclose()
 
     async def test_message_intent_reaches_the_same_orchestrator_as_chat(self) -> None:
@@ -82,6 +91,33 @@ class AlexaEndpointTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post("/alexa", json={})
 
         self.assertEqual(response.status_code, 422)
+
+
+class AlexaEndpointSignatureRejectionTests(unittest.IsolatedAsyncioTestCase):
+    """Con la verificación de firma activa (sin override), un request sin cabeceras válidas
+    debe rechazarse con 401 antes de llegar al orquestador — no se solapa con
+    test_alexa_signature.py (que prueba la lógica de verificación en sí, no el wiring HTTP)."""
+
+    async def asyncSetUp(self) -> None:
+        self.builder = OrchestratorBuilderSpy(FakeOrchestrator())
+        app.dependency_overrides[get_orchestrator_factory] = lambda: self.builder
+        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+
+    async def asyncTearDown(self) -> None:
+        app.dependency_overrides.pop(get_orchestrator_factory, None)
+        await self.client.aclose()
+
+    async def test_request_without_signature_headers_is_rejected_with_401(self) -> None:
+        response = await self.client.post(
+            "/alexa",
+            json={
+                "session": {"sessionId": "amzn1.echo-api.session.abc"},
+                "request": {"type": "LaunchRequest"},
+            },
+        )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(self.builder.session_ids, [])
 
 
 if __name__ == "__main__":

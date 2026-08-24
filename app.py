@@ -1,5 +1,6 @@
+import json
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -7,7 +8,7 @@ import structlog
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from src.assistant_personal.application.agent.orchestrator import TaskOrchestrator
@@ -19,6 +20,10 @@ from src.assistant_personal.infrastructure.persistence.mongo.long_term_memory_re
     MongoLongTermMemoryRepository,
 )
 from src.assistant_personal.infrastructure.persistence.mongo.session_repository import MongoSessionRepository
+from src.assistant_personal.infrastructure.security.alexa_signature import (
+    AlexaSignatureError,
+    verify_alexa_request,
+)
 from src.assistant_personal.interfaces.alexa import AlexaSkillRequest, handle_alexa_request
 
 logger = get_logger(__name__)
@@ -155,6 +160,27 @@ def get_mcp_client(request: Request) -> McpTaskServiceClient:
     return request.app.state.mcp_client
 
 
+def get_alexa_signature_verifier() -> Callable[[bytes, Mapping[str, str]], Awaitable[None]]:
+    """Único punto de override para tests: valida que un request a `/alexa` trae una firma real
+    de Amazon. Desactivable con `ALEXA_SIGNATURE_VERIFICATION_ENABLED=false` para
+    probar el endpoint a mano en local sin certificados reales."""
+    if not get_settings().alexa_signature_verification_enabled:
+
+        async def _skip_verification(raw_body: bytes, headers: Mapping[str, str]) -> None:
+            return None
+
+        return _skip_verification
+
+    async def _verify(raw_body: bytes, headers: Mapping[str, str]) -> None:
+        await verify_alexa_request(
+            raw_body=raw_body,
+            signature_b64=headers.get("signature"),
+            cert_chain_url=headers.get("signaturecertchainurl"),
+        )
+
+    return _verify
+
+
 def _record_audit_event(task_title: str, request_id: str) -> None:
     logger.info("task_created_audit", task_title=task_title, request_id=request_id)
 
@@ -229,14 +255,29 @@ async def chat(
 
 @app.post("/alexa", response_model=None)
 async def alexa_webhook(
-    payload: AlexaSkillRequest,
     request: Request,
     build_orchestrator: Callable[[str], ConversationOrchestrator] = Depends(get_orchestrator_factory),
+    verify_signature: Callable[[bytes, Mapping[str, str]], Awaitable[None]] = Depends(get_alexa_signature_verifier),
 ) -> dict[str, Any]:
     """Webhook de Alexa Skills Kit: mismas dependencias que `/chat`
     (`get_orchestrator_factory`) — toda la traducción del formato de Alexa vive en
-    `interfaces/alexa.py`, sin lógica de negocio nueva aquí. Sin autenticación todavía.
+    `interfaces/alexa.py`.
+
+    Autenticado por verificación de firma en vez de una API key: Alexa exige validar que
+    el request viene realmente de sus servidores, no un secreto compartido. Necesita el body
+    crudo para verificar la firma antes de parsearlo a `AlexaSkillRequest`.
     """
+    raw_body = await request.body()
+    try:
+        await verify_signature(raw_body, request.headers)
+    except AlexaSignatureError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    try:
+        payload = AlexaSkillRequest.model_validate_json(raw_body)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=json.loads(exc.json())) from exc
+
     request_id = getattr(request.state, "request_id", None)
     return await handle_alexa_request(payload, build_orchestrator, request_id)
 

@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     otel_enabled: bool = False
     otel_exporter_otlp_endpoint: str = "http://localhost:4317"
 
+    # Encendido por defecto: `/alexa` exige certificados reales de Amazon. Apagarlo
+    # solo sirve para probar el endpoint a mano con curl en local, sin firmar el request.
+    alexa_signature_verification_enabled: bool = True
+
     @field_validator("openai_api_key", mode="before")
     @classmethod
     def _strip_openai_api_key(cls, value: str | None) -> str | None:
