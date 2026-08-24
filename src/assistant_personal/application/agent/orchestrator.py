@@ -104,11 +104,24 @@ class TaskOrchestrator:
         await self.context.maybe_summarize_session_async(session_id=self.session_id)
         context_summary = await self.context.build_context_summary_async(session_id=self.session_id)
 
-        profile_facts = await self._extract_profile_facts(message, context_summary)
-        await self._persist_profile_facts(profile_facts)
-        context_summary = await self.context.build_context_summary_async(session_id=self.session_id)
+        peek_fast_rule_action = getattr(self.router, "peek_fast_rule_action", None)
+        fast_action = peek_fast_rule_action(message) if peek_fast_rule_action else None
 
-        intent = await self._maybe_await(self.router.route(message, context=context_summary))
+        if fast_action == "small_talk":
+            # La regla rápida ya resuelve el saludo sin tocar el LLM clasificador
+            # (`hybrid_router._check_fast_rules`) — extraer hechos de perfil de un saludo puro
+            # no aporta nada, así que se salta del todo.
+            intent = await self._maybe_await(self.router.route(message, context=context_summary))
+        else:
+            # Se mantiene el orden secuencial (no `gather`): `route()` debe poder ver, en este
+            # mismo turno, los hechos que `_extract_profile_facts` acaba de persistir — un
+            # mensaje que declara un dato y pregunta por él en la misma frase depende de eso.
+            # Correr ambas llamadas en paralelo rompería esa garantía.
+            profile_facts = await self._extract_profile_facts(message, context_summary)
+            await self._persist_profile_facts(profile_facts)
+            context_summary = await self.context.build_context_summary_async(session_id=self.session_id)
+            intent = await self._maybe_await(self.router.route(message, context=context_summary))
+
         llm_metadata = getattr(self.router, "last_llm_metadata", None)
         uso_llm = intent.source == "llm"
 

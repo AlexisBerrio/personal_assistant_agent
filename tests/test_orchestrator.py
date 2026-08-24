@@ -60,6 +60,24 @@ class FakeSmallTalkRouter:
         )
 
 
+class FakeFastRuleSmallTalkRouter:
+    """Simula un router cuya regla rápida ya resuelve `small_talk` sin LLM — usado para
+    verificar que el orquestador se salta `extract_profile_facts` por completo (ítem 4.14)."""
+
+    def __init__(self):
+        self.extract_calls = []
+
+    def peek_fast_rule_action(self, _message):
+        return IntentAction.SMALL_TALK
+
+    def extract_profile_facts(self, message, context=None):
+        self.extract_calls.append((message, context))
+        return UserProfileExtraction(profile_facts=[UserProfileFact(key="name", value="Alexis", confidence=1.0)])
+
+    def route(self, _message, context=None):
+        return IntentDecision(action=IntentAction.SMALL_TALK, payload={"reply": "Hola."}, confidence=1.0, source="rule")
+
+
 class FakeGenericContextRouter:
     def __init__(self):
         self.received_contexts = []
@@ -558,6 +576,17 @@ class TaskOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         # sobreviven a un reinicio, la de sesión es de corta vida.
         long_term_facts = await orchestrator.context.long_term_memory.get_facts_async()
         self.assertEqual(long_term_facts.get("color_favorito"), "Azul")
+
+    async def test_fast_rule_small_talk_skips_profile_extraction(self):
+        """ítem 4.14: un saludo puro resuelto por regla rápida no debe pagar la llamada a
+        `extract_profile_facts` — no puede contener un hecho nuevo que valga la pena extraer."""
+        router = FakeFastRuleSmallTalkRouter()
+        orchestrator = TaskOrchestrator(service=FakeService(), router=router)
+
+        response = await orchestrator.handle_message_async("hola")
+
+        self.assertTrue(response["success"])
+        self.assertEqual(router.extract_calls, [])
 
     async def test_low_confidence_profile_facts_are_not_persisted(self):
         """Escribir todo lo que el usuario dice envenena el contexto. Un hecho con confianza

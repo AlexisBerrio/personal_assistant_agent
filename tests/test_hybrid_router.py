@@ -107,6 +107,32 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.action, IntentAction.SMALL_TALK)
         self.assertEqual(result.source, "rule")
 
+    async def test_peek_fast_rule_action_detects_small_talk_without_calling_the_llm(self):
+        classifier = FakeIntentClassifier()
+        router = ProductionIntentRouter(
+            llm_client=classifier,
+            knowledge_responder=FakeKnowledgeResponder(),
+            profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
+        )
+
+        action = router.peek_fast_rule_action("Hola")
+
+        self.assertEqual(action, IntentAction.SMALL_TALK)
+        self.assertEqual(len(classifier.calls), 0)
+
+    async def test_peek_fast_rule_action_returns_none_when_no_rule_matches(self):
+        router = ProductionIntentRouter(
+            llm_client=FakeIntentClassifier(),
+            knowledge_responder=FakeKnowledgeResponder(),
+            profile_extractor=FakeProfileExtractor(),
+            small_talk_responder=FakeSmallTalkResponder(),
+        )
+
+        action = router.peek_fast_rule_action("cuáles son mis tareas de esta semana")
+
+        self.assertIsNone(action)
+
     async def test_small_talk_exact_message_does_not_use_orchestrator(self):
         classifier = FakeIntentClassifier(
             response=IntentClassification(route=ConversationRoute.ORCHESTRATOR, intent=IntentAction.CREATE_TASK, confidence=0.99)

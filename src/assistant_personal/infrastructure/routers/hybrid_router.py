@@ -108,6 +108,17 @@ class ProductionIntentRouter:
         self._confidence_threshold = confidence_threshold
         self.last_llm_metadata: dict[str, Any] | None = None
 
+    def peek_fast_rule_action(self, user_message: str) -> IntentAction | None:
+        """Adelanto barato y síncrono (sin I/O) de la acción que resolvería `route()` por
+        regla rápida, sin ejecutar nada — permite al llamador decidir
+        si vale la pena extraer hechos de perfil antes de clasificar de verdad. `None` si
+        ninguna regla rápida coincide (la decisión real requiere el LLM)."""
+        clean_text = (user_message or "").strip()
+        if not clean_text:
+            return IntentAction.CLARIFY
+        fast_decision = self._check_fast_rules(clean_text)
+        return fast_decision.action if fast_decision else None
+
     async def route(self, user_message: str, context: str | None = None) -> IntentDecision:
         """Envoltorio del span `router.clasificar` alrededor de `_route`, para no
         re-indentar toda la lógica de reglas/LLM bajo un único `with`."""
