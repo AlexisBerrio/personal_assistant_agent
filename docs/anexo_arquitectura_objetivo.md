@@ -794,11 +794,13 @@ quedar preparado para decidir barato.**
 
 ### Definition of Done
 
-- [ ] Existe el port de búsqueda con al menos un adaptador no vectorial.
-- [ ] Está registrado por escrito qué consultas de usuario fallan con búsqueda de texto (evidencia para la
-      decisión de Fase 5).
-- [ ] La decisión de Fase 5 se documenta evaluando los cuatro criterios, incluso si la conclusión es "no
-      aplica".
+- [x] Existe el port de búsqueda con al menos un adaptador no vectorial (`DocumentSearchRepository` +
+      `MongoTextSearchRepository`, precondición de Fase 1).
+- [ ] Está registrado por escrito qué consultas de usuario fallan con búsqueda de texto — no aplica todavía:
+      el criterio 1 (§A.10) ya falla estructuralmente (sin corpus de texto libre), así que esa evidencia no
+      era necesaria para la decisión de 5.1/5.4. Queda para cuando exista tráfico de voz real (Fase 6).
+- [x] La decisión de Fase 5 se documenta evaluando los cuatro criterios, incluso si la conclusión es "no
+      aplica" (ver 5.1/5.4).
 
 ---
 
@@ -1166,15 +1168,15 @@ está documentada con criterios, no con preferencia.
 
 ### Fase 5 — RAG y contexto avanzado
 
-| # | Cambio | Nivel | Área |
-| --- | --- | --- | --- |
-| 5.1 | Evaluar los 4 criterios de §A.10 con datos reales de consultas | 🟢 | §A.10 |
-| 5.2 | Si aplica: adaptador Atlas Vector Search sobre el port existente, con filtro por tenant | 🔴 | §A.10 |
-| 5.3 | Si aplica: evaluación de recuperación (recall@k) antes de conectarlo al flujo | 🟡 | §A.12 |
-| 5.4 | Si no aplica: documentar la decisión negativa y cerrar la fase | 🟢 | §A.10 |
+| # | Cambio | Nivel | Área | Estado |
+| --- | --- | --- | --- | --- |
+| 5.1 | Evaluar los 4 criterios de §A.10 con datos reales de consultas | 🟢 | §A.10 | ✅ Hecho — el criterio 1 (corpus de texto libre y largo) falla de forma estructural, no por falta de tráfico: `Task` (`domain/task_models.py`) solo tiene `title`/`description`, campos cortos y estructurados; no existe ninguna feature que produzca texto largo (sin adjuntos, sin transcripciones de voz — Alexa es Fase 6, todavía no construida). Ningún volumen de consultas cambia esa conclusión, así que no hace falta esperar tráfico real como en 4.13. Los otros 3 criterios (volumen, naturaleza semántica de la consulta, tolerancia a recall) son irrelevantes mientras el 1 no se cumpla — no se evalúan en detalle por no ser el cuello de botella |
+| 5.2 | Si aplica: adaptador Atlas Vector Search sobre el port existente, con filtro por tenant | 🔴 | §A.10 | No aplica (ver 5.1) |
+| 5.3 | Si aplica: evaluación de recuperación (recall@k) antes de conectarlo al flujo | 🟡 | §A.12 | No aplica (ver 5.1) |
+| 5.4 | Si no aplica: documentar la decisión negativa y cerrar la fase | 🟢 | §A.10 | ✅ Hecho — decisión: **no adoptar RAG/Atlas Vector Search por ahora**. El port `DocumentSearchRepository` (domain/) y su adaptador `MongoTextSearchRepository` (`$text` sobre `title`/`description`) ya existían como precondición de Fase 1 — cubren la búsqueda de texto libre que sí aplica hoy sin pagar el costo de un motor vectorial. **Condición de reapertura explícita:** esta decisión depende de que el criterio 1 siga sin cumplirse, y Fase 6 (integración con Alexa) es exactamente lo que podría cambiarlo — transcripciones de voz largas y libres son el tipo de corpus que el árbol de decisión de §A.10 sí justificaría. Revisar los 4 criterios de nuevo cuando Alexa esté integrada y haya transcripciones reales que evaluar, no antes |
 
 **DoD de fase:** existe una decisión escrita y justificada. **"No aplica" es un resultado válido y
-exitoso** de esta fase.
+exitoso** de esta fase — con la condición de reapertura ligada a Fase 6 dejada explícita en 5.4.
 
 ### Fase 6 — Integración con Alexa
 

@@ -122,18 +122,12 @@ class TaskOrchestrator:
         if pending_confirmation is not None:
             normalized = _normalize_confirmation_text(message)
             if normalized in _AFFIRMATIVE_CONFIRMATIONS or normalized in _NEGATIVE_CONFIRMATIONS:
-                # Regla rápida y gratis para el caso obvio — mismo criterio que
-                # `peek_fast_rule_action` del router: sin LLM cuando no hace falta.
+                # Regla rápida y gratis para el caso obvio.S in LLM cuando no hace falta.
                 return await self._settle_pending_confirmation(
                     pending_confirmation,
                     confirmed=normalized in _AFFIRMATIVE_CONFIRMATIONS,
                     message=message, request_id=request_id, started_at=started_at,
                 )
-            # Ni sí ni no por regla rápida: NO se descarta — `pending_confirmation` ya quedó
-            # como nota de sesión, así que `context_summary` (recién construido arriba) ya la
-            # incluye. Se deja que `classify_intent` decida, con ese contexto, si el mensaje
-            # resuelve la confirmación en otra redacción o si es algo distinto — en cuyo caso
-            # la confirmación pendiente sigue viva para un turno futuro, no se pierde el hilo.
 
         peek_fast_rule_action = getattr(self.router, "peek_fast_rule_action", None)
         fast_action = peek_fast_rule_action(message) if peek_fast_rule_action else None
