@@ -22,8 +22,8 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.assistant_personal.domain.entities import IntentAction
+from src.assistant_personal.infrastructure.llm.openai_llm_client import OpenAIIntentClassifier
 from src.assistant_personal.infrastructure.routers.hybrid_router import ProductionIntentRouter
-from src.assistant_personal.infrastructure.routers.openai_llm_client import OpenAIIntentClassifier
 
 _EVAL_DIR = Path(__file__).resolve().parent
 

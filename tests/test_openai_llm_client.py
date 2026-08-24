@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from src.assistant_personal.config import Settings
 from src.assistant_personal.domain.entities import ConversationRoute, IntentAction
-from src.assistant_personal.infrastructure.routers.openai_llm_client import (
+from src.assistant_personal.infrastructure.llm.openai_llm_client import (
     OpenAIGeneralKnowledgeResponder,
     OpenAIIntentClassifier,
     OpenAIResponseJudge,
@@ -369,8 +369,8 @@ class OpenAITextClientResilienceTests(unittest.TestCase):
         base.update(overrides)
         return Settings(**base)
 
-    @patch("src.assistant_personal.infrastructure.routers.openai_llm_client.AsyncOpenAI")
-    @patch("src.assistant_personal.infrastructure.routers.openai_llm_client.get_settings")
+    @patch("src.assistant_personal.infrastructure.llm.openai_llm_client.AsyncOpenAI")
+    @patch("src.assistant_personal.infrastructure.llm.openai_llm_client.get_settings")
     def test_client_is_built_with_the_configured_timeout_and_max_retries(self, mock_get_settings, mock_async_openai):
         mock_get_settings.return_value = self._settings(llm_request_timeout_seconds=15.0, llm_max_retries=3)
 
@@ -380,8 +380,8 @@ class OpenAITextClientResilienceTests(unittest.TestCase):
             api_key="sk-test-key", base_url=None, timeout=15.0, max_retries=3
         )
 
-    @patch("src.assistant_personal.infrastructure.routers.openai_llm_client.AsyncOpenAI")
-    @patch("src.assistant_personal.infrastructure.routers.openai_llm_client.get_settings")
+    @patch("src.assistant_personal.infrastructure.llm.openai_llm_client.AsyncOpenAI")
+    @patch("src.assistant_personal.infrastructure.llm.openai_llm_client.get_settings")
     def test_constructor_can_override_timeout_and_max_retries_per_instance(self, mock_get_settings, mock_async_openai):
         """El default (`llm_request_timeout_seconds`) está calibrado para modelos rápidos — un
         llamador con necesidades distintas (ej. un juez de razonamiento más lento) debe poder
@@ -394,8 +394,8 @@ class OpenAITextClientResilienceTests(unittest.TestCase):
             api_key="sk-test-key", base_url=None, timeout=60.0, max_retries=1
         )
 
-    @patch("src.assistant_personal.infrastructure.routers.openai_llm_client.AsyncOpenAI")
-    @patch("src.assistant_personal.infrastructure.routers.openai_llm_client.get_settings")
+    @patch("src.assistant_personal.infrastructure.llm.openai_llm_client.AsyncOpenAI")
+    @patch("src.assistant_personal.infrastructure.llm.openai_llm_client.get_settings")
     def test_client_uses_default_resilience_settings_when_not_overridden(self, mock_get_settings, mock_async_openai):
         mock_get_settings.return_value = self._settings()
 

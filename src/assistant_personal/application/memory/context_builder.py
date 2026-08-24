@@ -15,7 +15,7 @@ def estimate_tokens(text: str) -> int:
 
 class SessionSummarizer(Protocol):
     """Puerto mínimo para el resumen incremental de sesión. Implementado por
-    `OpenAISessionSummarizer` (infrastructure/routers/openai_llm_client.py)."""
+    `OpenAISessionSummarizer` (infrastructure/llm/openai_llm_client.py)."""
 
     async def summarize_session(self, previous_summary: str, turns: list[tuple[str, str]]) -> str:
         ...

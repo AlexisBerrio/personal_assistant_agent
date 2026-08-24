@@ -13,9 +13,9 @@ from src.assistant_personal.application.memory.agent_context import AgentContext
 from src.assistant_personal.application.memory.context_builder import ContextBuilder
 from src.assistant_personal.domain.repositories.long_term_memory_repository import LongTermMemoryRepository
 from src.assistant_personal.domain.repositories.session_memory_repository import SessionMemoryRepository
+from src.assistant_personal.infrastructure.llm.openai_llm_client import OpenAISessionSummarizer
 from src.assistant_personal.infrastructure.observabilidad import get_logger, get_tracer
 from src.assistant_personal.infrastructure.routers.hybrid_router import ProductionIntentRouter
-from src.assistant_personal.infrastructure.routers.openai_llm_client import OpenAISessionSummarizer
 
 logger = get_logger(__name__)
 tracer = get_tracer(__name__)

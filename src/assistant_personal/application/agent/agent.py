@@ -6,9 +6,9 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from src.assistant_personal.application.agent.guardrails import Guardrails, StepDecision, build_default_guardrails
+from src.assistant_personal.infrastructure.llm.openai_llm_client import OpenAIAgentLLM
 from src.assistant_personal.infrastructure.observabilidad import get_logger, get_tracer
 from src.assistant_personal.infrastructure.prompts.loader import load_prompt
-from src.assistant_personal.infrastructure.routers.openai_llm_client import OpenAIAgentLLM
 
 logger = get_logger(__name__)
 tracer = get_tracer(__name__)

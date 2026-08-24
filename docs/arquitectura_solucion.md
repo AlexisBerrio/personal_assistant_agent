@@ -244,10 +244,13 @@ personal_assistant_agent/
 │   │                              # + context_builder.py (presupuesto de tokens + resumen incremental)
 │   ├── infrastructure/          # implementa los puertos, único lugar con I/O
 │   │   ├── persistence/mongo/   # cliente, repositorios, índices, build_default_task_repository
-│   │   ├── routers/             # ProductionIntentRouter + clientes OpenAI del router
-│   │   │                        # (candidato a separar cliente LLM genérico — ítem 4.8)
+│   │   ├── routers/             # hybrid_router.py (ProductionIntentRouter) — solo lógica de ruteo
+│   │   ├── llm/                 # openai_llm_client.py — cliente OpenAI genérico (ítem 4.8):
+│   │   │                        # lo consumen router, agente (4.3) y el juez offline (4.6)
 │   │   ├── mcp/                 # server.py, client.py (McpTaskServiceClient), tools/
 │   │   ├── prompts/router/      # *.prompt.md versionados + loader.py
+│   │   │   agent/                # agent_system.prompt.md (4.3)
+│   │   │   eval/                 # judge_response.prompt.md — LLM-as-judge offline (4.6)
 │   │   └── observabilidad/      # structlog + tracing.py (OTel, opt-in, ítem 4.1)
 │   └── interfaces/
 │       └── cli.py               # único adaptador de entrada conversacional hoy
