@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     # solo sirve para probar el endpoint a mano con curl en local, sin firmar el request.
     alexa_signature_verification_enabled: bool = True
 
+    # Rate limiting por IP en /chat y /alexa, protege contra ráfagas de peticiones baratas que
+    # el presupuesto de tokens por interacción (guardrails) no cubre.
+    rate_limit_enabled: bool = True
+    rate_limit_requests_per_minute: int = 30
+
     @field_validator("openai_api_key", mode="before")
     @classmethod
     def _strip_openai_api_key(cls, value: str | None) -> str | None:

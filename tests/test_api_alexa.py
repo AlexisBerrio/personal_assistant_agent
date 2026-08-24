@@ -4,7 +4,7 @@ import unittest
 
 import httpx
 
-from app import app, get_alexa_signature_verifier, get_orchestrator_factory
+from app import app, enforce_alexa_rate_limit, get_alexa_signature_verifier, get_orchestrator_factory
 
 
 class FakeOrchestrator:
@@ -42,10 +42,12 @@ class AlexaEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.orchestrator = FakeOrchestrator(message="Tienes 2 tareas pendientes.")
         self.builder = OrchestratorBuilderSpy(self.orchestrator)
         app.dependency_overrides[get_orchestrator_factory] = lambda: self.builder
-        # La verificación de firma (ítem 6.2) tiene su propia cobertura en
-        # test_alexa_signature.py con una cadena de certificados sintética — aquí se desactiva
-        # para ejercitar solo el wiring del endpoint.
+        # La verificación de firma tiene su propia cobertura en test_alexa_signature.py con una
+        # cadena de certificados sintética — aquí se desactiva para ejercitar solo el wiring
+        # del endpoint. Mismo criterio para el rate limiter (test_rate_limiter.py /
+        # test_api_rate_limit.py).
         app.dependency_overrides[get_alexa_signature_verifier] = lambda: self._noop_verifier
+        app.dependency_overrides[enforce_alexa_rate_limit] = lambda: None
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
 
     @staticmethod
@@ -55,6 +57,7 @@ class AlexaEndpointTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         app.dependency_overrides.pop(get_orchestrator_factory, None)
         app.dependency_overrides.pop(get_alexa_signature_verifier, None)
+        app.dependency_overrides.pop(enforce_alexa_rate_limit, None)
         await self.client.aclose()
 
     async def test_message_intent_reaches_the_same_orchestrator_as_chat(self) -> None:

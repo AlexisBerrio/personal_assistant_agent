@@ -24,6 +24,10 @@ from src.assistant_personal.infrastructure.security.alexa_signature import (
     AlexaSignatureError,
     verify_alexa_request,
 )
+from src.assistant_personal.infrastructure.security.rate_limiter import (
+    RateLimitExceededError,
+    SlidingWindowRateLimiter,
+)
 from src.assistant_personal.interfaces.alexa import AlexaSkillRequest, handle_alexa_request
 
 logger = get_logger(__name__)
@@ -181,6 +185,41 @@ def get_alexa_signature_verifier() -> Callable[[bytes, Mapping[str, str]], Await
     return _verify
 
 
+# Contadores en memoria de proceso, uno por endpoint, vivos durante toda la vida del proceso —
+# no se recrean por request, sino que acumulan el historial de golpes por IP entre peticiones.
+_chat_rate_limiter = SlidingWindowRateLimiter(
+    max_requests=get_settings().rate_limit_requests_per_minute, window_seconds=60.0
+)
+_alexa_rate_limiter = SlidingWindowRateLimiter(
+    max_requests=get_settings().rate_limit_requests_per_minute, window_seconds=60.0
+)
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client is not None else "unknown"
+
+
+def enforce_chat_rate_limit(request: Request) -> None:
+    """Único punto de override para tests: límite de peticiones por IP en `/chat`. Desactivable
+    con `RATE_LIMIT_ENABLED=false`."""
+    if not get_settings().rate_limit_enabled:
+        return
+    try:
+        _chat_rate_limiter.check(_client_ip(request))
+    except RateLimitExceededError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+
+
+def enforce_alexa_rate_limit(request: Request) -> None:
+    """Mismo mecanismo que `enforce_chat_rate_limit`, contador independiente para `/alexa`."""
+    if not get_settings().rate_limit_enabled:
+        return
+    try:
+        _alexa_rate_limiter.check(_client_ip(request))
+    except RateLimitExceededError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+
+
 def _record_audit_event(task_title: str, request_id: str) -> None:
     logger.info("task_created_audit", task_title=task_title, request_id=request_id)
 
@@ -229,6 +268,7 @@ async def chat(
     payload: ChatRequest,
     request: Request,
     build_orchestrator: Callable[[str], ConversationOrchestrator] = Depends(get_orchestrator_factory),
+    _rate_limit: None = Depends(enforce_chat_rate_limit),
 ) -> ChatResponse:
     """Turno conversacional completo: router + agente (MCP) + memoria de sesión/perfil.
 
@@ -258,6 +298,7 @@ async def alexa_webhook(
     request: Request,
     build_orchestrator: Callable[[str], ConversationOrchestrator] = Depends(get_orchestrator_factory),
     verify_signature: Callable[[bytes, Mapping[str, str]], Awaitable[None]] = Depends(get_alexa_signature_verifier),
+    _rate_limit: None = Depends(enforce_alexa_rate_limit),
 ) -> dict[str, Any]:
     """Webhook de Alexa Skills Kit: mismas dependencias que `/chat`
     (`get_orchestrator_factory`) — toda la traducción del formato de Alexa vive en

@@ -4,7 +4,7 @@ import unittest
 
 import httpx
 
-from app import app, get_orchestrator_factory
+from app import app, enforce_chat_rate_limit, get_orchestrator_factory
 
 
 class FakeOrchestrator:
@@ -44,10 +44,15 @@ class ChatEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.orchestrator = FakeOrchestrator()
         self.builder = OrchestratorBuilderSpy(self.orchestrator)
         app.dependency_overrides[get_orchestrator_factory] = lambda: self.builder
+        # El rate limiter tiene su propia cobertura en test_rate_limiter.py (lógica) y
+        # test_api_rate_limit.py (wiring 429) — aquí se desactiva para no interferir con estos
+        # tests, que comparten el contador de todo el proceso de test.
+        app.dependency_overrides[enforce_chat_rate_limit] = lambda: None
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
 
     async def asyncTearDown(self) -> None:
         app.dependency_overrides.pop(get_orchestrator_factory, None)
+        app.dependency_overrides.pop(enforce_chat_rate_limit, None)
         await self.client.aclose()
 
     async def test_chat_returns_the_orchestrator_message_and_generates_a_session_id(self) -> None:
