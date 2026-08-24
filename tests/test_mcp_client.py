@@ -71,6 +71,17 @@ class McpTaskServiceClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("El título es obligatorio", str(ctx.exception))
 
+    async def test_connect_is_a_noop_when_the_session_was_injected(self) -> None:
+        """`connect()` solo importa para el caso real (spawnear el subproceso stdio explícito,
+        en la task de quien llama, ítem 4.10); con una sesión ya inyectada no hay nada que
+        establecer."""
+        session = FakeSession({})
+        client = McpTaskServiceClient(session=session)
+
+        await client.connect()
+
+        self.assertIs(await client._ensure_session(), session)
+
     async def test_aclose_is_a_noop_when_the_session_was_injected(self) -> None:
         """El cliente no debe cerrar una sesión que no abrió él mismo (mismo patrón que otros
         adaptadores del proyecto: quien la crea, la cierra)."""

@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -7,16 +8,27 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from src.assistant_personal.application.agent.orchestrator import TaskOrchestrator
 from src.assistant_personal.application.tasks.task_service import TaskService
 from src.assistant_personal.config import get_settings
+from src.assistant_personal.domain.repositories.conversation_orchestrator import ConversationOrchestrator
 from src.assistant_personal.domain.task_models import Task
+from src.assistant_personal.infrastructure.mcp.client import McpTaskServiceClient
 from src.assistant_personal.infrastructure.observabilidad import configure_tracing, get_logger
+from src.assistant_personal.infrastructure.persistence.mongo.long_term_memory_repository import (
+    MongoLongTermMemoryRepository,
+)
+from src.assistant_personal.infrastructure.persistence.mongo.session_repository import MongoSessionRepository
 
 logger = get_logger(__name__)
 
 GENERIC_ERROR_MESSAGE = "Ocurrió un error interno. Comparte el request_id con soporte si el problema persiste."
+
+# Fijo hasta que exista identidad de usuario real (auth, Fase 6/8) — mismo criterio que
+# `_CLI_USER_ID` en `interfaces/cli.py`: un único usuario implícito para toda la API.
+_API_USER_ID = "api-default"
 
 
 @asynccontextmanager
@@ -24,8 +36,18 @@ async def lifespan(app_instance: FastAPI):
     """Gestiona el ciclo de vida de recursos compartidos por la API."""
     configure_tracing()
     app_instance.state.service = TaskService()
+    # Camino conversacional: MCP es la única vía de ejecución. Un solo cliente para toda la vida
+    # del proceso, conectado aquí (no perezoso en la
+    # primera petición): la sesión stdio debe entrar y salir en la misma task del lifespan, no
+    # en la task de una petición HTTP cualquiera — ver `McpTaskServiceClient.connect()`.
+    app_instance.state.mcp_client = McpTaskServiceClient()
+    await app_instance.state.mcp_client.connect()
+    app_instance.state.session_repository = MongoSessionRepository()
+    app_instance.state.long_term_repository = MongoLongTermMemoryRepository()
     yield
     app_instance.state.service = None
+    await app_instance.state.mcp_client.aclose()
+    app_instance.state.mcp_client = None
 
 
 # Creamos la aplicación FastAPI. Es el punto de entrada para recibir peticiones.
@@ -40,23 +62,47 @@ if get_settings().otel_enabled:
     FastAPIInstrumentor.instrument_app(app)
 
 
-class RequestIdMiddleware(BaseHTTPMiddleware):
+class RequestIdMiddleware:
     """Genera/propaga el request_id y lo ata a los logs de toda la petición.
 
-    `bind_contextvars` hace que cualquier `logger.info/error(...)` invocado
-    durante esta petición (en cualquier módulo) incluya `request_id`
-    automáticamente, sin tener que pasarlo explícitamente en cada log.
-    `clear_contextvars` evita que el valor se filtre a la siguiente petición.
+    ASGI puro, no `BaseHTTPMiddleware`: éste corre el resto del stack en una task de anyio
+    separada de la que espera la respuesta, lo que rompe cualquier librería aguas abajo que
+    dependa de cancel scopes atados a la task internamente y fallaba con
+    `RuntimeError: Attempted to exit a cancel scope in a different task`). ASGI puro ejecuta
+    todo en la misma task, sin ese problema.
+
+    `bind_contextvars` hace que cualquier `logger.info/error(...)` invocado durante esta
+    petición (en cualquier módulo) incluya `request_id` automáticamente, sin tener que pasarlo
+    explícitamente en cada log. `clear_contextvars` evita que el valor se filtre a la siguiente
+    petición.
     """
 
-    async def dispatch(self, request: Request, call_next: Any) -> Any:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers") or [])
+        request_id = headers.get(b"x-request-id", b"").decode() or str(uuid.uuid4())
+        # `Request.state` (usado en los exception handlers y en `/chat`) lee de este mismo dict
+        # de scope — escribirlo aquí ya lo deja disponible aguas abajo sin construir un `Request`.
+        scope.setdefault("state", {})["request_id"] = request_id
+
         structlog.contextvars.clear_contextvars()
-        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
-        request.state.request_id = request_id
         structlog.contextvars.bind_contextvars(request_id=request_id)
-        response = await call_next(request)
-        response.headers["X-Request-ID"] = request_id
-        return response
+
+        async def send_with_request_id(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                message["headers"] = [*message.get("headers", []), (b"x-request-id", request_id.encode())]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_with_request_id)
+        finally:
+            structlog.contextvars.clear_contextvars()
 
 
 @app.exception_handler(RequestValidationError)
@@ -114,6 +160,74 @@ def get_service(request: Request) -> TaskService:
 
 def _record_audit_event(task_title: str, request_id: str) -> None:
     logger.info("task_created_audit", task_title=task_title, request_id=request_id)
+
+
+def get_orchestrator_factory(request: Request) -> Callable[[str], ConversationOrchestrator]:
+    """Devuelve una fábrica `session_id -> ConversationOrchestrator`, no la instancia — la
+    sesión depende del payload de la petición (aún no parseado en el punto en que FastAPI
+    resuelve las dependencias), así que la construcción real ocurre dentro del endpoint.
+    Único punto de override para tests (evita spawnear el subproceso MCP real o llamar a un LLM
+    real, igual que `get_service` hace con `TaskService`)."""
+
+    def _build(session_id: str) -> ConversationOrchestrator:
+        return TaskOrchestrator(
+            service=request.app.state.mcp_client,
+            session_repository=request.app.state.session_repository,
+            long_term_repository=request.app.state.long_term_repository,
+            session_id=session_id,
+            user_id=_API_USER_ID,
+        )
+
+    return _build
+
+
+class ChatRequest(BaseModel):
+    """Un turno de la conversación."""
+
+    message: str = Field(min_length=1, description="Mensaje del usuario en lenguaje natural.")
+    session_id: str | None = Field(
+        default=None,
+        description="Id de sesión devuelto por un turno anterior, para mantener memoria "
+        "conversacional entre peticiones. Si se omite, se crea una sesión nueva.",
+    )
+
+
+class ChatResponse(BaseModel):
+    """Respuesta de un turno de la conversación."""
+
+    message: str
+    session_id: str
+    success: bool
+    action: str | None = None
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(
+    payload: ChatRequest,
+    request: Request,
+    build_orchestrator: Callable[[str], ConversationOrchestrator] = Depends(get_orchestrator_factory),
+) -> ChatResponse:
+    """Turno conversacional completo: router + agente (MCP) + memoria de sesión/perfil.
+
+    A diferencia de `/tasks` (CRUD estructurado), este es el único endpoint que ejecuta acciones
+    interpretando lenguaje natural — precondición para cualquier frontend o canal de voz
+    (Alexa, Fase 6).
+    """
+    session_id = payload.session_id or f"api-{uuid.uuid4()}"
+    orchestrator = build_orchestrator(session_id)
+
+    # Reutiliza el request_id de `RequestIdMiddleware` (mismo que ya viaja en el header
+    # `X-Request-ID` de la respuesta) en vez de que el orquestador genere el suyo — así los logs
+    # de esta interacción correlacionan con el resto de logs de la misma petición HTTP.
+    request_id = getattr(request.state, "request_id", None)
+    result = await orchestrator.handle_message_async(payload.message, request_id=request_id)
+
+    return ChatResponse(
+        message=result.get("message") or result.get("reason") or "No se pudo procesar la solicitud.",
+        session_id=session_id,
+        success=bool(result.get("success", False)),
+        action=result.get("action"),
+    )
 
 
 class TaskCreateRequest(BaseModel):

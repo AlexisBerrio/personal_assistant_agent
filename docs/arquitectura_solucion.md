@@ -30,10 +30,10 @@ Todos comparten la misma memoria de sesión/perfil y la misma capa de ejecución
 
 **Orden de construcción, explícito y deliberado.** El sistema se construye de adentro hacia afuera: primero
 la infraestructura conversacional (router → orquestador → MCP → memoria), después el agente que la
-complementa (Fase 4), y solo entonces los canales de cara al usuario (frontend propio, Alexa). Hoy **no
-existe todavía ningún canal conversacional expuesto por HTTP** — `app.py` es CRUD estructurado puro; el
-único consumidor del orquestador es el CLI. Esto es una secuencia intencional, no una omisión: exponer un
-canal antes de que el router+agente+MCP estén completos obligaría a reconstruirlo dos veces.
+complementa (Fase 4), y solo entonces los canales de cara al usuario (frontend propio, Alexa). El canal
+conversacional por HTTP (`POST /chat`, ítem 4.10) ya existe — el orquestador ya no es exclusivo del CLI.
+Se construyó en ese orden a propósito: exponerlo antes de que router+agente+MCP estuvieran completos habría
+obligado a reconstruirlo dos veces.
 
 **Doble objetivo, y el orden importa.** El sistema es un producto funcional *y* un vehículo pedagógico.
 Cuando ambos objetivos entren en conflicto, gana la legibilidad: se prefiere el diseño explicable al
@@ -61,12 +61,13 @@ construible recién cuando el endpoint conversacional de §9.1 exista).
 | Recordar preferencias estables | Memoria de perfil con extracción explícita gated por confianza | `LongTermMemory` |
 | Desambiguar en vez de adivinar | Intención `clarify` como salida de primera clase | `ProductionIntentRouter` |
 | Ser consumido por agentes externos | Servidor MCP con tools tipadas (stdio o HTTP) | `infrastructure/mcp/server.py` |
-| Responder en lenguaje natural a un frontend o canal de voz | Endpoint conversacional *(objetivo, no implementado — ítem 4.10)* | `app.py` → `TaskOrchestrator` |
+| Responder en lenguaje natural a un frontend o canal de voz | Endpoint conversacional `POST /chat` (ítem 4.10) | `app.py` → `TaskOrchestrator` → `McpTaskServiceClient` |
 | Atender por voz (Fase 6) | Adaptador de canal, mismo orquestador *(objetivo, no implementado)* | `interfaces/alexa.py` |
 
 **Regla de oro de la solución:** una capacidad se implementa **una sola vez**, en `application/`, y se
 expone por tantos adaptadores como canales existan. Ningún canal contiene reglas de negocio. Hoy esto es
-cierto para el camino conversacional (CLI); `app.py` todavía es la excepción (CRUD directo, ver ADR-03).
+cierto para el camino conversacional (CLI y `POST /chat` comparten el mismo `TaskOrchestrator`); el CRUD
+estructurado de `app.py` (`/tasks`) sigue siendo la excepción deliberada (`TaskService` directo, ver ADR-03).
 
 ## 3. Contexto del sistema (C4 nivel 1)
 
@@ -85,7 +86,7 @@ graph TB
     MCPC["Clientes MCP externos<br/>(Claude Desktop, IDE)"]
     OBSB["Jaeger (local)<br/>trazas OTLP — ítem 4.1"]
 
-    U -->|"HTTP CRUD (hoy)"| CORE
+    U -->|"HTTP: CRUD + POST /chat"| CORE
     U -->|"lenguaje natural"| CORE
     DEV -->|"lee, extiende, testea"| CORE
     ALX -.->|"webhook HTTPS (futuro)"| CORE
@@ -138,10 +139,10 @@ graph TB
     style datos fill:#f8f4f0,stroke:#333
 ```
 
-**Esto ya es real, no aspiracional (ítem 3.1):** el CLI no llama a `TaskService` en proceso — abre una
-conexión MCP real por stdio contra `mongo_mcp_server.py` como subproceso, y ejecuta las tools declaradas
-(`crear_tarea`, `listar_tareas`, `completar_tarea`). `app.py` sigue llamando a `TaskService` directo (no
-pasa por MCP) porque expone CRUD estructurado, no un canal conversacional — ver ADR-03 y el ítem 4.10.
+**Esto ya es real, no aspiracional (ítem 3.1):** ni el CLI ni `POST /chat` (ítem 4.10) llaman a `TaskService`
+en proceso — ambos abren una conexión MCP real por stdio contra `mongo_mcp_server.py` como subproceso, y
+ejecutan las tools declaradas (`crear_tarea`, `listar_tareas`, `completar_tarea`). `app.py` sigue llamando a
+`TaskService` directo solo para el CRUD estructurado (`/tasks`) — ver ADR-03.
 
 **Topología de despliegue por entorno**
 
@@ -264,8 +265,10 @@ personal_assistant_agent/
         └── run_eval.py            # tests/test_eval_router.py lo envuelve con @pytest.mark.eval
 ```
 
-**No implementado todavía (vs. la v1.0 de este documento):** `interfaces/alexa.py` (Fase 6), un endpoint
-`api/` propiamente dicho más allá de `app.py` (ítem 4.10). Tampoco existe una taxonomía de errores de
+**No implementado todavía (vs. la v1.0 de este documento):** `interfaces/alexa.py` (Fase 6). El endpoint
+conversacional (`POST /chat`, ítem 4.10) ya existe, dentro de `app.py` — no se movió a un módulo `api/`
+separado, es deuda cosmética anotada abajo (`app.py` bajo `src/`), no bloqueante. Tampoco existe una
+taxonomía de errores de
 dominio centralizada (`domain/errores.py`) — hoy los handlers de `app.py` traducen excepciones ad hoc;
 formalizarla es una mejora razonable, no bloqueante. `application/agent/{guardrails,agent}.py` (ítems 4.2,
 4.3) ya existen y están conectados: `Agent` consume `Guardrails.evaluate_step` en cada paso.
@@ -369,25 +372,27 @@ idempotentemente en el arranque, pero no hay un mecanismo de migración de datos
 
 ### 9.1 API REST (`app.py`)
 
-Rutas reales hoy — CRUD estructurado, sin paso por el router ni por MCP:
-
-| Método | Ruta | Propósito |
-| --- | --- | --- |
-| `GET` | `/health` | Liveness |
-| `POST` | `/tasks` | Crear tarea |
-| `GET` | `/tasks` | Listar tareas |
-| `GET` | `/tasks/{task_id}` | Obtener una |
-| `GET` | `/tasks/{task_id}/history` | Historial de cambios |
-| `PATCH` | `/tasks/{task_id}` | Actualizar parcialmente |
-| `DELETE` | `/tasks/{task_id}` | Borrado lógico |
+| Método | Ruta | Propósito | Camino |
+| --- | --- | --- | --- |
+| `GET` | `/health` | Liveness | — |
+| `POST` | `/chat` | Turno conversacional (ítem 4.10) | Router → agente → `McpTaskServiceClient` |
+| `POST` | `/tasks` | Crear tarea | CRUD estructurado, `TaskService` directo |
+| `GET` | `/tasks` | Listar tareas | CRUD estructurado, `TaskService` directo |
+| `GET` | `/tasks/{task_id}` | Obtener una | CRUD estructurado, `TaskService` directo |
+| `GET` | `/tasks/{task_id}/history` | Historial de cambios | CRUD estructurado, `TaskService` directo |
+| `PATCH` | `/tasks/{task_id}` | Actualizar parcialmente | CRUD estructurado, `TaskService` directo |
+| `DELETE` | `/tasks/{task_id}` | Borrado lógico | CRUD estructurado, `TaskService` directo |
 
 Errores: handlers dedicados por tipo de excepción (`RequestValidationError`, `HTTPException`, `ValueError`,
 `RuntimeError`, catch-all) devuelven un mensaje genérico + `request_id`; el detalle completo (con
 traceback) solo va a los logs, nunca al cliente.
 
-**Pendiente (ítem 4.10):** un endpoint conversacional (ej. `POST /messages`) que exponga
-`TaskOrchestrator` — recibe `mensaje`/`session_id?`, devuelve una respuesta en lenguaje natural (no un
-recurso JSON crudo), lista para un frontend propio o, más adelante, para servir de base a un canal de voz.
+`POST /chat` recibe `{message, session_id?}` y devuelve `{message, session_id, success, action}` — sin
+`session_id` en el payload, el servidor crea uno nuevo y lo devuelve para que el cliente lo reutilice en el
+siguiente turno (memoria conversacional real entre peticiones HTTP, no solo dentro de un proceso CLI).
+`RequestIdMiddleware` es ASGI puro (no `BaseHTTPMiddleware`, ver ítem 4.10): la única forma de mantener un
+cliente MCP por stdio de vida larga compartido entre peticiones sin romper los cancel scopes de `anyio`
+que usa internamente.
 
 ### 9.2 Tools MCP (`infrastructure/mcp/tools/task_tools.py`)
 
@@ -517,10 +522,10 @@ nada porque los tres procesos siguen el mismo criterio (`or Adaptador()` con def
 
 | Extensión | Depende de | Qué se añade | Qué NO cambia |
 | --- | --- | --- | --- |
-| Agente con tools — ejecutor principal, no fallback | 3.1, 4.2 (ambos hechos) | ✅ Hecho: bucle real de tool-calling (catálogo desde `list_tools()`, el LLM decide qué invocar). Cubre `task_reference` y atributos ricos en `create_task` sin ítem aparte. Confirmación interactiva real queda para 4.10 (ítem 4.16) | Router, tools MCP, repositorios |
-| `multi_task` (4.9) | 4.3 | Ruta nueva en `IntentClassification` + descomposición en el agente | Contrato del router, `_dispatch` de acciones simples |
-| Endpoint conversacional (4.10) | 4.3, 4.9 | Ruta HTTP que expone `TaskOrchestrator` | `TaskOrchestrator`, router, MCP |
-| Canal Alexa (Fase 6) | 4.10 | `interfaces/alexa.py` + política de respuesta breve | Orquestador, tools |
+| Agente con tools — ejecutor principal, no fallback | 3.1, 4.2 (ambos hechos) | ✅ Hecho: bucle real de tool-calling (catálogo desde `list_tools()`, el LLM decide qué invocar). Cubre `task_reference` y atributos ricos en `create_task` sin ítem aparte. Confirmación interactiva real (ítem 4.16) sigue pendiente — ya es posible con 4.10 hecho, pero no se implementó todavía | Router, tools MCP, repositorios |
+| `multi_task` (4.9) | 4.3 | ✅ Hecho: ruta nueva en `IntentClassification` + descomposición en el agente | Contrato del router, `_dispatch` de acciones simples |
+| Endpoint conversacional (4.10) | 4.3, 4.9 (ambos hechos) | ✅ Hecho: `POST /chat` expone `TaskOrchestrator` vía MCP, con sesión gestionada por el cliente | `TaskOrchestrator`, router, MCP |
+| Canal Alexa (Fase 6) | 4.10 (hecho) | `interfaces/alexa.py` + política de respuesta breve | Orquestador, tools |
 | `app.py` bajo `src/` (limpieza estructural) | Ninguna, cuando se priorice | Mover el entrypoint a `interfaces/api.py` | Rutas, lógica |
 | Proveedor LLM alternativo | Ninguna | Otro adaptador de `LLMClient` (ya soporta OpenAI/Ollama) | Todo lo demás |
 

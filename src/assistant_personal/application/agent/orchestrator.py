@@ -60,17 +60,17 @@ class TaskOrchestrator:
             context_builder=context_builder or ContextBuilder(summarizer=OpenAISessionSummarizer()),
         )
 
-    def handle_message(self, message: str) -> dict[str, Any]:
-        return asyncio.run(self.handle_message_async(message))
+    def handle_message(self, message: str, request_id: str | None = None) -> dict[str, Any]:
+        return asyncio.run(self.handle_message_async(message, request_id=request_id))
 
-    async def handle_message_async(self, message: str) -> dict[str, Any]:
+    async def handle_message_async(self, message: str, request_id: str | None = None) -> dict[str, Any]:
         started_at = time.monotonic()
-        # Cada turno es su propia "interacción" a efectos de observabilidad: un
-        # request_id nuevo por turno, no reutilizado entre turnos del mismo CLI interactivo.
-        # Si en el futuro esto se invoca dentro de una petición FastAPI ya instrumentada, esto
-        # sobreescribe el request_id de la petición para los logs de la interacción — aceptable
-        # hoy porque `TaskOrchestrator` no se usa todavía desde `app.py`.
-        request_id = str(uuid.uuid4())
+        # Si el llamador ya tiene un request_id de la petición en curso (ej. `app.py`, que lo
+        # genera en `RequestIdMiddleware` antes de invocar al orquestador), se reutiliza — así
+        # los logs de esta interacción correlacionan con el resto de logs de esa misma petición
+        # HTTP y con el `X-Request-ID` que ya viaja en la respuesta. Sin llamador (CLI), cada
+        # turno sigue generando el suyo.
+        request_id = request_id or str(uuid.uuid4())
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(request_id=request_id)
         try:

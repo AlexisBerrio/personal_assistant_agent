@@ -13,8 +13,8 @@ class ConversationOrchestrator(Protocol):
     `SessionMemoryRepository`/`LongTermMemoryRepository`/`LLMClient`.
     """
 
-    async def handle_message_async(self, message: str) -> dict[str, Any]:
+    async def handle_message_async(self, message: str, request_id: str | None = None) -> dict[str, Any]:
         ...
 
-    def handle_message(self, message: str) -> dict[str, Any]:
+    def handle_message(self, message: str, request_id: str | None = None) -> dict[str, Any]:
         ...

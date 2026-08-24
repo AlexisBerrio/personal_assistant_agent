@@ -39,6 +39,18 @@ class McpTaskServiceClient:
         self._session = session
         self._owns_session = session is None
 
+    async def connect(self) -> None:
+        """Establece la sesión stdio explícitamente, en la task que llame a este método.
+
+        Para un cliente de vida larga compartido entre peticiones (ej. `app.py`), esto importa:
+        los cancel scopes de `anyio` que usa `stdio_client` internamente quedan atados a la task
+        que los entra. Si la sesión se abre perezosamente en la primera petición HTTP real (una
+        task por petición) en vez de en la task del lifespan, cerrarla luego desde el shutdown
+        del lifespan (otra task) falla con `RuntimeError: Attempted to exit cancel scope in a
+        different task than it was entered in`. Llamar a esto explícitamente desde el mismo
+        bloque que hará `aclose()` evita el problema. Sin efecto si ya hay una sesión activa."""
+        await self._ensure_session()
+
     async def _ensure_session(self) -> ClientSession:
         if self._session is not None:
             return self._session
