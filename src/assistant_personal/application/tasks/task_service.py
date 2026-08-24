@@ -1,4 +1,3 @@
-import inspect
 import uuid
 from datetime import datetime, timezone
 from typing import Any, cast
@@ -6,6 +5,7 @@ from typing import Any, cast
 from src.assistant_personal.config import get_settings
 from src.assistant_personal.domain.repositories.task_repository import TaskRepository
 from src.assistant_personal.domain.task_models import Task
+from src.assistant_personal.infrastructure.async_dispatch import invoke_repository_method
 from src.assistant_personal.infrastructure.persistence.mongo.client import get_db
 from src.assistant_personal.infrastructure.persistence.mongo.mongo_repository import build_default_task_repository
 
@@ -69,15 +69,7 @@ class TaskService:
 
     async def _invoke_repository_async(self, method_name: str, *args: Any) -> Any:
         """Invoca un método del repositorio, soportando tanto versiones async como sync."""
-        for candidate_name in (f"{method_name}_async", method_name):
-            method = getattr(self.repository, candidate_name, None)
-            if callable(method):
-                result = method(*args)
-                if inspect.isawaitable(result):
-                    return await result
-                return result
-
-        raise AttributeError(f"El repositorio no implementa '{method_name}'")
+        return await invoke_repository_method(self.repository, method_name, *args, error_context="repositorio")
 
     async def list_tasks_async(self, status: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
         """Devuelve las tareas activas, opcionalmente filtradas por status."""

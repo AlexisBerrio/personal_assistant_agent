@@ -16,6 +16,7 @@ from src.assistant_personal.infrastructure.llm.openai_llm_client import (
     OpenAISmallTalkResponder,
 )
 from src.assistant_personal.infrastructure.observabilidad import get_logger, get_tracer
+from src.assistant_personal.infrastructure.text_normalization import normalize_for_matching
 
 logger = get_logger(__name__)
 tracer = get_tracer(__name__)
@@ -293,16 +294,16 @@ class ProductionIntentRouter:
 
     def _is_pure_small_talk(self, text: str) -> bool:
         # Normaliza signos comunes sin regex para reconocer solo saludos puros.
-        normalized = self._normalize_fast_rule_text(text)
+        normalized = normalize_for_matching(text)
 
         return normalized in {"hola", "gracias", "buenos dias", "buen día", "buen dia", "buenas"}
 
     def _is_pure_farewell(self, text: str) -> bool:
-        normalized = self._normalize_fast_rule_text(text)
+        normalized = normalize_for_matching(text)
         return normalized in {"adios", "adiós", "hasta luego", "hasta pronto", "nos vemos", "chao", "chau", "bye"}
 
     def _is_explicit_list_tasks_command(self, text: str) -> bool:
-        normalized = self._normalize_fast_rule_text(text)
+        normalized = normalize_for_matching(text)
         return normalized in EXACT_LIST_TASKS_COMMANDS
 
     def _match_explicit_create_task_command(self, normalized_text: str) -> bool:
@@ -310,12 +311,6 @@ class ProductionIntentRouter:
             return False
         title = normalized_text.split(":", 1)[1].strip() if ":" in normalized_text else ""
         return bool(title)
-
-    def _normalize_fast_rule_text(self, text: str) -> str:
-        normalized = text.lower().strip()
-        for char in [",", ".", "!", "?", ";", ":", "¿", "¡"]:
-            normalized = normalized.replace(char, " ")
-        return " ".join(normalized.split())
 
     async def extract_profile_facts(self, text: str, context: str | None = None) -> UserProfileExtraction:
         if not self._profile_extractor:

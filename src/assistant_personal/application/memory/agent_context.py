@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import inspect
 from typing import Any
 
 from src.assistant_personal.application.memory.context_builder import ContextBuilder
 from src.assistant_personal.domain.entities import UserProfileFact
 from src.assistant_personal.domain.repositories.long_term_memory_repository import LongTermMemoryRepository
 from src.assistant_personal.domain.repositories.session_memory_repository import SessionMemoryRepository
+from src.assistant_personal.infrastructure.async_dispatch import invoke_repository_method
 from src.assistant_personal.infrastructure.observabilidad import get_tracer
 
 _MAX_STORED_TURNS = 20
@@ -98,15 +98,9 @@ class ShortTermMemory:
         return [(turn["user_message"], turn["assistant_response"]) for turn in summary.get("turns", [])]
 
     async def _invoke_repository_async(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
-        for candidate_name in (f"{method_name}_async", method_name):
-            method = getattr(self.repository, candidate_name, None)
-            if callable(method):
-                result = method(*args, **kwargs)
-                if inspect.isawaitable(result):
-                    return await result
-                return result
-
-        raise AttributeError(f"El repositorio de sesión no implementa '{method_name}'")
+        return await invoke_repository_method(
+            self.repository, method_name, *args, error_context="repositorio de sesión", **kwargs
+        )
 
     async def add_async(self, key: str, value: str, session_id: str = "default") -> None:
         await self._invoke_repository_async("add_context_item", session_id, key, value)
@@ -196,15 +190,9 @@ class LongTermMemory:
         return {fact.key: fact.value for fact in self.repository.get_facts(self.user_id)}
 
     async def _invoke_repository_async(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
-        for candidate_name in (f"{method_name}_async", method_name):
-            method = getattr(self.repository, candidate_name, None)
-            if callable(method):
-                result = method(*args, **kwargs)
-                if inspect.isawaitable(result):
-                    return await result
-                return result
-
-        raise AttributeError(f"El repositorio de memoria de largo plazo no implementa '{method_name}'")
+        return await invoke_repository_method(
+            self.repository, method_name, *args, error_context="repositorio de memoria de largo plazo", **kwargs
+        )
 
     async def add_fact_async(self, key: str, value: str, confidence: float = 1.0, source: str = "manual") -> None:
         fact = UserProfileFact(key=key, value=value, confidence=confidence)

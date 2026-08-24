@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import inspect
 from datetime import datetime, timezone
 from typing import Any
 
 from src.assistant_personal.config import get_settings
 from src.assistant_personal.domain.repositories.task_repository import TaskRepository
+from src.assistant_personal.infrastructure.async_dispatch import maybe_await
 from src.assistant_personal.infrastructure.persistence.mongo.client import get_db
 
 
@@ -42,12 +42,6 @@ class MongoTaskRepository:
         except Exception:
             return False
 
-    async def _maybe_await(self, value: Any) -> Any:
-        """Devuelve el resultado, esperando la coroutine solo si hace falta."""
-        if inspect.isawaitable(value):
-            return await value
-        return value
-
     async def _collect_documents(self, cursor: Any) -> list[dict[str, Any]]:
         """Recoge documentos desde un cursor síncrono o asíncrono."""
         if hasattr(cursor, "__aiter__"):
@@ -75,7 +69,7 @@ class MongoTaskRepository:
                 "new_value": new_value,
             })
 
-        await self._maybe_await(db.task_history.insert_one(history_entry))
+        await maybe_await(db.task_history.insert_one(history_entry))
 
     async def list_active_tasks_async(self, status: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
         db = await self._get_db()
@@ -85,7 +79,7 @@ class MongoTaskRepository:
 
     async def get_task_by_id_async(self, task_id: str) -> dict[str, Any] | None:
         db = await self._get_db()
-        return await self._maybe_await(db.personal_tasks.find_one(
+        return await maybe_await(db.personal_tasks.find_one(
             self._active_task_filter(task_id),
             {"_id": 0},
         ))
@@ -105,19 +99,19 @@ class MongoTaskRepository:
         # quede limpio.
         # `result.inserted_id` (el `ObjectId` de Mongo) no se devuelve: es plomería interna de
         # persistencia, no un dato de dominio — `task_id` ya identifica la tarea para el llamador.
-        await self._maybe_await(db.personal_tasks.insert_one(dict(payload)))
+        await maybe_await(db.personal_tasks.insert_one(dict(payload)))
         return payload
 
     async def update_task_async(self, task_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
         db = await self._get_db()
-        previous_task = await self._maybe_await(db.personal_tasks.find_one(
+        previous_task = await maybe_await(db.personal_tasks.find_one(
             self._active_task_filter(task_id),
             {"_id": 0},
         ))
         if previous_task is None:
             return None
 
-        result = await self._maybe_await(db.personal_tasks.update_one(
+        result = await maybe_await(db.personal_tasks.update_one(
             self._active_task_filter(task_id),
             {"$set": updates},
         ))
@@ -125,13 +119,13 @@ class MongoTaskRepository:
             return None
 
         await self._record_history(db, task_id, updates, previous_task)
-        updated_task = await self._maybe_await(db.personal_tasks.find_one(
+        updated_task = await maybe_await(db.personal_tasks.find_one(
             self._active_task_filter(task_id), {"_id": 0}))
         return updated_task
 
     async def complete_task_async(self, task_id: str) -> dict[str, Any]:
         db = await self._get_db()
-        previous_task = await self._maybe_await(db.personal_tasks.find_one(
+        previous_task = await maybe_await(db.personal_tasks.find_one(
             self._active_task_filter(task_id),
             {"_id": 0},
         ))
@@ -144,7 +138,7 @@ class MongoTaskRepository:
         if previous_task.get("status") != "Completed":
             update_fields["completed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
-        result = await self._maybe_await(db.personal_tasks.update_one(
+        result = await maybe_await(db.personal_tasks.update_one(
             self._active_task_filter(task_id),
             {"$set": update_fields},
         ))
@@ -153,7 +147,7 @@ class MongoTaskRepository:
 
     async def delete_task_async(self, task_id: str) -> dict[str, Any] | None:
         db = await self._get_db()
-        previous_task = await self._maybe_await(db.personal_tasks.find_one(
+        previous_task = await maybe_await(db.personal_tasks.find_one(
             self._active_task_filter(task_id),
             {"_id": 0},
         ))
@@ -161,7 +155,7 @@ class MongoTaskRepository:
             return None
 
         deleted_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-        result = await self._maybe_await(db.personal_tasks.update_one(
+        result = await maybe_await(db.personal_tasks.update_one(
             self._active_task_filter(task_id),
             {"$set": {"is_deleted": True, "deleted_at": deleted_at, "status": "Deleted"}},
         ))

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import time
 import uuid
@@ -14,9 +13,11 @@ from src.assistant_personal.application.memory.agent_context import AgentContext
 from src.assistant_personal.application.memory.context_builder import ContextBuilder
 from src.assistant_personal.domain.repositories.long_term_memory_repository import LongTermMemoryRepository
 from src.assistant_personal.domain.repositories.session_memory_repository import SessionMemoryRepository
+from src.assistant_personal.infrastructure.async_dispatch import maybe_await
 from src.assistant_personal.infrastructure.llm.openai_llm_client import OpenAISessionSummarizer
 from src.assistant_personal.infrastructure.observabilidad import get_logger, get_tracer
 from src.assistant_personal.infrastructure.routers.hybrid_router import ProductionIntentRouter
+from src.assistant_personal.infrastructure.text_normalization import normalize_for_matching
 
 logger = get_logger(__name__)
 tracer = get_tracer(__name__)
@@ -26,13 +27,6 @@ _AFFIRMATIVE_CONFIRMATIONS = {
     "si", "sí", "s", "confirmo", "confirmado", "dale", "hazlo", "ok", "de acuerdo", "adelante", "claro", "yes",
 }
 _NEGATIVE_CONFIRMATIONS = {"no", "cancela", "cancelar", "no gracias", "mejor no", "detente"}
-
-
-def _normalize_confirmation_text(text: str) -> str:
-    normalized = text.lower().strip()
-    for char in [",", ".", "!", "?", ";", ":", "¿", "¡"]:
-        normalized = normalized.replace(char, " ")
-    return " ".join(normalized.split())
 
 
 class TaskOrchestrator:
@@ -120,9 +114,10 @@ class TaskOrchestrator:
 
         pending_confirmation = await self._get_pending_confirmation()
         if pending_confirmation is not None:
-            normalized = _normalize_confirmation_text(message)
+            normalized = normalize_for_matching(message)
             if normalized in _AFFIRMATIVE_CONFIRMATIONS or normalized in _NEGATIVE_CONFIRMATIONS:
-                # Regla rápida y gratis para el caso obvio.S in LLM cuando no hace falta.
+                # Regla rápida y gratis para el caso obvio — mismo criterio que
+                # `peek_fast_rule_action` del router: sin LLM cuando no hace falta.
                 return await self._settle_pending_confirmation(
                     pending_confirmation,
                     confirmed=normalized in _AFFIRMATIVE_CONFIRMATIONS,
@@ -136,7 +131,7 @@ class TaskOrchestrator:
             # La regla rápida ya resuelve el saludo sin tocar el LLM clasificador
             # (`hybrid_router._check_fast_rules`) — extraer hechos de perfil de un saludo puro
             # no aporta nada, así que se salta del todo.
-            intent = await self._maybe_await(self.router.route(message, context=context_summary))
+            intent = await maybe_await(self.router.route(message, context=context_summary))
         else:
             # Se mantiene el orden secuencial (no `gather`): `route()` debe poder ver, en este
             # mismo turno, los hechos que `_extract_profile_facts` acaba de persistir — un
@@ -145,7 +140,7 @@ class TaskOrchestrator:
             profile_facts = await self._extract_profile_facts(message, context_summary)
             await self._persist_profile_facts(profile_facts)
             context_summary = await self.context.build_context_summary_async(session_id=self.session_id)
-            intent = await self._maybe_await(self.router.route(message, context=context_summary))
+            intent = await maybe_await(self.router.route(message, context=context_summary))
 
         llm_metadata = getattr(self.router, "last_llm_metadata", None)
         uso_llm = intent.source == "llm"
@@ -301,20 +296,12 @@ class TaskOrchestrator:
             "result": {"tool_calls": agent_result.tool_calls, "steps_used": agent_result.steps_used},
         }
 
-    async def _maybe_await(self, value: Any) -> Any:
-        """Soporta routers síncronos y async: el port `LLMClient` es async de punta a punta en
-        producción, pero muchos dobles de test siguen siendo síncronos — mismo patrón de
-        despacho que `TaskService._invoke_repository_async`."""
-        if inspect.isawaitable(value):
-            return await value
-        return value
-
     async def _extract_profile_facts(self, message: str, context_summary: str) -> list[dict[str, Any]]:
         if not hasattr(self.router, "extract_profile_facts"):
             return []
 
         try:
-            extracted = await self._maybe_await(self.router.extract_profile_facts(message, context=context_summary))
+            extracted = await maybe_await(self.router.extract_profile_facts(message, context=context_summary))
         except Exception:
             return []
 
