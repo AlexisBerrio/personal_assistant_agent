@@ -61,3 +61,15 @@ class UserProfileExtraction(BaseModel):
     profile_facts: list[UserProfileFact] = Field(default_factory=list, description="Hechos de perfil detectados")
 
 
+class ResponseJudgment(BaseModel):
+    """Juicio estructurado de un LLM-as-judge sobre una respuesta final en lenguaje natural.
+
+    Uso exclusivo de evaluación offline — nunca se invoca en producción."""
+
+    correcta: bool = Field(description="La respuesta refleja el resultado real, sin inventar datos")
+    util: bool = Field(description="La respuesta resuelve o avanza lo que pidió el usuario")
+    en_espanol: bool = Field(description="La respuesta está en español")
+    puntuacion: int = Field(ge=1, le=5, description="Calidad global, 1 (mala) a 5 (excelente)")
+    justificacion: str = Field(description="Breve razón de la puntuación, en español")
+
+

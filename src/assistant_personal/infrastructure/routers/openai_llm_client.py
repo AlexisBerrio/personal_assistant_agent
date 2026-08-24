@@ -7,7 +7,7 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from src.assistant_personal.config import get_settings
-from src.assistant_personal.domain.entities import IntentClassification, UserProfileExtraction
+from src.assistant_personal.domain.entities import IntentClassification, ResponseJudgment, UserProfileExtraction
 from src.assistant_personal.infrastructure.observabilidad import get_tracer
 from src.assistant_personal.infrastructure.prompts.loader import LoadedPrompt, load_prompt
 
@@ -244,6 +244,30 @@ class OpenAIProfileFactExtractor(_OpenAITextClient):
         payload = await self._invoke_model(system_prompt, self._build_user_prompt(text, context))
         parsed = self._parse_response(payload)
         return UserProfileExtraction.model_validate(parsed)
+
+
+class OpenAIResponseJudge(_OpenAITextClient):
+    """LLM-as-judge para evaluación offline de la respuesta final.
+
+    Solo se usa desde el harness de calibración (`tests/eval/`). El llamador debe instanciarlo
+    con un `model` distinto del que generó la respuesta evaluada: un juez que se evalúa a sí mismo no es
+    fiable."""
+
+    _expects_json_response = True
+
+    async def judge_response(self, user_message: str, response: str, context: str | None = None) -> ResponseJudgment:
+        self._ensure_ready()
+        system_prompt = load_prompt("eval/judge_response")
+        user_prompt = self._build_judge_prompt(user_message, response, context)
+        payload = await self._invoke_model(system_prompt, user_prompt)
+        parsed = self._parse_response(payload)
+        return ResponseJudgment.model_validate(parsed)
+
+    def _build_judge_prompt(self, user_message: str, response: str, context: str | None) -> str:
+        parts = [f"Mensaje del usuario: {user_message}", f"Respuesta a evaluar: {response}"]
+        if context:
+            parts.append(f"Contexto reciente: {context}")
+        return "\n".join(parts)
 
 
 class OpenAIAgentLLM(_OpenAITextClient):

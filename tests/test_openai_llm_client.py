@@ -9,6 +9,7 @@ from src.assistant_personal.domain.entities import ConversationRoute, IntentActi
 from src.assistant_personal.infrastructure.routers.openai_llm_client import (
     OpenAIGeneralKnowledgeResponder,
     OpenAIIntentClassifier,
+    OpenAIResponseJudge,
     OpenAISmallTalkResponder,
     _OpenAITextClient,
 )
@@ -174,6 +175,93 @@ class OpenAISmallTalkResponderTests(unittest.IsolatedAsyncioTestCase):
         await client.answer_small_talk("hola, me llamo Alexis")
 
         self.assertNotIn("response_format", client.client.completions.received_kwargs)
+
+
+class FakeJudgeChatCompletions:
+    async def create(self, **_kwargs):
+        class FakeMessage:
+            content = (
+                '{"correcta": true, "util": true, "en_espanol": true, "puntuacion": 5, '
+                '"justificacion": "Refleja el resultado real y es accionable."}'
+            )
+
+        class FakeChoice:
+            message = FakeMessage()
+
+        class FakeResponse:
+            choices: ClassVar = [FakeChoice()]
+            usage = None
+
+        return FakeResponse()
+
+
+class FakeJudgeOpenAIClient:
+    def __init__(self):
+        self.chat = type("Chat", (), {"completions": FakeJudgeChatCompletions()})()
+
+
+class RecordingJudgeChatCompletions:
+    def __init__(self):
+        self.received_kwargs = None
+
+    async def create(self, **kwargs):
+        self.received_kwargs = kwargs
+
+        class FakeMessage:
+            content = (
+                '{"correcta": true, "util": true, "en_espanol": true, "puntuacion": 5, '
+                '"justificacion": "ok"}'
+            )
+
+        class FakeChoice:
+            message = FakeMessage()
+
+        class FakeResponse:
+            choices: ClassVar = [FakeChoice()]
+            usage = None
+
+        return FakeResponse()
+
+
+class RecordingJudgeOpenAIClient:
+    def __init__(self):
+        self.completions = RecordingJudgeChatCompletions()
+        self.chat = type("Chat", (), {"completions": self.completions})()
+
+
+class OpenAIResponseJudgeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_judge_response_parses_the_structured_judgment(self):
+        client = OpenAIResponseJudge.__new__(OpenAIResponseJudge)
+        client.model = "gpt-test"
+        client.client = FakeJudgeOpenAIClient()
+
+        judgment = await client.judge_response("muéstrame mis tareas", "Tus tareas:\n- Llamar al banco (Pending)")
+
+        self.assertTrue(judgment.correcta)
+        self.assertTrue(judgment.util)
+        self.assertTrue(judgment.en_espanol)
+        self.assertEqual(judgment.puntuacion, 5)
+
+    async def test_judge_response_requests_strict_json_mode(self):
+        client = OpenAIResponseJudge.__new__(OpenAIResponseJudge)
+        client.model = "gpt-test"
+        client.client = RecordingJudgeOpenAIClient()
+
+        await client.judge_response("hola", "Hello!")
+
+        self.assertEqual(client.client.completions.received_kwargs["response_format"], {"type": "json_object"})
+
+    async def test_judge_response_includes_the_response_being_evaluated_in_the_prompt(self):
+        """El juez evalúa una respuesta ya generada, no continúa la conversación — el texto a
+        evaluar debe llegar explícito en el prompt, no confundirse con el mensaje del usuario."""
+        client = OpenAIResponseJudge.__new__(OpenAIResponseJudge)
+        client.model = "gpt-test"
+        client.client = RecordingJudgeOpenAIClient()
+
+        await client.judge_response("hola", "Hello there!")
+
+        sent_user_prompt = client.client.completions.received_kwargs["messages"][1]["content"]
+        self.assertIn("Hello there!", sent_user_prompt)
 
 
 class OpenAIIntentClassifierTests(unittest.IsolatedAsyncioTestCase):
