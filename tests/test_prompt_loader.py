@@ -12,8 +12,8 @@ class PromptLoaderTests(unittest.TestCase):
         prompt = load_prompt("router/classify_intent")
 
         self.assertEqual(prompt.id, "classify_intent")
-        self.assertEqual(prompt.version, "1.9.0")
-        self.assertEqual(prompt.identifier, "classify_intent:v1.9.0")
+        self.assertEqual(prompt.version, "1.10.1")
+        self.assertEqual(prompt.identifier, "classify_intent:v1.10.1")
         self.assertIn("Clasificador de intenciones", prompt.text)
         self.assertEqual(prompt.model_recommended, "gpt-4o-mini")
         self.assertEqual(prompt.temperature, 0.0)

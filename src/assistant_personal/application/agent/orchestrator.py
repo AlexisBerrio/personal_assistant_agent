@@ -29,6 +29,21 @@ _AFFIRMATIVE_CONFIRMATIONS = {
 _NEGATIVE_CONFIRMATIONS = {"no", "cancela", "cancelar", "no gracias", "mejor no", "detente"}
 
 
+def _build_pending_confirmation_hint(pending: dict[str, Any]) -> str:
+    pregunta = pending.get("pregunta", "")
+    return (
+        f'Confirmación pendiente sin resolver: "{pregunta}". Si este mensaje la responde, '
+        "afirmativa -> intent=confirm_pending_action; negativa -> intent=cancel_pending_action; "
+        "payload={}. Si no tiene relación, ignórala y clasifica lo que el mensaje sí pide."
+    )
+
+
+def _augment_context(context_summary: str, hint: str | None) -> str:
+    if not hint:
+        return context_summary
+    return f"{context_summary} | {hint}" if context_summary else hint
+
+
 class TaskOrchestrator:
     """Orquesta una interacción simple entre router, guardrails y especialista."""
 
@@ -113,6 +128,7 @@ class TaskOrchestrator:
         context_summary = await self.context.build_context_summary_async(session_id=self.session_id)
 
         pending_confirmation = await self._get_pending_confirmation()
+        pending_hint: str | None = None
         if pending_confirmation is not None:
             normalized = normalize_for_matching(message)
             if normalized in _AFFIRMATIVE_CONFIRMATIONS or normalized in _NEGATIVE_CONFIRMATIONS:
@@ -123,6 +139,9 @@ class TaskOrchestrator:
                     confirmed=normalized in _AFFIRMATIVE_CONFIRMATIONS,
                     message=message, request_id=request_id, started_at=started_at,
                 )
+            # Ni sí ni no por regla rápida: se arma una instrucción dirigida solo a la llamada
+            # del clasificador de ESTE turno (no al prompt estático).
+            pending_hint = _build_pending_confirmation_hint(pending_confirmation)
 
         peek_fast_rule_action = getattr(self.router, "peek_fast_rule_action", None)
         fast_action = peek_fast_rule_action(message) if peek_fast_rule_action else None
@@ -131,7 +150,9 @@ class TaskOrchestrator:
             # La regla rápida ya resuelve el saludo sin tocar el LLM clasificador
             # (`hybrid_router._check_fast_rules`) — extraer hechos de perfil de un saludo puro
             # no aporta nada, así que se salta del todo.
-            intent = await maybe_await(self.router.route(message, context=context_summary))
+            intent = await maybe_await(
+                self.router.route(message, context=_augment_context(context_summary, pending_hint))
+            )
         else:
             # Se mantiene el orden secuencial (no `gather`): `route()` debe poder ver, en este
             # mismo turno, los hechos que `_extract_profile_facts` acaba de persistir — un
@@ -140,7 +161,9 @@ class TaskOrchestrator:
             profile_facts = await self._extract_profile_facts(message, context_summary)
             await self._persist_profile_facts(profile_facts)
             context_summary = await self.context.build_context_summary_async(session_id=self.session_id)
-            intent = await maybe_await(self.router.route(message, context=context_summary))
+            intent = await maybe_await(
+                self.router.route(message, context=_augment_context(context_summary, pending_hint))
+            )
 
         llm_metadata = getattr(self.router, "last_llm_metadata", None)
         uso_llm = intent.source == "llm"
