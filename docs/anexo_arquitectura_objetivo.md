@@ -561,6 +561,30 @@ Si no se cumple ninguna, mantener el enfoque actual: 4.2 (ejecución) + 2.15 (co
 el caso real con cero dependencias nuevas y sin la latencia/opacidad extra de otra capa de LLM-as-guardrail.
 Documentar la decisión junto con la de state graph (ítem 4.5) cuando llegue el momento de evaluarla.
 
+**Decisión (ítem 4.5, 2026-08-24):** ninguno de los 7 criterios se cumple hoy. **No se adopta** ni un state
+graph ni una librería de guardrails de IA en este momento.
+
+*State graph* — los 4 criterios de arriba, contrastados con el estado real:
+1. Cero flujos con estado intermedio de más de 2 turnos — no existe siquiera el endpoint conversacional
+   (ítem 4.10) que sostendría ese caso.
+2. Nada que reanudar: las escrituras del agente son atómicas dentro de un turno, sin ejecuciones a medias
+   pendientes de aprobación.
+3. `_dispatch`/`_route` están muy por debajo de las ~500 líneas de control de flujo condicional del umbral,
+   y no hay evidencia de que las modificaciones recientes (4.9, 4.19) hayan roto casos existentes.
+4. No hay especialistas paralelos que agregar — un solo agente resuelve todo el catálogo de tools MCP.
+
+*Librerías de guardrails de IA* — los 3 criterios, contrastados con el estado real:
+1. El asistente sigue siendo de un solo usuario en contexto pedagógico, no expuesto a usuarios externos no
+   confiables.
+2. No existe todavía tráfico real (ítem 4.13 sigue bloqueado por lo mismo) del que medir una tasa de falsos
+   negativos de prompt injection creciente sobre las reglas de 2.15.
+3. El mantenimiento sigue siendo de una sola persona — no hay presión organizacional por rails declarativos.
+
+**Revisar esta decisión cuando:** exista el endpoint conversacional de 4.10 con tráfico real medible, o el
+proyecto pase a exponerse a usuarios externos (Fase 6+, Alexa). Hasta entonces, la orquestación se mantiene
+detrás del port de `domain/` (ítem 4.4, ya hecho) precisamente para que adoptar un state graph más adelante
+sea un adaptador nuevo, no una reescritura.
+
 ### Definition of Done (Fase 4)
 
 - [x] El router devuelve un objeto Pydantic validado; una salida inválida nunca propaga a la ejecución
@@ -570,14 +594,14 @@ Documentar la decisión junto con la de state graph (ítem 4.5) cuando llegue el
       cierto para el camino conversacional (orquestador, ítem 3.1); `app.py` (CRUD estructurado) sigue
       llamando a `TaskService` directo — pendiente decidir si eso es aceptable o si también debe pasar
       por MCP (ver ítem 4.10).
-- [ ] El agente tiene límite de pasos, whitelist de tools y presupuesto de tokens, con test que verifica
-      que se respetan.
-- [ ] El router puede emitir `multi_task` (2+ acciones en un mensaje) y el agente las ejecuta en secuencia
+- [x] El agente tiene límite de pasos, whitelist de tools y presupuesto de tokens, con test que verifica
+      que se respetan (ítems 4.2 y 4.3, `test_stops_when_the_step_budget_is_exhausted`).
+- [x] El router puede emitir `multi_task` (2+ acciones en un mensaje) y el agente las ejecuta en secuencia
       vía MCP, en vez de degradar siempre a `clarify` (ítem 4.9).
 - [x] Las reglas rápidas solo hacen match en operaciones sin parámetros por interpretar; cualquier filtro
       o dato en lenguaje natural cae al agente, no solo las escrituras (ítem 4.11).
-- [ ] Existe un documento de decisión que registra por qué **no** se adoptó un state graph, con los
-      criterios anteriores evaluados.
+- [x] Existe un documento de decisión que registra por qué **no** se adoptó un state graph ni una librería
+      de guardrails de IA, con los criterios anteriores evaluados (ítem 4.5).
 
 ---
 
@@ -1074,7 +1098,7 @@ auditada; ninguna tool acepta filtros que cruzen tenants.
 | 4.2 | Guardrails: whitelist de tools, límite de pasos, presupuesto de tokens, confirmación de escrituras | 🟡 | §A.8 | ✅ Hecho — `application/guardrails.py`: `Guardrails.evaluate_step(tool_name, steps_used, tokens_used, confirmed)` decide `ALLOW`/`DENY_TOOL_NOT_WHITELISTED`/`DENY_STEP_BUDGET_EXCEEDED`/`DENY_TOKEN_BUDGET_EXCEEDED`/`NEEDS_CONFIRMATION`, en ese orden. `build_default_guardrails()` toma la whitelist de `TOOL_SCOPES` real (`task_tools.py`, ítem 3.3) en vez de duplicarla — un test contra el diccionario real detecta si una tool nueva se agrega sin decidir su scope. No depende de que 4.3 exista: es una política pura, sin I/O, probada con una secuencia de pasos simulada (10 tests nuevos, `test_guardrails.py`). Queda lista para que 4.3 la consuma tal cual |
 | 4.3 | Agente con tools MCP: ejecutor principal de toda acción que el router no pueda despachar con el 100% de lo necesario (criterio de 4.11), no un fallback raro | 🟡 | §A.8 | ✅ Hecho — **rediseñado tras revisión**: la primera versión (`resolve_task_reference_to_id`, un método fijo por capability) fue señalada como no-agente-de-verdad — el LLM no decidía nada, solo resolvía un sub-problema que el código ya había decidido que existía. Reemplazado por un agente con tool-calling real: `application/agent/agent.py` arma el catálogo de tools desde `McpTaskServiceClient.list_tools()` (el servidor MCP real, nunca un esquema duplicado a mano — nuevo `list_tools()`/`call_tool()` genéricos en `client.py`), se lo pasa al LLM (`OpenAIAgentLLM.invoke_with_tools`, `chat.completions` con `tools=`/`tool_choice="auto"`) y dentro de un bucle deja que el modelo decida qué tool(s) invocar y con qué argumentos — incluyendo llamar `listar_tareas` por su cuenta cuando necesita identificar una tarea por descripción, o incluir atributos (prioridad, categoría, fecha, descripción) que el usuario mencionó en lenguaje natural al crear una tarea. Cada tool call propuesta pasa por `Guardrails.evaluate_step` (ítem 4.2) con `steps_used`/`tokens_used` acumulados de verdad a lo largo del bucle (cierra la mitad del hallazgo 4.16), acotado por `max_steps`. El router sigue protegiendo la ruta barata (4.11) solo para lo que de verdad no requiere interpretar nada: `list_tasks` y `create_task` resuelto por regla exacta. `complete_task`/`delete_task` siempre se despachan al agente (ver 4.17: ni con `task_id` explícito vale la pena un camino aparte, ningún usuario real escribe ese id). Confirmación interactiva real antes de escrituras sigue pendiente de 4.10 (ver 4.16, sin cerrar). Verificado real de punta a punta (MCP real + LLM real, sin mocks): (1) "crea una tarea urgente para llamar al banco mañana antes de las 5pm, categoría trabajo" — el agente extrajo `priority`, `due_date` (fecha relativa resuelta a ISO) y `category` correctamente, y al fallar la primera validación de Pydantic (`category` en español, `priority` sin `level`) el propio bucle mostró recuperación real: el error de la tool volvió como resultado, el LLM lo leyó y reintentó con los valores corregidos — comportamiento emergente, no programado; (2) "termina la tarea odontológica" — el agente decidió por sí mismo llamar `listar_tareas` antes de `completar_tarea`, mismo caso límite ya verificado en la versión anterior. 16 tests nuevos (`test_agent.py` reescrito + `test_orchestrator.py` actualizado) |
 | 4.4 | Port de orquestación en `domain/` (habilita cambiar de motor sin reescribir) | 🟢 | §A.8 | ✅ Hecho — nuevo `domain/repositories/conversation_orchestrator.py`: `ConversationOrchestrator` (`Protocol`, `handle_message_async`/`handle_message`), mismo patrón que `TaskRepository`/`SessionMemoryRepository`/`LongTermMemoryRepository`/`LLMClient`. `TaskOrchestrator` lo cumple sin cambios (ya tenía esa firma). `cli.py` tipa la variable `orchestrator` contra el puerto en los dos puntos donde se construye, en vez de la clase concreta. Hallazgo aparte (no arreglado aquí, fuera de alcance de este ítem): `mypy` sobre `interfaces/cli.py` (nunca estuvo en el scope habitual del comando de verificación, solo `domain`/`application`) reporta 5 errores preexistentes ajenos a este cambio — ninguno relacionado con el nuevo puerto |
-| 4.5 | Documento de decisión: evaluar los criterios de state graph (4) y de librerías de guardrails de IA (3, NeMo Guardrails/Guardrails AI/similares) y registrar la conclusión de ambos | 🟢 | §A.8 | |
+| 4.5 | Documento de decisión: evaluar los criterios de state graph (4) y de librerías de guardrails de IA (3, NeMo Guardrails/Guardrails AI/similares) y registrar la conclusión de ambos | 🟢 | §A.8 | ✅ Hecho — ninguno de los 7 criterios se cumple hoy (ver decisión completa en §A.8, justo antes del DoD de fase). Conclusión: no adoptar ninguna de las dos por ahora; revisar cuando exista el endpoint conversacional de 4.10 con tráfico real, o el proyecto se exponga a usuarios externos (Fase 6+) |
 | 4.6 | LLM-as-judge calibrado para la respuesta final | 🟡 | §A.12 | |
 | 4.7 | Soporte de solicitudes multi-intención: ejecutar varias acciones de dominio en un mismo turno | 🟢 | §A.12 | ✅ Hecho, ver evidencia de 4.9 — la mitigación de Fase 2 (ítem 2.8, `clarify` explícito) queda solo para lo que de verdad no puede ejecutarse (acción de dominio + pregunta de conocimiento general, o un verbo no soportado) |
 | 4.8 | Reordenar responsabilidades de `infrastructure/` mezcladas por la forma orgánica en que creció (router vs. LLM genérico, protocols vs. lógica de reglas) | 🟡 | §A.8 | Deuda anotada, no bug — el disparador natural es cuando arranque 4.3 y el agente necesite el mismo cliente LLM base |
