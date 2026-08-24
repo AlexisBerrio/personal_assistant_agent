@@ -13,6 +13,17 @@ from src.assistant_personal.infrastructure.prompts.loader import LoadedPrompt, l
 
 tracer = get_tracer(__name__)
 
+# Modelos de razonamiento (o1/o3/o4, gpt-5 y variantes) solo aceptan el temperature por defecto
+# (1) — mandar 0 explícito, que sí acepta el resto de modelos, hace que la API rechace la
+# llamada con 400 "Unsupported value". Prefijos, no una lista cerrada de nombres exactos: cubre
+# variantes (-mini, -nano, fechas) sin mantenimiento por cada modelo nuevo de esa familia.
+_REASONING_MODEL_PREFIXES = ("o1", "o3", "o4", "gpt-5")
+
+
+def _supports_custom_temperature(model: str | None) -> bool:
+    normalized = (model or "").strip().lower()
+    return not normalized.startswith(_REASONING_MODEL_PREFIXES)
+
 
 class _OpenAITextClient:
     """Cliente base para compartir invocación y parseo estructurado con OpenAI."""
@@ -89,6 +100,8 @@ class _OpenAITextClient:
     async def _invoke_model_uninstrumented(self, system_prompt: LoadedPrompt, user_prompt: str) -> str:
         started_at = time.monotonic()
 
+        temperature_kwargs: dict[str, Any] = {"temperature": 0} if _supports_custom_temperature(self.model) else {}
+
         if getattr(self, "_use_responses_api", True) and hasattr(self.client, "responses"):
             response = await self.client.responses.create(
                 model=self.model,
@@ -96,7 +109,7 @@ class _OpenAITextClient:
                     {"role": "system", "content": system_prompt.text},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=0,
+                **temperature_kwargs,
             )
             usage = getattr(response, "usage", None)
             self._record_call_metadata(
@@ -108,7 +121,7 @@ class _OpenAITextClient:
             return getattr(response, "output_text", "") or ""
 
         if hasattr(self.client, "chat") and hasattr(self.client.chat, "completions"):
-            extra_kwargs: dict[str, Any] = {}
+            extra_kwargs: dict[str, Any] = dict(temperature_kwargs)
             if self._expects_json_response:
                 extra_kwargs["response_format"] = {"type": "json_object"}
             response = await self.client.chat.completions.create(
@@ -117,7 +130,6 @@ class _OpenAITextClient:
                     {"role": "system", "content": system_prompt.text},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=0,
                 **extra_kwargs,
             )
             usage = getattr(response, "usage", None)

@@ -336,6 +336,29 @@ class OpenAIIntentClassifierTests(unittest.IsolatedAsyncioTestCase):
             await client.classify_intent("lista mis tareas")
 
 
+class OpenAITextClientTemperatureTests(unittest.IsolatedAsyncioTestCase):
+    """Los modelos de razonamiento (o1/o3/o4, gpt-5) solo aceptan el temperature por defecto —
+    mandar 0 explícito hace que la API rechace la llamada con 400 'Unsupported value'."""
+
+    async def test_omits_temperature_for_reasoning_family_models(self):
+        client = OpenAIResponseJudge.__new__(OpenAIResponseJudge)
+        client.model = "gpt-5-nano"
+        client.client = RecordingJudgeOpenAIClient()
+
+        await client.judge_response("hola", "¡Hola!")
+
+        self.assertNotIn("temperature", client.client.completions.received_kwargs)
+
+    async def test_sends_temperature_zero_for_regular_models(self):
+        client = OpenAIResponseJudge.__new__(OpenAIResponseJudge)
+        client.model = "gpt-4o"
+        client.client = RecordingJudgeOpenAIClient()
+
+        await client.judge_response("hola", "¡Hola!")
+
+        self.assertEqual(client.client.completions.received_kwargs["temperature"], 0)
+
+
 class OpenAITextClientResilienceTests(unittest.TestCase):
     """El SDK de OpenAI reintenta automáticamente errores transitorios (conexión, 429, 5xx) con
     backoff propio si se le pasan `timeout`/`max_retries` — no hace falta un bucle de reintentos
