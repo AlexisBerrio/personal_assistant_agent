@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "assistant-personal"
+version = "0.1.0"
+description = "Asistente personal modular (dominio/aplicación/infraestructura/interfaces) — proyecto pedagógico."
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi==0.115.0",
+    "uvicorn[standard]==0.31.1",
+    "pydantic==2.11.0",
+    "pydantic-settings==2.14.2",
+    "motor==3.7.1",
+    "httpx==0.27.2",
+    "structlog>=26.1.0",
+    "python-dotenv==1.2.2",
+    "pyyaml>=6.0",
+    # `opentelemetry-api` (no el SDK) va en base: cualquier módulo puede pedir un tracer con
+    # `trace.get_tracer(...)` y obtener spans no-op de costo ~cero si nadie configuró un
+    # `TracerProvider` real — así el código de instrumentación no depende de que `[otel]` esté
+    # instalado. El SDK/exporter/auto-instrumentación (el peso real) vive en `[otel]`.
+    "opentelemetry-api==1.44.0",
+]
+
+[project.optional-dependencies]
+llm = ["openai==1.54.0"]
+mcp = ["mcp==1.27.1"]
+otel = [
+    "opentelemetry-sdk==1.44.0",
+    "opentelemetry-exporter-otlp-proto-grpc==1.44.0",
+    "opentelemetry-instrumentation-fastapi==0.65b0",
+    "opentelemetry-instrumentation-pymongo==0.65b0",
+]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.6", "mypy>=1.11"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+# Sin esto, pytest inserta `tests/` en sys.path (no la raíz del repo), y `from app import app`
+# falla con ModuleNotFoundError — `app.py` vive en la raíz, no bajo `src/`. `python -m unittest
+# discover` no tiene este problema porque ya corre con la raíz del repo como cwd.
+pythonpath = ["."]
+markers = [
+    "eval: llama al LLM real (golden dataset del router); excluido del run por defecto con -m 'not eval'",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+# E/F/I: pycodestyle errores + pyflakes + orden de imports (set original).
+# W: pycodestyle warnings (espacios en blanco al final de línea, etc.).
+# N: pep8-naming — nombres de clases/funciones/variables no estándar.
+# UP: pyupgrade — sintaxis moderna de Python (target-version arriba).
+# B: flake8-bugbear — patrones que suelen esconder bugs reales.
+# C4: flake8-comprehensions — comprensiones innecesariamente complejas.
+# SIM: flake8-simplify — simplificaciones de lógica condicional.
+# RUF: reglas propias de Ruff.
+# ERA: código comentado (código muerto dejado como comentario).
+# No se activa `preview`: reglas experimentales que cambian sin aviso entre versiones — mala
+# idea para un gate de CI (ej. E262/E265, espaciado de comentarios, viven ahí en esta versión).
+select = ["E", "F", "I", "W", "N", "UP", "B", "C4", "SIM", "RUF", "ERA"]
+
+[tool.ruff.lint.per-file-ignores]
+# Literales de fixtures/mocks en tests: partirlos no aporta claridad.
+"tests/*" = ["E501"]
+# `Depends(...)` en un valor por defecto es el patrón de inyección de dependencias que FastAPI
+# exige explícitamente — no es el antipatrón genérico que B008 detecta en el resto del código.
+"app.py" = ["B008"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["src.assistant_personal.domain.*", "src.assistant_personal.application.*"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+warn_return_any = true
+warn_unused_ignores = true
+no_implicit_optional = true

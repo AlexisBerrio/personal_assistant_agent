@@ -1,0 +1,1270 @@
+# Anexo A — Arquitectura objetivo industrializada
+
+> **Estado:** propuesta de diseño. Este anexo no describe el sistema actual, sino el destino al que se
+> converge de forma incremental a lo largo de las fases 0–8 ya definidas en el roadmap.
+> **Alcance:** empaquetado, configuración, observabilidad, CI/CD, containerización, estrategia de agentes,
+> memoria, RAG, seguridad, testing y multi-tenancy.
+> **Regla de oro:** cada cambio debe dejar el sistema funcional, respetar la separación
+> `domain / application / infrastructure / interfaces`, y no introducir complejidad que no se pueda explicar
+> en una sesión de aprendizaje.
+
+## A.0 Cómo leer este anexo: clasificación de propuestas
+
+Cada propuesta no trivial está etiquetada con uno de estos tres niveles. La etiqueta es la parte
+importante: dice **si adoptar ahora, si esperar a una fase, o si no adoptar todavía**.
+
+| Etiqueta | Significado | Criterio de adopción |
+| --- | --- | --- |
+| 🟢 **Higiene inmediata** | Coste bajo (horas), beneficio inmediato, reduce riesgo de errores silenciosos. | Adoptar ya, en Fase 0 o 1. |
+| 🟡 **Industrialización esperable** | Coste moderado (días), se justifica porque una fase próxima lo va a necesitar de todos modos. | Adoptar cuando entre la fase que la consume, no antes. |
+| 🔴 **Vanguardia opcional** | Coste alto o complejidad conceptual alta. Riesgo real de adopción prematura. | Solo si se cumple el criterio concreto que se indica. Si el criterio no se cumple, **no adoptar** y dejarlo documentado como decisión consciente. |
+
+Principio transversal: **la deuda técnica que produce fallos silenciosos se paga antes que la que produce
+fallos ruidosos.** El bug de bridging sync/async de la memoria de sesión (§A.7) es el ejemplo canónico y es
+la prioridad número uno de Fase 0.
+
+---
+
+## A.1 Arquitectura de componentes objetivo
+
+```mermaid
+graph TB
+    subgraph clientes["Clientes"]
+        CLI["CLI conversacional"]
+        HTTP["Cliente HTTP / futuro frontend"]
+        ALEXA["Alexa Skill (Fase 6)"]
+        MCPC["Cliente MCP externo<br/>(Claude Desktop, IDE)"]
+    end
+
+    subgraph interfaces["interfaces/ — adaptadores de entrada"]
+        API["FastAPI app.py<br/>routers + DI + middleware<br/>request-id, handlers, lifespan"]
+        CLIA["Adaptador CLI"]
+        MCPS["Servidor MCP (FastMCP)<br/>expone tools de tareas"]
+        AUTHM["Middleware de auth<br/>(Fase 7)"]
+    end
+
+    subgraph application["application/ — casos de uso"]
+        ORCH["TaskOrchestrator<br/>decide acción"]
+        ROUTER["ProductionIntentRouter<br/>reglas -> LLM pequeño -> clarify"]
+        TS["TaskService"]
+        MEM["MemoryService (nuevo)<br/>corto + largo plazo"]
+        CTX["AgentContext<br/>+ ContextBuilder"]
+        GUARD["Guardrails<br/>(Fase 4)"]
+    end
+
+    subgraph domain["domain/ — núcleo puro"]
+        ENT["Entidades: Task, Session,<br/>MemoryItem, Tenant"]
+        PORTS["Ports (Protocols):<br/>TaskRepository, SessionMemoryRepository,<br/>LongTermMemoryRepository, LLMClient,<br/>IntentRouter, Clock, UnitOfWork"]
+    end
+
+    subgraph infrastructure["infrastructure/ — adaptadores de salida"]
+        MONGOR["Repositorios Mongo (Motor async)"]
+        LLMA["Adaptador LLM<br/>AsyncOpenAI + reintentos + presupuesto"]
+        MCPT["Implementación de tools MCP"]
+        OBS["Observabilidad<br/>structlog + OTel"]
+        CFG["Settings (pydantic-settings)"]
+        VEC["Adaptador vectorial<br/>(Atlas Vector Search) — condicional"]
+    end
+
+    subgraph externo["Infraestructura externa"]
+        MDB[("MongoDB<br/>tasks, sessions, memory")]
+        OAI["OpenAI API"]
+        OTLP["Collector OTLP<br/>(Fase 7)"]
+        SEC["Gestor de secretos<br/>(.env -> vault, Fase 7+)"]
+    end
+
+    CLI --> CLIA
+    HTTP --> API
+    ALEXA --> API
+    MCPC --> MCPS
+    API --> AUTHM
+    AUTHM --> ORCH
+    CLIA --> ORCH
+    MCPS --> TS
+
+    ORCH --> ROUTER
+    ORCH --> TS
+    ORCH --> MEM
+    ORCH --> CTX
+    ORCH --> GUARD
+    ROUTER --> CTX
+
+    ORCH -.usa ports.-> PORTS
+    TS -.usa ports.-> PORTS
+    MEM -.usa ports.-> PORTS
+    ROUTER -.usa ports.-> PORTS
+    PORTS --- ENT
+
+    MONGOR -.implementa.-> PORTS
+    LLMA -.implementa.-> PORTS
+    VEC -.implementa.-> PORTS
+
+    MONGOR --> MDB
+    LLMA --> OAI
+    OBS --> OTLP
+    CFG --> SEC
+    VEC --> MDB
+
+    style domain fill:#f6f6f4,stroke:#333,stroke-width:2px
+    style application fill:#f0f4f8,stroke:#333
+    style infrastructure fill:#f8f4f0,stroke:#333
+    style interfaces fill:#f4f0f8,stroke:#333
+```
+
+**Lecturas clave del diagrama**
+
+- `domain/` no importa nada de las otras capas. Sigue siendo la regla estructural que no se negocia.
+- Todo lo nuevo entra **como port + adaptador**, nunca como dependencia directa desde `application/`.
+  Esto incluye el LLM: hoy el cliente OpenAI se usa de forma síncrona y acoplada; en el diseño objetivo es
+  un `LLMClient` (Protocol) con un adaptador `AsyncOpenAI`.
+- El servidor MCP es un **adaptador de entrada más**, no un caso de uso. Entra por `interfaces/` y baja a
+  `TaskService`, exactamente igual que la API REST. Esa simetría es lo que permite que MCP y REST compartan
+  reglas de negocio y validación sin duplicar lógica.
+- Los componentes marcados con fase (`AUTHM`, `GUARD`, `OBS`, `VEC`) existen en el diagrama para fijar
+  **dónde encajarán**, no para construirlos ya.
+
+---
+
+## A.2 Flujo de datos de una interacción típica
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Usuario
+    participant I as interfaces/<br/>API o CLI
+    participant O as TaskOrchestrator
+    participant M as MemoryService
+    participant R as IntentRouter
+    participant L as LLM (gpt-4o-mini)
+    participant T as TaskService / tools MCP
+    participant DB as MongoDB
+
+    U->>I: "recuérdame llamar al banco mañana"
+    I->>I: request-id + auth (Fase 7)
+    I->>O: manejar_mensaje(mensaje, session_id, tenant_id)
+
+    O->>M: cargar_contexto(session_id)
+    M->>DB: leer sesión (await, sin bridging)
+    DB-->>M: últimos N turnos + resumen
+    M-->>O: AgentContext
+
+    O->>R: clasificar(mensaje, contexto)
+    R->>R: reglas rápidas (regex / keywords)
+    alt regla coincide con confianza alta
+        R-->>O: intención + entidades (coste 0, sin LLM)
+    else sin coincidencia
+        R->>L: clasificación estructurada (JSON schema)
+        L-->>R: intención + confianza + entidades
+        alt confianza < umbral
+            R-->>O: intención = clarify
+        else
+            R-->>O: intención + entidades
+        end
+    end
+
+    O->>O: guardrails: validar acción y parámetros (Fase 4)
+
+    alt intención = clarify
+        O-->>I: pregunta de desambiguación
+    else acción ejecutable
+        O->>T: crear_tarea(titulo, fecha, tenant_id)
+        T->>DB: insert en tasks (índice por tenant_id)
+        DB-->>T: Task persistida
+        T-->>O: Task
+    end
+
+    O->>M: guardar_turno(session_id, mensaje, respuesta)
+    M->>DB: upsert sesión
+    O-->>I: respuesta en lenguaje natural
+    I-->>U: "Anotado: llamar al banco, mañana."
+
+    note over I,DB: Toda la interacción comparte un trace_id.<br/>Se registran: intención, si usó LLM,<br/>tokens, latencia por tramo y resultado.
+```
+
+**Invariantes del flujo**
+
+1. **El camino barato va primero.** Reglas antes que LLM. Cada interacción registra si consumió LLM: es la
+   métrica que permite discutir coste con datos y no con intuición.
+2. **La baja confianza no adivina, pregunta.** `clarify` es una salida de primera clase, no un fallback
+   avergonzado.
+3. **La escritura en memoria ocurre después de la acción**, y su fallo se registra explícitamente. Nunca
+   `except: pass`.
+4. **`tenant_id` viaja por todo el flujo desde el día uno** como campo, aunque hoy valga siempre
+   `"default"` (§A.11). Añadirlo después obliga a migrar datos; llevarlo desde ya cuesta un parámetro.
+
+---
+
+## A.3 Empaquetado y gestión de dependencias
+
+**Objetivo:** que el proyecto se instale con un comando, que las dependencias sean explícitas y
+reproducibles, y que desaparezcan los hacks de `sys.path`.
+
+### 🟢 Higiene inmediata (Fase 0)
+
+- ✅ **`pyproject.toml` con layout `src/`.** Metadatos y dependencias en un único fichero. Instalación
+  editable: `pip install -e ".[dev,llm,mcp]"`. `sys.path` ya no se toca en ningún fichero del repo — se
+  eliminó el hack de `interfaces/cli.py` (insertaba la raíz del repo a mano para que el CLI funcionara
+  invocado desde su propia carpeta). Faltaron `__init__.py` en cinco paquetes (`assistant_personal/`,
+  `infrastructure/mcp/`, `infrastructure/mcp/tools/`, `infrastructure/persistence/`,
+  `infrastructure/routers/`) que "funcionaban" hoy solo por namespace packages implícitos (PEP 420) —
+  se agregaron para que el auto-discovery de `setuptools` los encuentre de forma estándar.
+  Configuración de `ruff`/`mypy` queda pendiente (no es bloqueante para el resto de Fase 0).
+- ✅ **Declarar `motor` explícitamente**, y de paso `pydantic-settings` y `structlog` (ver 0.4/0.10). Toda
+  dependencia importada en `src/` está declarada.
+- ✅ **Separar grupos de dependencias:** base (`fastapi`, `pydantic-settings`, `motor`, `httpx`,
+  `structlog`, `python-dotenv`), `[llm]` (`openai`), `[mcp]` (`mcp`), `[dev]` (`pytest`, `pytest-asyncio`).
+  `ruff`/`mypy` quedan fuera de `[dev]` por ahora (no estaban en uso en el repo; agregarlos sin
+  configurarlos sería ruido).
+- **Fijar versiones con rangos conservadores y lockfile** — pendiente (depende de adoptar `uv`, Fase 1).
+  **Hallazgo al migrar:** `requirements.txt` tenía dos inconsistencias reales sin detectar —
+  `starlette>=0.40.0,<0.47.0` era incompatible con `fastapi==0.115.0` (que en realidad exige
+  `starlette<0.39.0,>=0.37.2`), y `pymongo==4.8.0` era incompatible con `motor==3.7.1` (exige
+  `pymongo>=4.9,<5.0`, y el entorno ya corría con pymongo 4.17.0 en la práctica). `pip install -r
+  requirements.txt` nunca lo detectó porque instala línea por línea sin resolver dependencias de forma
+  cruzada; `pip install -e .` con `pyproject.toml` sí lo bloqueó de inmediato. Se resolvió dejando que
+  `fastapi`/`motor` gestionen esas dos como transitivas, sin pin explícito. `requirements.txt` se eliminó
+  (duplicaba `pyproject.toml` y fue la causa raíz del drift).
+
+### 🟡 Industrialización esperable (Fase 1)
+
+- **Adoptar `uv` como gestor.** Sustituye a pip para resolución e instalación (`uv sync`, `uv run`,
+  `uv lock`), genera lockfile determinista y es órdenes de magnitud más rápido en CI. Compatible con
+  `pyproject.toml` estándar: si se abandona, se vuelve a pip sin reescribir nada. Es la elección
+  recomendada frente a Poetry, que impone su propio flujo y aporta poco a un proyecto de este tamaño.
+- **Versionado semántico + `CHANGELOG.md`.** Con propósito pedagógico: obliga a nombrar qué cambió en cada
+  paso.
+
+### Definition of Done
+
+- [x] `git clone && uv sync && uv run pytest` funciona en una máquina limpia (ítem 1.1).
+- [x] Ningún fichero del repo manipula `sys.path`.
+- [x] `pip check` pasa sin avisos.
+- [x] Toda librería importada en `src/` aparece en `pyproject.toml`.
+- [x] Lockfile versionado (`uv.lock`, ítem 1.1).
+
+---
+
+## A.4 Configuración y secretos
+
+**Objetivo:** una sola fuente de verdad de configuración, tipada y validada al arrancar; cero secretos en
+el repo; fallo temprano y ruidoso ante configuración inválida.
+
+### 🟢 Higiene inmediata (Fase 0)
+
+- **Un único `Settings` con `pydantic-settings`** (`BaseSettings`), instanciado una vez en el `lifespan` de
+  FastAPI e inyectado por `Depends`. Elimina los dos mecanismos actuales de carga de entorno: se prohíbe
+  `os.getenv` fuera de `infrastructure/config`.
+- **Resolver la inconsistencia de nombre de base de datos.** Un único campo `mongo_database` consumido por
+  todos los repositorios. El repositorio de memoria de sesión no define su propio default. Este bug hace
+  que datos que se creen mirar en una colección vivan en otra: es exactamente la clase de fallo silencioso
+  que se paga primero.
+- **`.env.example` versionado**, con todas las claves, valores de ejemplo no sensibles y un comentario por
+  variable. Es la documentación operativa mínima del proyecto.
+- **Rotar la API key de OpenAI expuesta** y confirmar que `.env` está en `.gitignore`. Una clave que
+  estuvo en una máquina de desarrollo se considera comprometida por defecto.
+- **Validación estricta al arrancar:** tipos, campos obligatorios y `SecretStr` para todo secreto (evita
+  que aparezca en logs o en un `repr`). Si falta configuración, el proceso no arranca.
+
+### 🟡 Industrialización esperable (Fase 7)
+
+- **Secretos inyectados por el entorno de despliegue**, no por ficheros. En un despliegue de bajo coste
+  (Fly.io, Railway, Render) basta el gestor de secretos de la plataforma.
+- **Perfiles de entorno** (`local`, `ci`, `prod`) que solo cambien valores, nunca estructura.
+
+### 🔴 Vanguardia opcional
+
+- **Vault / AWS Secrets Manager con rotación automática.** **Criterio:** adoptar solo cuando exista más de
+  un entorno productivo real con datos de terceros, o cuando más de dos personas necesiten acceso
+  diferenciado a credenciales. Antes de eso, el gestor de secretos de la plataforma de despliegue cubre el
+  caso con una fracción del coste operativo.
+- **Feature flags dinámicos.** **Criterio:** solo cuando haya usuarios reales a los que exponer cambios de
+  forma gradual. Hasta entonces, un campo booleano en `Settings` es suficiente y más legible.
+
+### Definition of Done
+
+- [ ] `grep -rn "os.getenv" src/` solo devuelve resultados en el módulo de configuración.
+- [ ] Arrancar sin una variable obligatoria produce un error claro que la nombra.
+- [x] `.env.example` cubre el 100 % de los campos de `Settings` (`mongo_uri`, `mongo_db_name`,
+      `openai_api_key`, `openai_model`, `llm_provider`, `ollama_base_url`, `ollama_model`), con un comentario por variable.
+- [ ] Ningún secreto aparece en logs ni en respuestas de error (test que lo verifique).
+- [ ] Un único nombre de base de datos en todo el código, verificado por test.
+
+---
+
+## A.5 Observabilidad
+
+**Objetivo:** poder responder, sobre cualquier interacción, qué intención se detectó, si se usó LLM, cuánto
+costó y dónde se fue el tiempo. En un sistema con LLM esto no es lujo operativo: es el instrumento de
+diagnóstico principal, porque los fallos son probabilísticos y no reproducibles a mano.
+
+### 🟢 Higiene inmediata (Fase 0–1)
+
+- ✅ **Eliminar todos los `print`.** Logging estructurado en JSON con `structlog`, un solo configurador en
+  `infrastructure/observabilidad/logging.py` (`configure_logging`/`get_logger`, se autoconfigura al
+  importarse). Reemplazados los dos `print` usados como diagnóstico (`client.py`: fallo de conexión a
+  Mongo; `app.py`: evento de auditoría de creación de tarea). Los `print` de `interfaces/cli.py` se dejaron
+  intactos a propósito: son la salida real del producto (lo que el usuario lee en la terminal), no logging.
+- ✅ **Propagar el `request_id` existente** a todos los logs de la petición vía context vars. Se consolidó
+  además el middleware duplicado que existía (`RequestIdMiddleware` + `add_request_id_header` hacían lo
+  mismo, generando dos UUIDs independientes — se dejó solo uno) y se agregó
+  `structlog.contextvars.bind_contextvars(request_id=...)`/`clear_contextvars()` en su `dispatch`, así que
+  cualquier log emitido durante esa petición, en cualquier módulo, incluye `request_id` sin pasarlo a mano.
+- **Campos mínimos por interacción conversacional:** `request_id`, `session_id`, `tenant_id`, `intencion`,
+  `confianza`, `uso_llm` (bool), `modelo`, `tokens_entrada`, `tokens_salida`, `latencia_ms_total`,
+  `latencia_ms_llm`, `resultado`. Con estos doce campos ya se puede calcular coste por interacción y tasa
+  de `clarify` sin instrumentación adicional. **Pendiente** — el logging estructurado ya existe pero
+  ninguna interacción emite todavía estos campos (depende del router/orquestador, Fase 2+).
+- **Nunca registrar contenido sensible del usuario por defecto.** Pendiente de verificar con un test
+  explícito (mismo pendiente que `SecretStr`, ver §A.11).
+
+### 🟡 Industrialización esperable (Fase 7, adelantable a Fase 4)
+
+- **OpenTelemetry con tracing distribuido.** Instrumentación automática de FastAPI y Motor, más spans
+  manuales en los tramos que importan: `router.clasificar`, `llm.completar`, `orquestador.ejecutar`,
+  `memoria.cargar`. Exportar por OTLP a un backend gratuito o autoalojado (Jaeger en local, Grafana Tempo
+  o Langfuse en cloud).
+- **Métricas** (contadores e histogramas): interacciones por intención, ratio de resolución por reglas vs
+  LLM, latencia p50/p95 por tramo, tokens acumulados por día, errores por tipo.
+- **Nota de secuencia:** si Fase 4 (agentes) llega antes que Fase 7, **adelantar el tracing a Fase 4**.
+  Depurar un agente con múltiples saltos sin traces es la forma más rápida de perder días.
+
+### 🔴 Vanguardia opcional
+
+- **Plataforma de observabilidad específica de LLM** (Langfuse, Phoenix) con replay de prompts y
+  anotación humana. **Criterio:** adoptar cuando el golden dataset del router (§A.10) supere ~200 casos o
+  cuando haya más de un prompt en producción cuya calidad haya que comparar entre versiones. Antes de eso,
+  logs estructurados + un script de análisis cubren el caso.
+- **SLOs con alerting.** **Criterio:** solo con usuarios externos y alguien de guardia. Un SLO sin nadie
+  que reaccione es decoración.
+
+### Definition of Done
+
+- [x] Cero `print` usados como logging en `src/` (los de `interfaces/cli.py` son salida del producto, no
+      diagnóstico — ver nota arriba).
+- [x] Todo log de una petición comparte `request_id` (contextvars en `RequestIdMiddleware`).
+- [ ] Existe una consulta o script que devuelve coste estimado y tasa de `clarify` del último día.
+- [ ] Un test verifica que los secretos y los prompts no se registran con la configuración por defecto.
+
+---
+
+## A.6 CI/CD con GitHub Actions
+
+**Objetivo:** que ningún cambio que rompa formato, tipos, tests o la calidad del router llegue a `main`.
+En un proyecto educativo la CI tiene un valor extra: convierte los principios en verificaciones automáticas
+en vez de recordatorios.
+
+### Pipeline objetivo
+
+```mermaid
+graph LR
+    PR["Pull request"] --> LINT["ruff format --check<br/>ruff check"]
+    PR --> TYPE["mypy --strict en domain/<br/>y application/"]
+    PR --> UNIT["pytest unit<br/>cobertura mínima"]
+    LINT --> INT
+    TYPE --> INT
+    UNIT --> INT["pytest integration<br/>service container Mongo"]
+    INT --> SEC["pip-audit + gitleaks"]
+    SEC --> EVAL["Evaluación del router<br/>golden dataset"]
+    EVAL --> MERGE["Merge a main"]
+    MERGE --> BUILD["Build imagen Docker<br/>(Fase 7)"]
+    BUILD --> DEPLOY["Deploy a staging<br/>(Fase 7)"]
+```
+
+### 🟢 Higiene inmediata (Fase 0–1)
+
+- **Job `calidad`:** `ruff format --check`, `ruff check`, `mypy` en modo estricto sobre `domain/` y
+  `application/` (gradual en el resto: exigir estricto en todo el repo de golpe genera cientos de errores
+  y se abandona).
+- **Job `tests`:** unitarios con umbral de cobertura (empezar en el valor actual y subirlo, nunca bajarlo).
+- **Matriz Python 3.10 y 3.12** para detectar dependencias de versión temprano.
+- **`gitleaks`** en cada PR. Barato, y este proyecto ya tuvo un incidente de clave expuesta.
+- **Caché de `uv`** en CI: reduce el tiempo de pipeline a segundos.
+
+### 🟡 Industrialización esperable (Fase 1–4)
+
+- **Job `integration` con Mongo real** como *service container* de GitHub Actions (§A.10).
+- **Job `eval-router`** — la pieza más específica de este proyecto y la que más valor aporta:
+  1. Ejecuta el router sobre el golden dataset versionado (`tests/eval/golden_router.jsonl`).
+  2. Calcula accuracy global, accuracy por intención, tasa de `clarify` y coste en tokens.
+  3. Compara contra los umbrales declarados en `tests/eval/umbrales.yaml`.
+  4. **Falla el PR si la accuracy cae**; publica una tabla comparativa como comentario.
+  5. Se ejecuta con `gpt-4o-mini` real solo en PRs con etiqueta `evaluar-router` o en `main` (para no
+     pagar LLM en cada push); en el resto usa un cliente grabado tipo VCR.
+- **`pip-audit`** para vulnerabilidades de dependencias.
+
+### 🔴 Vanguardia opcional
+
+- **Despliegue continuo automático a producción.** **Criterio:** solo cuando existan integration tests y
+  el job de evaluación sea fiable. Hasta entonces, deploy manual con un botón (`workflow_dispatch`).
+- **Entornos efímeros por PR.** **Criterio:** solo si hay revisores no técnicos que necesiten probar
+  cambios. En un proyecto de una persona es coste puro.
+
+### Definition of Done
+
+- [ ] Un PR con error de formato, de tipos o test roto no se puede mergear.
+- [ ] El pipeline de PR tarda menos de 3 minutos en la ruta rápida.
+- [x] `eval-router` produce un informe legible y bloquea regresiones de accuracy (ítem 2.4).
+- [ ] `main` está protegida y exige los checks anteriores.
+
+---
+
+## A.7 Containerización *(opcional — evaluar en Fase 7)*
+
+**Objetivo:** entorno de desarrollo reproducible y artefacto de despliegue único.
+**Trade-off honesto:** hasta Fase 7 el proyecto puede vivir perfectamente con `uv sync` y un Mongo local o
+un cluster gratuito de Atlas. Docker añade una capa de conceptos (imágenes, redes, volúmenes) que compite
+por atención con los objetivos de aprendizaje de las fases 1–6.
+
+**Excepción recomendada:** un `docker-compose.yml` mínimo *solo con Mongo* (sin la aplicación) es 🟢
+higiene inmediata útil desde Fase 1. Da un Mongo desechable para integration tests locales, cuesta diez
+líneas y no obliga a containerizar la aplicación.
+
+### 🟡 Industrialización esperable (Fase 7)
+
+- **`Dockerfile` multi-stage:** stage `builder` con `uv` que resuelve dependencias en un venv, stage
+  `runtime` sobre `python:3.12-slim` que copia solo el venv y `src/`. Usuario no root, `HEALTHCHECK`
+  apuntando a `/health`, sin herramientas de build en la imagen final. Objetivo: imagen < 200 MB.
+- **`docker-compose.yml` completo** (`api`, `mongo`, opcionalmente `collector` OTLP) con perfiles para
+  levantar solo lo necesario.
+- **`.dockerignore`** que excluya `.env`, `.git`, tests y caché.
+
+### 🔴 Vanguardia opcional
+
+- **Kubernetes / Helm.** **Criterio:** solo con múltiples servicios que escalen de forma independiente y
+  tráfico que lo justifique. Para un servicio FastAPI, una plataforma PaaS es más barata y más simple en
+  todos los ejes durante mucho tiempo.
+- **Distroless / imágenes multi-arch.** **Criterio:** cuando haya un requisito real de superficie de
+  ataque mínima o de despliegue en ARM.
+
+### Definition of Done
+
+- [x] `docker compose up mongo` deja un Mongo listo para integration tests locales. Verificado de punta a
+      punta con Docker Desktop instalado: contenedor `assistant_personal_mongo` arriba y `(healthy)`, y un
+      ciclo real de escritura/lectura con `motor` confirmado (`tests/test_session_memory_integration.py`,
+      ítem 0.9). `docker compose down` deja el volumen (`personal_assistant_agent_mongo_data`) sin borrar
+      entre sesiones.
+      **Hallazgo durante la verificación:** el mapeo original a `27017:27017` daba un falso positivo en
+      esta máquina — hay un MongoDB nativo corriendo como servicio de Windows en ese mismo puerto, así que
+      un test contra `localhost:27017` seguía "pasando" incluso con el contenedor apagado, porque hablaba
+      con el servicio nativo sin que nadie lo notara. Se remapeó a `27018:27017` para que el puerto del
+      host sea inequívocamente el del contenedor desechable, nunca el de un Mongo que ya tengas instalado
+      localmente.
+- [ ] (Fase 7) `docker build` produce una imagen que arranca solo con variables de entorno.
+- [ ] (Fase 7) La imagen no contiene secretos ni dependencias de desarrollo.
+
+---
+
+## A.8 Estrategia de agentes
+
+### Diagnóstico del patrón actual
+
+El diseño actual — `ProductionIntentRouter` (reglas → LLM pequeño → `clarify`) seguido de
+`TaskOrchestrator` — no es una limitación, es una decisión buena y a contracorriente de la moda:
+
+- **Coste y latencia bajo control.** Las reglas resuelven gratis los casos frecuentes; el LLM pequeño solo
+  entra cuando hace falta.
+- **Comportamiento predecible y testeable.** El router es una función clasificadora con entrada y salida
+  acotadas: se puede evaluar con un dataset (§A.10). Un agente que decide libremente qué tool llamar es
+  mucho más difícil de evaluar.
+- **Excelente para enseñar.** Cada decisión del sistema es inspeccionable y explicable.
+- **`clarify` como salida explícita** es una práctica que muchos sistemas en producción no tienen.
+
+**Recomendación: mantener orchestrator + router y profundizar en él durante las fases 2–4.** No migrar
+todavía.
+
+### Comparativa de alternativas
+
+| Patrón | Ventaja principal | Coste real | Veredicto |
+| --- | --- | --- | --- |
+| **Router + orquestador (actual)** | Predecible, barato, evaluable, pedagógico | Requiere código explícito por intención | 🟢 **Mantener y profundizar** (Fases 2–4) |
+| **Single-agent-with-tools** (el LLM elige la tool vía MCP) | Menos código de routing; absorbe intenciones nuevas sin tocar código | Coste por llamada más alto, latencia mayor, comportamiento menos predecible, requiere guardrails desde el día uno | 🟡 **Añadir detrás del router** (ítem 4.3): el router sigue filtrando lo determinista gratis, pero el agente — no un camino raro — ejecuta todo lo que quede por interpretar |
+| **State graph (LangGraph)** | Estados y transiciones explícitos, checkpointing, flujos multi-turno complejos | Framework grande, opinionado, con su propio modelo mental; oscurece la arquitectura hexagonal que el proyecto quiere enseñar | 🔴 **Vanguardia opcional** — criterio abajo |
+
+### Evolución recomendada por fases
+
+**Fase 2 — Ingeniería de prompts y salidas** 🟢
+Formalizar el contrato del router: salida estructurada validada con Pydantic (structured outputs / JSON
+schema), no parsing de texto libre. Definir política explícita ante salida inválida: un reintento con el
+error como contexto, luego `clarify`. Versionar los prompts como ficheros con identificador, para poder
+correlacionar métricas con versión de prompt.
+
+**Fase 3 — MCP como capa de tools canónica** 🟢
+Que las tools MCP sean la **única** forma de ejecutar acciones, tanto para el orquestador como para un
+cliente MCP externo. Esto elimina la duplicación de reglas de negocio y es la precondición técnica de
+cualquier migración futura de patrón de agente: si las tools están bien definidas, cambiar quién las
+invoca es un cambio local.
+
+**Fase 4 — Patrón híbrido: router recomienda, agente ejecuta** 🟡
+La evolución de mejor relación coste/beneficio:
+
+```mermaid
+graph TD
+    MSG["Mensaje de usuario"] --> RULES["Reglas rápidas<br/>(hard rules, ítem 4.11)"]
+    RULES -->|comando exacto, sin nada que interpretar| EXEC["Ejecutar tool MCP directo"]
+    RULES -->|no coincide| CLS["LLM clasificador pequeño"]
+    CLS -->|acción completa, cero interpretación pendiente| EXEC
+    CLS -->|falta interpretar texto libre: referencia, filtro, fecha| AGENT["Agente con tools MCP<br/>presupuesto máx. N pasos"]
+    CLS -->|multi_task: 2+ acciones| AGENT
+    CLS -->|confianza baja| CLAR["clarify: preguntar"]
+    AGENT --> GUARD["Guardrails:<br/>whitelist de tools,<br/>límite de pasos,<br/>confirmación de escrituras"]
+    GUARD --> EXEC
+    AGENT -->|excede presupuesto| CLAR
+    EXEC --> RESP["Respuesta en lenguaje natural"]
+    CLAR --> RESP
+```
+
+`multi_task` es una ruta más del clasificador (mismo contrato de `IntentClassification`, no un esquema
+paralelo): el mensaje pide 2+ acciones de dominio distintas. Hoy (ítem 2.8) esa detección ya existe pero
+degrada a `clarify` porque no hay quién ejecute varias acciones en un turno; con el agente de 4.3 disponible,
+`multi_task` deja de ser un callejón sin salida — el router entrega la intención completa y el agente la
+descompone en llamadas MCP secuenciales, con los mismos guardrails que cualquier otro camino del agente.
+
+**El agente no es un camino raro para casos ambiguos: es quien ejecuta la mayoría de las acciones vía MCP**,
+siguiendo la recomendación del router. La ruta barata (reglas duras / LLM sin ambigüedad, EXEC directo) solo
+cubre el subconjunto real y acotado de comandos que no requieren interpretar nada del mensaje — el criterio
+exacto ya está fijado en el ítem 4.11: el router invoca una tool directo únicamente si tiene el 100 % de lo
+necesario sin interpretar lenguaje natural. Cualquier referencia difusa, filtro en texto libre o fecha
+relativa cae al agente. Guardrails obligatorios para el agente: whitelist de tools por rol, límite duro de
+pasos, confirmación humana para operaciones destructivas, timeout y presupuesto de tokens por interacción.
+
+**🎯 Foco estratégico permanente: "¿Cómo hago que la menor cantidad posible de peticiones necesiten un
+LLM?"** No es una pregunta retórica — es el criterio que debe guiar cada decisión de esta capa de aquí en
+adelante, más que "qué modelo usar" o "qué tan potente es el LLM". Cada petición que se resuelve por regla
+en vez de por LLM es gratis, instantánea y 100% predecible; cada una que sí necesita LLM debe además usar
+el modelo más barato que no sacrifique calidad medible (ver decisión de modelo, abajo). Los mecanismos que
+ya persiguen esto explícitamente: reglas duras (`EXACT_LIST_TASKS_COMMANDS`, ítem 4.11) para comandos
+exactos; el criterio de camino barato del propio 4.11 (el router solo llama al LLM si de verdad hace falta
+interpretar algo); y la caché semántica de intents sin parámetros (ítem 4.13, bloqueada hoy por falta de
+tráfico real, pero es la extensión natural de este foco una vez que existan datos de uso reales para
+justificarla). Al evaluar cualquier ítem futuro de esta fase, preguntar primero: ¿esto reduce el % de
+peticiones que necesitan LLM, o solo hace más barato/rápido el LLM que ya se estaba usando? Ambas cosas
+importan, pero la primera vale más.
+
+**Decisión de modelo — `gpt-4o-mini` vs. `gpt-4.1-nano` (benchmark real, 2026-08-24):** se evaluó si
+cambiar el modelo de `classify_intent` a `gpt-4.1-nano` (más barato por token, sin paso de razonamiento,
+posicionado por OpenAI para clasificación de baja latencia) mejoraría el foco de arriba. Benchmark contra
+los 109 casos de `golden_router.jsonl` (`tests/eval/benchmark_router_model.py`, no wireado a CI — es una
+herramienta de decisión puntual, no un gate):
+
+| | gpt-4o-mini | gpt-4.1-nano |
+| --- | --- | --- |
+| accuracy_global | 94.64% | **80.36%** (-14.3 pts) |
+| latencia_media_ms | 1292 | 1569 (peor) |
+| latencia_p95_ms | 1719 | 2327 (peor) |
+| costo_usd_x1000_casos | 0.161 | 0.113 (-30%) |
+
+**Conclusión: no se adopta.** El ahorro de costo (~$0.05 cada 1000 clasificaciones) es marginal en
+términos absolutos y viene con una caída de accuracy grande y sistemática, no ruido — 18 casos discrepantes,
+concentrados en dos reglas recientes y matizadas del prompt: `ask_knowledge_base` vs. otras rutas (8 casos)
+y `multi_task` (4 casos, ítem 4.9). El modelo más pequeño no sigue de forma confiable instrucciones finas
+en un prompt largo, y además resultó más lento en la práctica (contrario a su ficha pública). Se mantiene
+`gpt-4o-mini` como modelo del clasificador. Revisar esta decisión si aparece un modelo nuevo con mejor
+relación instruction-following/costo, evaluado siempre con este mismo benchmark antes de adoptar.
+
+**Criterio concreto para migrar a un state graph (LangGraph o equivalente):** adoptar **solo si se cumplen
+al menos dos** de estas condiciones, medidas con datos y no por intuición:
+
+1. Existen ≥ 3 flujos que requieren más de 2 turnos con estado intermedio (p. ej. planificar una semana
+   completa negociando prioridades).
+2. Se necesita persistir y reanudar ejecuciones a medias (human-in-the-loop diferido, aprobaciones).
+3. El código de orquestación supera ~500 líneas de control de flujo condicional y las modificaciones
+   empiezan a romper casos existentes de forma recurrente.
+4. Hacen falta especialistas paralelos con agregación de resultados.
+
+Si no se cumplen, el framework añade dependencia y complejidad conceptual sin resolver un problema real.
+Mitigación de riesgo mientras se decide: mantener la orquestación detrás de un port de `domain/`, de modo
+que un motor de grafo sería un adaptador más y no una reescritura.
+
+**🔴 Vanguardia opcional — librerías de guardrails de IA (NeMo Guardrails, Guardrails AI, LLM Guard y
+similares):** resuelven un problema distinto al de `application/guardrails.py` (ítem 4.2). Los guardrails
+de 4.2 son deterministas y de ejecución (whitelist de tools, límite de pasos, presupuesto de tokens,
+confirmación de escrituras) — no necesitan librería, son lógica de negocio simple y testeable. Estas
+librerías atacan otra capa: rails sobre el *contenido* conversacional (jailbreak/prompt injection, temas
+prohibidos, PII, fact-checking de la respuesta) — parcialmente ya cubierto, sin dependencia externa, por
+las reglas de seguridad explícitas del ítem 2.15 en `classify_intent.prompt.md`.
+
+**Criterio concreto:** adoptar solo si se cumple alguna de estas condiciones:
+1. El asistente se expone a usuarios externos no confiables (hoy es de un solo usuario, contexto
+   pedagógico) y hace falta filtrar contenido/temas de forma más robusta que reglas de prompt escritas a mano.
+2. Los ataques de prompt injection detectados en el golden dataset (§A.10) empiezan a superar lo que 2.15
+   puede cubrir mantenible a mano, medido por una tasa de falsos negativos creciente en evaluaciones reales.
+3. Se necesitan rails declarativos/configurables (sin tocar código Python en cada cambio) porque el equipo
+   de mantenimiento crece más allá de una persona.
+
+Si no se cumple ninguna, mantener el enfoque actual: 4.2 (ejecución) + 2.15 (contenido, en el prompt) cubren
+el caso real con cero dependencias nuevas y sin la latencia/opacidad extra de otra capa de LLM-as-guardrail.
+Documentar la decisión junto con la de state graph (ítem 4.5) cuando llegue el momento de evaluarla.
+
+**Decisión (ítem 4.5, 2026-08-24):** ninguno de los 7 criterios se cumple hoy. **No se adopta** ni un state
+graph ni una librería de guardrails de IA en este momento.
+
+*State graph* — los 4 criterios de arriba, contrastados con el estado real:
+1. Cero flujos con estado intermedio de más de 2 turnos — no existe siquiera el endpoint conversacional
+   (ítem 4.10) que sostendría ese caso.
+2. Nada que reanudar: las escrituras del agente son atómicas dentro de un turno, sin ejecuciones a medias
+   pendientes de aprobación.
+3. `_dispatch`/`_route` están muy por debajo de las ~500 líneas de control de flujo condicional del umbral,
+   y no hay evidencia de que las modificaciones recientes (4.9, 4.19) hayan roto casos existentes.
+4. No hay especialistas paralelos que agregar — un solo agente resuelve todo el catálogo de tools MCP.
+
+*Librerías de guardrails de IA* — los 3 criterios, contrastados con el estado real:
+1. El asistente sigue siendo de un solo usuario en contexto pedagógico, no expuesto a usuarios externos no
+   confiables.
+2. No existe todavía tráfico real (ítem 4.13 sigue bloqueado por lo mismo) del que medir una tasa de falsos
+   negativos de prompt injection creciente sobre las reglas de 2.15.
+3. El mantenimiento sigue siendo de una sola persona — no hay presión organizacional por rails declarativos.
+
+**Revisar esta decisión cuando:** exista el endpoint conversacional de 4.10 con tráfico real medible, o el
+proyecto pase a exponerse a usuarios externos (Fase 6+, Alexa). Hasta entonces, la orquestación se mantiene
+detrás del port de `domain/` (ítem 4.4, ya hecho) precisamente para que adoptar un state graph más adelante
+sea un adaptador nuevo, no una reescritura.
+
+### Definition of Done (Fase 4)
+
+- [x] El router devuelve un objeto Pydantic validado; una salida inválida nunca propaga a la ejecución
+      (ítem 2.1).
+- [x] Los prompts están versionados y las métricas se pueden filtrar por versión de prompt (ítem 2.2).
+- [x] Toda acción se ejecuta a través de una tool MCP; no hay caminos alternativos de escritura
+      — `TaskOrchestrator`/`POST /chat` y el CRUD estructurado de `app.py`
+      (`POST/PATCH/DELETE /tasks`) usan el mismo `McpTaskServiceClient`, ninguno llama a `TaskService`
+      en proceso.
+- [x] El agente tiene límite de pasos, whitelist de tools y presupuesto de tokens, con test que verifica
+      que se respetan (ítems 4.2 y 4.3, `test_stops_when_the_step_budget_is_exhausted`).
+- [x] El router puede emitir `multi_task` (2+ acciones en un mensaje) y el agente las ejecuta en secuencia
+      vía MCP, en vez de degradar siempre a `clarify` (ítem 4.9).
+- [x] Las reglas rápidas solo hacen match en operaciones sin parámetros por interpretar; cualquier filtro
+      o dato en lenguaje natural cae al agente, no solo las escrituras (ítem 4.11).
+- [x] Existe un documento de decisión que registra por qué **no** se adoptó un state graph ni una librería
+      de guardrails de IA, con los criterios anteriores evaluados (ítem 4.5).
+
+---
+
+## A.9 Estrategia de memoria
+
+Este es el área con el bug más grave del sistema y la que más cambia la percepción de calidad del
+asistente. Se separa en tres tipos con ciclos de vida distintos.
+
+| Tipo | Contenido | Almacén | Fase |
+| --- | --- | --- | --- |
+| **Corto plazo (sesión)** | Últimos N turnos de la conversación, estado de desambiguación | Mongo, TTL de horas/días | 0 (✅ bridging corregido, ver abajo) |
+| **Largo plazo (perfil)** | Preferencias, hechos estables ("trabajo hasta las 18h", "prefiero mañanas") | Mongo, persistente | 2 |
+| **Episódica / semántica** | Historial largo consultable por significado | Solo si RAG aplica (§A.10) | 5 |
+
+### 🟢 Fase 0 — Corregir el bridging sync/async (prioridad máxima)
+
+El repositorio de memoria de sesión hace bridging sync/async y, dentro del event loop real de FastAPI,
+probablemente no persiste y falla en silencio. Es el peor tipo de bug: los tests pasan (todo mockeado), la
+API responde 200, y el asistente simplemente no recuerda.
+
+**Estado: corregido.** `MongoSessionRepository` (`session_repository.py`) ya no usa `asyncio.run`/`_resolve_result`;
+expone `append_turn_async`, `add_context_item_async` y `get_context_summary_async` con `await` puro sobre
+Motor. `ShortTermMemory`/`AgentContext`/`TaskOrchestrator.handle_message_async` consumen estas variantes de
+extremo a extremo (dispatcher `_invoke_repository_async`, mismo patrón que `TaskService`). Las variantes
+síncronas de `ShortTermMemory`/`AgentContext` se conservan solo para `InMemorySessionRepository`
+(CLI/tests), y fallan de forma ruidosa (`AttributeError`) si alguien las invoca con un repositorio async,
+en vez de devolver `None` en silencio como antes.
+
+Plan:
+
+1. ~~**Convertir el repositorio a `async` de extremo a extremo.**~~ ✅ Hecho para la memoria de sesión.
+   Eliminado `asyncio.run` / `run_until_complete` en `session_repository.py`.
+2. **Prohibir el silencio.** Pendiente: los métodos async todavía no registran ni propagan fallos de
+   escritura explícitamente (siguen sin `try/except` que oculte errores, pero tampoco hay logging
+   estructurado — depende de §A.5, aún no implementado).
+3. **Test de integración contra Mongo real.** ✅ Hecho. Además del test async con forma de Motor
+   (`tests/test_orchestrator.py`, `tests/test_multi_turn_context.py`), existe
+   `tests/test_session_memory_integration.py`: escribe un turno con una instancia de
+   `MongoSessionRepository` y lo lee con otra, contra el Mongo real de `docker-compose.yml` (ítem 0.9,
+   verificado con Docker Desktop). Se salta automáticamente si el contenedor no está arriba.
+4. **Unificar el nombre de base de datos** con el `Settings` central (§A.4) — **pendiente**, no tocado en
+   esta corrección. Sigue existiendo el default `"personal_management"` en varios sitios vs.
+   `settings.mongo_db_name` (`"sample_mflix"` en `.env`).
+
+**Hallazgo nuevo durante la verificación: corregido.** `infrastructure/persistence/mongo/client.py` creaba
+`mongo_connection = MongoConnection()` a nivel de módulo y, si no había loop corriendo en el momento del
+import, hacía `asyncio.run(self._ensure_task_indexes())` para crear el índice de `personal_tasks`. Ese
+`asyncio.run` abría y cerraba su propio loop, dejando el cliente de Motor ligado a un loop ya cerrado.
+Al verificar el fix se descubrió que el problema era más profundo que solo el bootstrap de índices: Motor
+liga internamente su cliente (y el executor de hilos que usa) al loop que estaba activo la primera vez que
+se ejecutó una operación real. Cualquier reuso del mismo singleton desde un loop distinto — el patrón real
+del CLI interactivo, que antes abría un `asyncio.run` por turno — fallaba con
+`RuntimeError: Event loop is closed`, reproducido contra Mongo real.
+
+Corrección aplicada:
+- `MongoConnection.get_db()` ahora verifica en cada llamada si el loop activo cambió desde la última vez
+  que se creó el cliente, y si cambió, lo **recrea** (cerrando el anterior para no filtrar conexiones/hilos)
+  en vez de asumir que sigue siendo válido. Con un loop de vida larga (FastAPI/uvicorn) esto no cuesta nada
+  extra: el cliente se crea una sola vez, igual que antes.
+- El CLI interactivo (`interfaces/cli.py`) dejó de abrir un `asyncio.run` por mensaje; ahora
+  `_run_interactive_loop_async` corre dentro de un único `asyncio.run` para toda la sesión, evitando el
+  cruce de loops en el caso más común de uso real.
+- Test de regresión: `tests/test_mongo_connection_lifecycle.py`, que ejecuta dos operaciones reales contra
+  Mongo (vía `.env`) cada una en su propio `asyncio.run`, reproduciendo exactamente la condición que fallaba
+  antes. Se salta automáticamente si no hay conectividad a Mongo (no bloquea CI sin Mongo disponible).
+
+### 🟡 Fase 2 — Memoria de largo plazo persistida
+
+Hoy vive solo en memoria de proceso: se pierde en cada reinicio. Diseño objetivo:
+
+- Colección `memoria_larga` con documentos `{tenant_id, usuario_id, clave, valor, confianza, origen,
+  creado_en, actualizado_en, ttl?}`.
+- **Escritura por extracción explícita, no automática.** Al cierre de una interacción relevante, un paso
+  de extracción propone hechos candidatos; solo se persisten los que superan un umbral de confianza.
+  Escribir todo lo que el usuario dice envenena el contexto y encarece cada llamada.
+- **Lectura por relevancia acotada:** un `ContextBuilder` selecciona un presupuesto fijo de tokens
+  (p. ej. máximo 10 hechos) en lugar de volcar toda la memoria en el prompt. Esta es la diferencia entre
+  memoria útil y memoria que degrada la calidad.
+- **Resumen incremental de sesión** para conversaciones largas: cada N turnos, un LLM pequeño comprime los
+  turnos antiguos en un resumen y se descartan los originales del contexto activo.
+- **Derecho al olvido desde el diseño:** un endpoint que borre memoria por usuario. Requisito de
+  privacidad si el proyecto se productiza (§A.11), y trivial de añadir ahora frente a después.
+
+### 🔴 Vanguardia opcional
+
+- **Memoria vectorial semántica.** Ver §A.10: solo si el volumen y el tipo de dato lo justifican.
+- **Grafo de conocimiento del usuario.** **Criterio:** solo si aparecen consultas que requieran relaciones
+  multi-salto ("tareas del proyecto en el que trabaja la persona que me escribió el lunes"). Muy poco
+  probable en un asistente de tareas.
+- **Framework de memoria de terceros (mem0, Zep).** **Criterio:** solo si la gestión propia supera ~400
+  líneas y aparecen necesidades de deduplicación y resolución de conflictos entre hechos. Escribirla a
+  mano primero tiene valor pedagógico alto y es poco código.
+
+### Definition of Done
+
+- [x] Un test de integración prueba que un turno escrito en una petición se lee en la siguiente.
+      `tests/test_session_memory_integration.py` (ítem 0.9), contra el Mongo real de `docker-compose.yml`,
+      verificado con Docker Desktop instalado — más el test contra Mongo real del ciclo de vida de la
+      conexión (`tests/test_mongo_connection_lifecycle.py`, ítem 0.12).
+- [x] No queda bridging sync/async en el camino de ejecución de FastAPI. Corregido en la memoria de sesión
+      (`session_repository.py`) y en el bootstrap de conexión (`client.py`: rebind automático del cliente
+      Motor si el loop activo cambió, en vez de asumir que el cliente sigue siendo válido).
+- [ ] Ningún fallo de memoria se silencia; todos se registran con contexto.
+- [x] (Fase 2) La memoria de largo plazo sobrevive a un reinicio, verificado por test — ver ítem
+      2.5 y `tests/test_long_term_memory_integration.py`.
+- [x] (Fase 2) El contexto enviado al LLM respeta un presupuesto de tokens medible y registrado
+      — ver ítem 2.6, `ContextBuilder` y el campo `contexto_tokens` del log estructurado.
+
+---
+
+## A.10 Framework de decisión para RAG
+
+**Postura:** RAG no es una decisión binaria a priori, es la respuesta a un tipo concreto de consulta. Un
+gestor de tareas es un dominio **estructurado**: título, fecha, estado, etiquetas. Ese dominio se consulta
+mejor con filtros e índices de Mongo que con similitud vectorial, que es más caro, menos exacto y no
+garantiza recall completo. "Muéstrame las tareas pendientes de esta semana" debe ser una query, nunca una
+búsqueda semántica.
+
+### Árbol de decisión
+
+```mermaid
+graph TD
+    Q["¿Qué consulta necesito resolver?"] --> A{"¿El dato es estructurado<br/>(campos, fechas, estados)?"}
+    A -->|Sí| MQ["Query Mongo con filtros e índices.<br/>NO usar RAG."]
+    A -->|No, texto libre y largo| B{"¿Volumen > ~1.000 documentos<br/>o > ~500k tokens?"}
+    B -->|No| CTX["Cabe en contexto o con búsqueda de texto.<br/>Usar $text de Mongo.<br/>NO usar RAG vectorial."]
+    B -->|Sí| C{"¿Las consultas son semánticas<br/>('algo sobre el viaje')<br/>y no por palabra clave?"}
+    C -->|No| TXT["Índice de texto completo<br/>(Atlas Search / $text)."]
+    C -->|Sí| D{"¿Un fallo de recall es<br/>tolerable para el usuario?"}
+    D -->|No, requiere exactitud| MQ2["Query estructurada + filtros.<br/>RAG no da garantías de completitud."]
+    D -->|Sí| RAG["Atlas Vector Search justificado.<br/>Búsqueda híbrida: vectorial + filtros por tenant."]
+```
+
+### Criterios objetivos de adopción
+
+Adoptar Atlas Vector Search **solo si se cumplen las cuatro** condiciones:
+
+1. **Tipo de dato:** existe un corpus de texto libre y largo (notas extensas, transcripciones de voz de
+   Alexa, documentos adjuntos), no solo campos de tareas.
+2. **Volumen:** más de ~1.000 documentos o un corpus que no cabe en la ventana de contexto a un coste
+   razonable.
+3. **Naturaleza de la consulta:** los usuarios preguntan por significado, no por palabra clave ni por
+   filtro. Medible: registrar consultas reales y contar cuántas fallan con búsqueda de texto.
+4. **Tolerancia a fallos de recall:** el caso de uso admite que un documento relevante no aparezca. Si se
+   necesita exactitud (facturación, cumplimiento), RAG es la herramienta equivocada.
+
+Si se cumplen: **Atlas Vector Search es la elección correcta** — evita introducir una base de datos nueva,
+soporta búsqueda híbrida con filtros (imprescindible para aislar por `tenant_id`, §A.11) y el tier
+gratuito cubre la fase educativa.
+
+**Precondición de diseño (Fase 1, coste casi nulo):** definir el port
+`DocumentSearchRepository` en `domain/` con `buscar(consulta, filtros, limite)`. Primer adaptador: `$text`
+de Mongo. Si algún día RAG aplica, se añade un adaptador vectorial sin tocar `application/`. Esto convierte
+la decisión de RAG en un cambio local y reversible, que es exactamente el objetivo: **no decidir ahora, pero
+quedar preparado para decidir barato.**
+
+### Definition of Done
+
+- [x] Existe el port de búsqueda con al menos un adaptador no vectorial (`DocumentSearchRepository` +
+      `MongoTextSearchRepository`, precondición de Fase 1).
+- [ ] Está registrado por escrito qué consultas de usuario fallan con búsqueda de texto — no aplica todavía:
+      el criterio 1 (§A.10) ya falla estructuralmente (sin corpus de texto libre), así que esa evidencia no
+      era necesaria para la decisión de 5.1/5.4. Queda para cuando exista tráfico de voz real (Fase 6).
+- [x] La decisión de Fase 5 se documenta evaluando los cuatro criterios, incluso si la conclusión es "no
+      aplica" (ver 5.1/5.4).
+
+---
+
+## A.11 Seguridad
+
+**Situación actual:** sin autenticación, sin autorización, tools MCP sin boundaries, y un incidente previo
+de clave expuesta. Aceptable mientras el sistema corra solo en local; bloqueante antes de cualquier
+exposición pública, incluida la integración con Alexa (Fase 6).
+
+### 🟢 Higiene inmediata (Fase 0)
+
+- ✅ Rotar la clave de OpenAI; `.env` en `.gitignore`; `gitleaks` en CI (§A.6).
+- ✅ `SecretStr` para todo secreto (implementado en `config.py`, ver §A.4/0.4). Falta el test explícito que
+  verifique que no aparecen en logs ni en respuestas de error (queda pendiente, es rápido de agregar).
+- ✅ **Sanear los mensajes de error hacia el cliente.** `handle_runtime_error` y el nuevo handler catch-all
+  (`Exception`) devuelven mensaje genérico + `request_id`, y registran el detalle completo (con traceback)
+  vía `logging` — nunca en la respuesta. `handle_value_error`/`handle_http_exception` se dejaron sin tocar
+  a propósito: son mensajes de negocio escritos por nosotros, no detalle interno filtrado.
+- **Validación estricta de entrada** con Pydantic: longitud máxima de mensaje, tipos, límites en campos de
+  texto. Barato y corta abusos triviales. Pendiente.
+
+### 🟡 Industrialización esperable (Fase 6–7)
+
+- **Autenticación de la API.** Recomendación para bajo coste: **API keys con hash para clientes máquina**
+  (CLI, Alexa) y **JWT de vida corta** si aparece un frontend con usuarios. Evitar montar un servidor
+  OAuth propio; si hacen falta usuarios reales, un proveedor gestionado con tier gratuito
+  (Auth0/Clerk/Supabase Auth) es más seguro y más barato que implementarlo.
+- **Autorización.** Un `Principal` (`usuario_id`, `tenant_id`, `roles`, `scopes`) creado en `interfaces/` y
+  propagado a `application/`. Regla estructural: **todo repositorio filtra por `tenant_id`** y ningún caso
+  de uso puede consultar sin él. Se verifica con un test que recorre las firmas de los repositorios.
+- **Boundaries de seguridad de las tools MCP** — el punto que más suele descuidarse. Cada tool declara los
+  scopes que exige; el servidor MCP valida el `Principal` antes de ejecutar; las tools de escritura y
+  borrado exigen scope elevado; toda invocación se audita (`quién`, `qué tool`, `qué parámetros`,
+  `resultado`). **Ninguna tool debe aceptar filtros arbitrarios que puedan cruzar tenants:** el
+  `tenant_id` se inyecta desde el `Principal`, nunca se acepta como parámetro del LLM. Esta es la mitigación
+  concreta contra inyección de prompt: aunque el modelo se deje convencer, no puede pedir datos de otro
+  tenant porque no controla ese campo.
+- **Rate limiting y presupuesto por tenant** (`slowapi` o límite en el gateway): protege contra abuso y
+  contra facturas inesperadas de OpenAI, que en un proyecto personal es el riesgo económico más real.
+
+### 🔴 Vanguardia opcional
+
+- **Guardrails de contenido / detección de inyección de prompt con modelo dedicado.** **Criterio:** solo
+  con usuarios no confiables y tools capaces de acciones destructivas o de gasto. Con tools acotadas y
+  `tenant_id` inyectado por el servidor, la superficie ya es pequeña.
+- **mTLS, WAF, pentesting externo.** **Criterio:** datos de terceros en producción con compromisos
+  contractuales.
+- **Cifrado a nivel de campo en Mongo.** **Criterio:** categorías especiales de datos personales (salud,
+  finanzas) o requisito regulatorio explícito.
+
+### Definition of Done
+
+- [ ] Ningún endpoint muta datos sin autenticación (Fase 7).
+- [ ] Toda consulta a Mongo incluye `tenant_id`, verificado por test.
+- [ ] Cada tool MCP declara scopes y registra una entrada de auditoría por invocación.
+- [ ] `tenant_id` nunca es un parámetro que el LLM pueda fijar.
+- [x] Las respuestas de error no contienen stacktraces ni nombres internos (ítem 0.11, Fase 0).
+
+---
+
+## A.12 Testing
+
+**Situación actual:** ~1850 líneas en 12 ficheros, buena cobertura de `application`, router y servicio,
+pero **todo mockeado**. Esa es precisamente la razón por la que el bug de memoria de sesión (§A.9) pasa
+inadvertido: los mocks confirman que el código llama a lo que espera, no que el dato acabe en Mongo.
+
+**Regla no negociable, agregada tras un incidente real (ítem 0.13):** ningún test de integración toca el
+Mongo de `.env` (Atlas, productivo). Todo test contra Mongo real usa el contenedor desechable de
+`docker-compose.yml` (`mongodb://localhost:27018`, puerto no estándar para evitar chocar con un Mongo
+nativo local), con `tearDown` que limpia lo que escribió. Se encontraron y borraron 7 documentos de
+prueba (`"tarea de regresion N"`) que un test de integración había estado escribiendo en el Atlas real
+durante varias corridas, porque construía `TaskService()` sin inyectar un repositorio — quedaba conectado
+al singleton `mongo_connection`, que lee `Settings` (la URI real). `MongoConnection` ahora acepta
+`mongo_uri`/`db_name` explícitos para que un test pueda aislarse sin tocar el `Settings` global.
+
+### Pirámide objetivo
+
+| Nivel | Qué prueba | Dependencias | Fase |
+| --- | --- | --- | --- |
+| **Unitarios** (base, ya existe) | Lógica de dominio y casos de uso | Todo mockeado, sin I/O | ✅ |
+| **Integración** (falta) | Repositorios contra Mongo real, ciclo async completo | Mongo en contenedor | 🟢 Fase 0–1 |
+| **Contrato de tools MCP** | Cada tool cumple su esquema declarado y sus boundaries | Mongo real, LLM mockeado | 🟡 Fase 3 |
+| **E2E de API** | Flujo completo mensaje → respuesta | `httpx.AsyncClient` + Mongo, LLM grabado | 🟡 Fase 1–2 |
+| **Evaluación del router** (falta, crítica) | Calidad de clasificación sobre golden dataset | LLM real o grabado | 🟡 Fase 2, **antes de Fase 4** |
+
+### 🟢 Integration tests reales contra Mongo (Fase 0–1)
+
+- Mongo efímero por `docker compose up mongo` en local y como *service container* en Actions.
+- Fixture `pytest-asyncio` que crea una base de datos con nombre aleatorio por sesión de test y la elimina
+  al final. Aislamiento real, sin dependencia de estado previo.
+- **Cobertura mínima obligatoria:** ciclo completo de tareas (crear, listar, actualizar, completar,
+  buscar), escritura y lectura de memoria de sesión entre peticiones distintas, comportamiento de índices
+  y filtrado por `tenant_id`.
+- Marcados con `@pytest.mark.integration` para poder ejecutar rápido solo los unitarios en desarrollo.
+
+### 🟡 Evaluación del router: golden dataset (Fase 2, bloqueante para Fase 4)
+
+Sin esto, cualquier cambio de prompt o de modelo es un cambio a ciegas. Es el prerrequisito no negociable
+antes de trabajar en agentes: no se puede mejorar un router cuya calidad no se mide.
+
+**Construcción del dataset** (`tests/eval/golden_router.jsonl`, versionado en git):
+
+- 100–200 casos escritos a mano, en español y con el registro real de uso (informal, con typos,
+  abreviaturas, mezclas de intención).
+- Cada caso: `{id, mensaje, intencion_esperada, entidades_esperadas, categoria, notas}`.
+- Distribución deliberada: casos fáciles resolubles por reglas, casos que exigen LLM, **casos ambiguos
+  cuya respuesta correcta es `clarify`** (los más valiosos), casos adversarios (inyección de prompt,
+  mensajes fuera de dominio), y casos multi-intención.
+- Crecimiento por incidente: **todo fallo observado en uso real se convierte en un caso nuevo**. Es la
+  disciplina que hace que el dataset mejore con el tiempo en vez de fosilizarse.
+
+**Métricas y umbrales** (`tests/eval/umbrales.yaml`): accuracy global ≥ umbral, accuracy por intención
+(evita que una intención rara se degrade sin que se note en la media), tasa de `clarify` dentro de una
+banda — demasiado baja significa adivinar, demasiado alta significa un asistente inútil —, precisión de
+extracción de entidades, coste medio en tokens y % de casos resueltos por reglas (métrica de eficiencia).
+
+**LLM-as-judge** 🟢 — solo donde aporta. Para clasificación de intención no hace falta: la etiqueta correcta
+es conocida y la comparación es exacta. Es útil para **evaluar la respuesta final en lenguaje natural**
+(¿es correcta, útil, y en español?), donde no hay una única cadena válida. Reglas para que sea fiable:
+modelo juez distinto del evaluado, rúbrica explícita con ejemplos, salida estructurada con puntuación y
+justificación, y **calibración contra ~30 juicios humanos** antes de confiar en él. Un juez no calibrado
+es un generador de números tranquilizadores.
+
+**Alcance deliberado (ítem 4.6, decidido 2026-08-24): solo evaluación offline, nunca en producción.** Meter
+el juez en el camino caliente duplicaría el costo/latencia de cada turno real — lo contrario a la disciplina
+de costo del resto del proyecto (eval-router opt-in, caché semántica bloqueada en 4.13 por lo mismo). Si en
+el futuro aparece evidencia real de respuestas de mala calidad llegando a producción, evaluar un juez en
+vivo como ítem nuevo con su propio criterio de adopción — mismo patrón que 4.5 con state graph/guardrails
+de IA, no una extensión automática de este ítem.
+
+### Definition of Done
+
+- [ ] Existe al menos un integration test por repositorio, contra Mongo real.
+- [x] El test de memoria de sesión entre peticiones pasa (cierra el bug de §A.9).
+- [x] `golden_router.jsonl` tiene ≥ 100 casos, incluidos ambiguos y adversarios (109, ítem 2.3).
+- [x] `eval-router` corre en CI y falla si la accuracy baja de los umbrales (ítem 2.4).
+- [ ] Cada fallo observado en uso real se ha añadido como caso al dataset. Pendiente: varios bugs
+      reales del ítem 2.10-2.16 (small_talk, confidence null, payload string) no se sumaron al
+      golden dataset.
+- [ ] Los umbrales están versionados y cada cambio de umbral se justifica en el commit.
+
+---
+
+## A.13 Escalabilidad y multi-tenancy (Fase 8)
+
+**Objetivo:** que el salto de proyecto educativo a producto no exija reescribir el modelo de datos. La
+mayor parte del coste de la multi-tenancy se paga si se añade tarde; casi nada si se prepara ahora.
+
+### 🟢 Preparación de coste casi nulo (Fase 1)
+
+- **`tenant_id` en toda entidad y en todo índice desde ahora**, aunque valga siempre `"default"`.
+  Retrofitear un discriminador de tenant en datos existentes es una migración con riesgo; llevarlo desde
+  el principio es un campo más.
+- **Índices compuestos siempre con `tenant_id` primero:** `{tenant_id, estado, fecha_vencimiento}`,
+  `{tenant_id, usuario_id}`. Esto determina el rendimiento de todas las consultas futuras.
+- **`Principal` propagado por el flujo** (§A.11) para que el filtrado nunca dependa de que el
+  desarrollador se acuerde.
+
+### 🟡 Aislamiento de datos (Fase 8)
+
+Estrategia recomendada: **base de datos compartida con `tenant_id` obligatorio**, con la defensa en el
+adaptador, no en el caso de uso. El repositorio base inyecta el filtro de tenant en toda consulta; es
+imposible construir una query sin él porque el filtro no es responsabilidad de quien llama. Ese es el
+patrón que hace el aislamiento estructural en vez de disciplinario.
+
+Escalado del aislamiento según se necesite:
+
+1. **Compartida + filtro obligatorio** (por defecto): coste mínimo, adecuado hasta miles de tenants.
+2. **Base de datos por tenant**: solo para clientes enterprise que lo exijan por contrato. Mismo código,
+   distinta cadena de conexión resuelta por `tenant_id`.
+3. **Infraestructura dedicada**: solo con requisitos de residencia de datos o cumplimiento específico.
+
+### 🟡 Modelo de costos
+
+El coste dominante no es la infraestructura, es el LLM. Diseño:
+
+- **Medir por interacción** desde Fase 1 (§A.5): tokens de entrada y salida, modelo, y si se usó LLM. Sin
+  esta métrica no se puede fijar precio.
+- **Palancas de reducción, en orden de rentabilidad:** (1) maximizar la resolución por reglas — cada caso
+  resuelto sin LLM cuesta cero; (2) caché de clasificaciones para mensajes repetidos; (3) presupuesto de
+  tokens de contexto (§A.9) en vez de volcar toda la memoria; (4) modelo más pequeño para clasificar y
+  reservar el grande solo para redacción; (5) prompt caching cuando el prefijo del prompt sea estable.
+- **Presupuesto y cuota por tenant** con degradación explícita: al agotarse, el sistema funciona en modo
+  solo-reglas y lo comunica, en vez de fallar o de generar una factura sorpresa.
+- **Escalado de infraestructura:** FastAPI async escala verticalmente muy lejos. Antes de pensar en
+  arquitecturas distribuidas: revisar índices de Mongo, activar connection pooling, y mover a tareas de
+  fondo lo que no necesite respuesta inmediata (extracción de memoria, resúmenes, embeddings).
+
+### 🟡 Privacidad
+
+- **Minimización:** no almacenar el texto completo de conversaciones más allá de lo necesario; TTL en
+  sesiones.
+- **Derecho al olvido operativo:** borrado en cascada por `usuario_id` a través de todas las colecciones,
+  con test que lo verifique.
+- **Contrato con el proveedor de LLM:** documentar qué datos salen del sistema y con qué política de
+  retención. Requisito de RGPD si hay usuarios europeos.
+- **Anonimización antes del logging** de contenido de usuario, y contenido de usuario desactivado por
+  defecto en logs (§A.5).
+
+### 🔴 Vanguardia opcional
+
+- **Sharding de Mongo, colas de mensajes, event sourcing.** **Criterio:** solo con métricas que demuestren
+  el cuello de botella. Añadir infraestructura distribuida sin evidencia es la forma más común de matar un
+  proyecto pequeño.
+- **Facturación por consumo integrada.** **Criterio:** cuando existan clientes que paguen. Antes es
+  producto imaginario.
+
+### Definition of Done
+
+- [ ] Toda entidad persistida tiene `tenant_id` y todo índice lo incluye primero.
+- [ ] Un test demuestra que es imposible leer datos de otro tenant desde un caso de uso.
+- [ ] Se puede calcular el coste de LLM por tenant y por día.
+- [ ] El borrado por usuario elimina datos en todas las colecciones, verificado por test.
+- [ ] Está documentado qué datos de usuario salen hacia el proveedor de LLM.
+
+---
+
+## A.14 Hoja de ruta de migración incremental
+
+Nada de big-bang. Cada fila deja el sistema funcional y encaja en las fases ya definidas. Las etiquetas
+mantienen el significado de §A.0.
+
+### Fase 0 — Consolidación y orden *(en curso)*
+
+Objetivo: **eliminar fallos silenciosos y desbloquear el resto de fases.**
+
+| # | Cambio | Nivel | Área | Estado |
+| --- | --- | --- | --- | --- |
+| 0.1 | Rotar clave de OpenAI, verificar `.gitignore`, añadir `gitleaks` | 🟢 | §A.11 | ✅ Hecho — `.gitignore` cubre `.env` (nunca se commiteó, verificado en todo el historial); clave rotada en el dashboard de OpenAI; `.github/workflows/gitleaks.yml` escaneando cada push/PR |
+| 0.2 | `pyproject.toml` + layout `src/`, instalable, sin `sys.path` | 🟢 | §A.3 | ✅ Hecho — `pip install -e ".[dev,llm,mcp]"`; se agregaron 5 `__init__.py` faltantes y se eliminó el hack de `sys.path` en `cli.py`; `requirements.txt` eliminado (duplicaba `pyproject.toml`) |
+| 0.3 | Declarar `motor` y separar grupos de dependencias | 🟢 | §A.3 | ✅ Hecho — `motor`, `pydantic-settings`, `structlog` en dependencias base; `[llm]`/`[mcp]`/`[dev]` como grupos opcionales en `pyproject.toml`. De paso se corrigieron dos conflictos de versiones reales (`starlette` vs `fastapi`, `pymongo` vs `motor`) que `requirements.txt` nunca detectó |
+| 0.4 | `Settings` único con `pydantic-settings`; eliminar el segundo mecanismo de entorno | 🟢 | §A.4 | ✅ Hecho — `config.py` reescrito con `pydantic-settings` (`SecretStr` para la API key, falla ruidoso si falta `MONGO_URI`); `openai_llm_client.py` ya no llama `load_dotenv()` ni lee `os.getenv` directo, consume `get_settings()` |
+| 0.5 | Unificar el nombre de base de datos | 🟢 | §A.4 | ✅ Hecho — `TaskService`, `MongoTaskRepository`, `build_default_task_repository` y `MongoSessionRepository` ya no hardcodean `"personal_management"`: resuelven `db_name or get_settings().mongo_db_name`. Se corrigió `.env` (`MONGO_DB_NAME` apuntaba a `"sample_mflix"`, un dataset de ejemplo no relacionado — las tareas reales se estaban indexando en la base equivocada) |
+| 0.6 | `.env.example` completo | 🟢 | §A.4 | ✅ Hecho — cubre los 7 campos de `Settings`, con un comentario por variable. *(2026-08-18: el barrido previo a Fase 1 detectó un octavo campo, `ollama_api_key`, sin documentar. Al revisarlo se decidió eliminarlo de `Settings` por completo — Ollama en local no valida API key, así que no tiene sentido como variable de configuración — y hardcodear el literal `"ollama"` directamente en `openai_llm_client.py`, que es lo único que el SDK de OpenAI exige para no fallar al construir el cliente)* |
+| 0.7 | **Corregir el bridging sync/async de la memoria de sesión** | 🟢 | §A.9 | ✅ Hecho — `MongoSessionRepository` async de extremo a extremo, ver detalle en §A.9 |
+| 0.8 | `docker-compose.yml` solo con Mongo, para tests locales | 🟢 | §A.7 | ✅ Hecho — verificado con Docker Desktop: `docker compose up -d mongo` levanta un contenedor `(healthy)`. Mapeado a `27018` en el host, no `27017` (ver hallazgo abajo) |
+| 0.9 | Primer integration test: memoria de sesión entre peticiones (prueba 0.7) | 🟢 | §A.12 | ✅ Hecho — `tests/test_session_memory_integration.py`: escribe un turno con una instancia de `MongoSessionRepository` y lo lee con otra, contra el Mongo real de `docker-compose.yml`. Se salta (no falla) si el contenedor no está arriba |
+| 0.10 | `structlog` en JSON, eliminar todos los `print` | 🟢 | §A.5 | ✅ Hecho — `infrastructure/observabilidad/logging.py` centraliza la configuración; `client.py`/`app.py` usan `get_logger`; `request_id` propagado por contextvars; de paso se eliminó un middleware duplicado que generaba dos UUIDs distintos por petición |
+| 0.11 | Sanear mensajes de error hacia el cliente | 🟢 | §A.11 | ✅ Hecho — `handle_runtime_error` ya no devuelve `str(exc)`, responde un mensaje genérico + `request_id` y registra el detalle completo (con traceback) vía `logging`. Se agregó además un handler catch-all (`Exception`) como red de seguridad para errores no anticipados (antes se propagaban sin `request_id` ni registro). `handle_value_error`/`handle_http_exception` se dejaron igual a propósito: sus mensajes son texto de negocio escrito por nosotros mismos (ej. "El título de la tarea es obligatorio"), no detalle interno |
+| 0.12 | *(hallazgo nuevo)* Corregir bridging sync/async en el bootstrap de conexión (`client.py`: cliente Motor rebindeado a un loop cerrado) | 🟢 | §A.9 | ✅ Hecho — `get_db()` rebindea el cliente si el loop activo cambió; CLI interactivo usa un único `asyncio.run` por sesión; test de regresión contra Mongo real en `tests/test_mongo_connection_lifecycle.py` |
+| 0.13 | *(hallazgo nuevo)* `tests/test_mongo_connection_lifecycle.py` escribía tareas reales en el **Atlas de producción** (`.env`), no en un Mongo desechable | 🟢 | §A.12 | ✅ Hecho — `MongoConnection` ahora acepta `mongo_uri`/`db_name` explícitos (antes solo leía el `Settings` global), lo que permite construir una conexión aislada. El test se reescribió para usar el Mongo local de `docker-compose.yml` (`assistant_personal_test`) con `tearDown` que limpia sus propios datos. Se detectaron y borraron 7 documentos de basura (`"tarea de regresion N"`) que habían quedado en Atlas de corridas anteriores de este mismo test antes del fix |
+
+**DoD de fase:** clone → `uv sync` → tests (unitarios + integración) en verde en máquina limpia; la memoria
+de sesión persiste demostrablemente; ningún `print`; ningún secreto en el repo.
+
+> **Estado real (2026-08-18):** `uv sync` ya es literal (ver 1.1 en Fase 1). Persistencia de memoria,
+> ausencia de `print` y ausencia de secretos: verificados ✅. "Tests en verde" tenía una salvedad
+> (`test_intent_router`/`test_mcp_server` huérfanos, `test_task_service` roto por un bug sin relación) —
+> los dos primeros se resolvieron en el ítem 3.1; `test_task_service` sigue excluido de CI, deuda aparte.
+
+### Fase 1 — Fundamentos técnicos con profundidad real
+
+| # | Cambio | Nivel | Área | Estado |
+| --- | --- | --- | --- | --- |
+| 1.1 | Adoptar `uv` + lockfile en repo y CI | 🟢 | §A.3 | ✅ Hecho — `uv.lock` generado y versionado; `README.md` actualizado a `uv sync --extra dev --extra llm --extra mcp`; verificado con `uv run python -m unittest discover -s tests` (mismo resultado que con `pip`: 47/50, 3 errores preexistentes sin relación). El único workflow de CI (`gitleaks.yml`) no instala dependencias Python, así que no requirió cambios |
+| 1.2 | GitHub Actions: lint + mypy estricto en `domain`/`application` + unitarios | 🟢 | §A.6 | ✅ Hecho — `.github/workflows/ci.yml` (nuevo, usa `uv`): `ruff check .` sobre todo el repo, `mypy --follow-imports=silent` acotado a `domain`/`application`, y `pytest` sobre `tests/`. De paso se corrigieron ~15 líneas reales que violaban `E501` en `src/` (funciones/imports/strings reformateados) y 4 errores reales de `mypy` en `task_service.py` (`no-any-return`, resueltos con `cast` explícito en los puntos donde `_invoke_repository_async` devuelve `Any` a propósito por su despacho dinámico sync/async). Se excluyeron del job `test_intent_router`/`test_mcp_server`/`test_task_service` — los tres bloqueados por el mismo bug preexistente de wiring MCP (ver nota en el DoD de Fase 0), fuera de alcance de este ítem. `app.py` y `tests/*` tienen `per-file-ignores` para `E501` (literales de esquema Pydantic y de fixtures, respectivamente — partirlos no mejora la legibilidad). *(Corrección: el primer run de CI falló porque el runner no tiene `.env` — correcto, nunca se commitea — y `Settings` exige `MONGO_URI`. Se agregaron `MONGO_URI`/`MONGO_DB_NAME`/`OPENAI_API_KEY`/`OPENAI_MODEL` dummy como `env:` del job; verificado localmente renombrando `.env` temporalmente y reproduciendo el mismo passthrough de variables que usa el workflow: 44/44 en verde)* |
+| 1.3 | Job de integración con Mongo como service container | 🟡 | §A.6 | ✅ Hecho — `ci.yml` agrega `services.mongo` (`mongo:7`, mapeado a `27018:27017`, mismo puerto que `docker-compose.yml` en local) con healthcheck. Verificado localmente simulando el mismo escenario (Mongo real en 27018, sin `.env`): los 3 tests que antes se saltaban en CI (`test_session_memory_integration.py` x2, `test_mongo_connection_lifecycle.py`) ahora corren de verdad — 47/47 en verde, 0 skips |
+| 1.4 | Integration tests para todos los repositorios | 🟢 | §A.12 | ✅ Hecho — `tests/test_mongo_task_repository_integration.py` (nuevo): ciclo completo de `MongoTaskRepository` (crear → leer → listar → actualizar → completar → verificar `task_history` → borrado lógico → confirmar que el borrado no elimina el documento físico) contra el Mongo local desechable, con una instancia de repositorio distinta por paso (mismo patrón que `test_session_memory_integration.py`). Cierra la asimetría: `MongoSessionRepository` ya tenía cobertura directa desde Fase 0, `MongoTaskRepository` solo tenía cobertura indirecta vía el orquestador (y solo para `create_task`). |
+| 1.5 | `request_id` propagado a todos los logs + 12 campos por interacción | 🟢 | §A.5 | ✅ Hecho — `TaskOrchestrator._handle_message` emite un log `interaccion_completada` en cada camino de retorno (guardrail de mensaje vacío, `clarify`, `small_talk`, `ask_knowledge_base`, éxito, error de negocio) con los 12 campos de §A.5: `request_id` (nuevo por turno, vía `structlog.contextvars`), `session_id`, `tenant_id` (fijo en `"default"` hasta 1.7), `intencion`, `confianza`, `uso_llm`, `modelo`, `tokens_entrada`, `tokens_salida`, `latencia_ms_total`, `latencia_ms_llm`, `resultado`. `_OpenAITextClient._invoke_model` captura `modelo`/tokens/latencia reales de la respuesta de OpenAI (`usage.input_tokens`/`output_tokens` en Responses API, `usage.prompt_tokens`/`completion_tokens` en Chat Completions) en `self.last_call_metadata`; `ProductionIntentRouter` lo expone como `last_llm_metadata` después de cada `route()`. De paso se migró `hybrid_router.py` de `logging` estándar a `structlog` (inconsistencia que quedó de antes de 0.10). Verificado con un smoke test manual: log JSON con los 12 campos poblados correctamente; suite 48/48 en verde, `ruff`/`mypy` limpios |
+| 1.6 | Port `LLMClient` + adaptador `AsyncOpenAI` (resuelve la inconsistencia sync/async) | 🟢 | §A.1 | ✅ Hecho — `domain/repositories/llm_client.py` (nuevo): port `LLMClient` async (`classify_intent`, `answer_general_knowledge`, `extract_profile_facts`). `openai_llm_client.py` migrado de `OpenAI` a `AsyncOpenAI`; las tres subclases y `OpenAILLMRouterClient` son async de punta a punta; `_invoke_model` sigue capturando `modelo`/tokens/latencia (1.5) pero ahora con `await`. `ProductionIntentRouter.route()`/`extract_profile_facts()` son async — ya no bloquean el event loop durante la llamada de red al LLM. `TaskOrchestrator` usa un helper `_maybe_await` (mismo patrón de despacho que `TaskService._invoke_repository_async`) para soportar tanto el router real (async) como los ~25 dobles de test síncronos existentes sin tener que reescribirlos todos. Sí se reescribieron `test_hybrid_router.py` y `test_openai_llm_client.py` (`IsolatedAsyncioTestCase`, fakes async) porque prueban `ProductionIntentRouter`/`OpenAIIntentClassifier` directamente, sin pasar por el orquestador. Verificado: 48/48 en verde, `ruff`/`mypy` limpios. *(Sin smoke test en vivo contra Ollama: no estaba corriendo localmente en el momento de la verificación — la forma async está cubierta por los fakes, que replican la forma real de `AsyncOpenAI.chat.completions.create` como coroutine)* |
+| 1.7 | `tenant_id` en todas las entidades e índices (valor `"default"`) | 🟢 | §A.13 | ✅ Hecho — `Task` (`domain/task_models.py`) tiene `tenant_id: str = "default"`. `MongoTaskRepository`/`MongoSessionRepository` reciben `tenant_id` opcional (fijo en `"default"`), lo aplican en todos los filtros (`_active_task_filter`, `_session_filter`) y lo escriben en `create_task_async`/`_record_history`/`_upsert_session`. Índices compuestos en `client.py`: `personal_tasks` pasa de `{task_id:1}` a `{tenant_id:1, task_id:1}` único; `conversation_sessions` gana su primer índice, `{tenant_id:1, session_id:1}` único (antes no tenía ninguno). `TaskOrchestrator` gana un atributo `tenant_id` real (constructor, default `"default"`) que reemplaza el string mágico que había quedado hardcodeado en el log de 1.5. Verificado contra Mongo real: índices confirmados con `getIndexes()`, índice viejo pre-1.7 (`task_id_1`, sobrevivió a la recreación del contenedor porque el volumen de Docker persiste) detectado y eliminado explícitamente. 48/48 en verde, `ruff`/`mypy` limpios |
+| 1.8 | Port `DocumentSearchRepository` con adaptador `$text` | 🟢 | §A.10 | ✅ Hecho — `domain/repositories/document_search_repository.py` (nuevo): port `buscar(consulta, filtros, limite)`. `MongoTextSearchRepository` (nuevo, `infrastructure/persistence/mongo/`) lo implementa con `$text` sobre `title`/`description` de `personal_tasks`, respetando `tenant_id` como cualquier otro filtro. Índice de texto agregado en `client.py._ensure_task_indexes`. `tests/test_mongo_document_search_integration.py` (nuevo) verifica búsqueda real por palabra y aislamiento por tenant contra Mongo real — usa `MongoConnection` (no un cliente crudo) porque `$text` exige que el índice exista antes de consultar, y solo `MongoConnection.get_db()` lo crea. 50/50 en verde, `ruff`/`mypy` limpios. *(Pendiente, no es parte de este ítem: la otra mitad del DoD de §A.10 — "registrar por escrito qué consultas de usuario fallan con búsqueda de texto" — depende de uso real, no de código; queda para cuando haya tráfico real que analizar)* |
+| 1.9 | Tests E2E de API con `httpx.AsyncClient` | 🟡 | §A.12 | ✅ Hecho — `tests/test_api_e2e.py` (nuevo): ejercita `app.py` completo por HTTP (`httpx.AsyncClient` + `ASGITransport`, no `TestClient` síncrono) contra Mongo real — ciclo CRUD completo, `X-Request-ID` en cada respuesta, 400/404 con `request_id` en el body. Como `ASGITransport` nunca dispara el `lifespan` de FastAPI, el test sustituye `app.dependency_overrides[get_service]` por un `TaskService` apuntado al Mongo local desechable — si no, `get_service` caería a su fallback (`TaskService()` sin argumentos → Atlas de producción, el mismo incidente de 0.13). Se agregó `[tool.pytest.ini_options] pythonpath = ["."]` a `pyproject.toml`: sin eso, `from app import app` fallaba con `ModuleNotFoundError` bajo pytest (que inserta `tests/` en `sys.path`, no la raíz del repo). **Bug real encontrado y corregido**: `MongoTaskRepository.create_task_async` pasaba el mismo dict a `insert_one` y al valor de retorno; Motor muta ese dict in-place inyectándole `_id` (`ObjectId`), lo que rompía la serialización JSON de FastAPI con un `TypeError` — nunca se había detectado porque el único test que antes ejercitaba esa ruta HTTP completa (`test_task_service.py`) está excluido por el bug de MCP. Corregido pasando una copia a `insert_one`. 56/56 en verde, `ruff`/`mypy` limpios |
+| 1.10 | *(hallazgo, Fase 3)* `mypy` fuera del scope de CI (`domain`/`application`, ítem 1.2) tiene 2 errores reales sin corregir en `infrastructure/` | 🟡 | §A.6 | Deuda, confirmada vigente el 2026-08-21: `mongo_repository.py:71` (`Sequence[str]` sin `.append`) y `task_tools.py:155` (`health_check` asigna una `Coroutine[Any, bool]` a una variable `bool`, falta `await` explícito en el chequeo dinámico). Ninguno rompe en runtime (el segundo funciona porque `hasattr(result, "__await__")` lo cubre antes de usarlo) pero ambos fallarían si `mypy --strict` se extendiera a `infrastructure/` tal como prevé §A.6 |
+| 1.11 | *(hallazgo, Fase 3)* `tests/test_task_service.py` sigue excluido de CI sin dueño ni fecha | 🟡 | §A.12 | Deuda documentada en prosa desde Fase 0 (ver nota bajo el DoD de esta fase) pero nunca con ítem propio. El bug de wiring MCP que lo bloqueaba se resolvió en 3.1 — sigue excluido solo por inercia, no por una razón técnica vigente. Decidir: reescribirlo contra el `McpTaskServiceClient` real o borrarlo si `test_mcp_tools_contract.py`/`test_api_e2e.py` ya cubren lo mismo |
+
+**DoD de fase:** CI bloquea PRs defectuosos; todo I/O del camino de FastAPI es async; existen métricas de
+coste por interacción.
+
+> **Estado real (2026-08-18):** los 9 ítems (1.1–1.9) están cerrados. Clausula por clausula:
+> - "CI bloquea PRs defectuosos": ✅ — `ci.yml` corre lint + mypy + tests (con Mongo real) en cada push/PR a cualquier rama.
+> - "todo I/O del camino de FastAPI es async": ✅ para lo que `app.py` expone hoy — los endpoints usan `TaskService` async de punta a punta contra Motor. **Salvedad importante**: `app.py` no usa `TaskOrchestrator` en absoluto (solo CRUD directo de tareas); el camino conversacional con LLM (router híbrido, memoria de sesión) hoy solo se ejerce desde el CLI, no desde la API HTTP.
+> - "existen métricas de coste por interacción": 🟡 parcial — el log de 12 campos de 1.5 vive en `TaskOrchestrator._log_interaction`. Como `app.py` no usa el orquestador, **la API HTTP hoy no emite esas métricas**; solo las emite el CLI. Cerrar esto de verdad requiere conectar `app.py` al orquestador (fuera de alcance de Fase 1) o instrumentar `TaskService` por separado.
+> De paso, 1.9 encontró y corrigió un bug real preexistente (`create_task_async` devolvía un `ObjectId` no serializable) que ningún test anterior había detectado.
+
+### Fase 2 — IA generativa con criterio de ingeniería
+
+| # | Cambio | Nivel | Área | Estado |
+| --- | --- | --- | --- | --- |
+| 2.1 | Salida estructurada validada con Pydantic en el router; política ante salida inválida | 🟢 | §A.8 | ✅ Hecho — `IntentClassification.model_validate` directo, sin casteo manual. Toda salida inválida del LLM cae en el mismo fallback (`clarify`/`source=fallback`); antes había dos políticas distintas según el tipo de error |
+| 2.2 | Prompts versionados como ficheros con identificador | 🟢 | §A.8 | ✅ Hecho — `infrastructure/prompts/router/{id}.prompt.md`, un archivo por prompt con frontmatter semver (`id`, `version`, `description`); historial de versiones vive en git, no en el filesystem |
+| 2.3 | **Golden dataset del router (≥100 casos) + umbrales** | 🟢 | §A.12 | ✅ Hecho — `tests/eval/golden_router.jsonl` (109 casos, 5 categorías: regla/llm_facil/llm_ambiguo/adversario/multi_intención) + `tests/eval/umbrales.yaml` (accuracy, tasa de `clarify`, coste de tokens, % resuelto por reglas). Corre solo bajo demanda (`pytest -m eval`), nunca automático — convención explícita para no quemar tokens de LLM en cada run. Sin modo grabación/replay: deuda conocida |
+| 2.4 | Job `eval-router` en CI, bloqueante ante regresión | 🟢 | §A.6 | ✅ Hecho — `.github/workflows/eval-router.yml`, separado de `ci.yml`. El trigger no filtra por `paths:` (rompería el required check en PRs que no tocan el router); un step interno con `git diff` decide si vale la pena correr el eval real. Repo pasado a público para que la protección de rama sea efectiva (el plan gratuito no la aplica en privados); `eval-router` es required status check. Bug real encontrado: un salto de línea colado en el secret `OPENAI_API_KEY` rompía el header HTTP — fix con `.strip()` en `config.py` |
+| 2.5 | Memoria de largo plazo persistida en Mongo, con extracción explícita | 🟢 | §A.9 | ✅ Hecho — `LongTermMemoryRepository` + `MongoLongTermMemoryRepository` (colección `user_profile_facts`, índice único `{tenant_id, user_id, key}`). `TaskOrchestrator._persist_profile_facts` escribe ahí en vez de en memoria de sesión (bug previo: TTL corto, no sobrevivía al reinicio); hechos con `confidence` bajo `profile_confidence_threshold` (0.7) se descartan |
+| 2.6 | `ContextBuilder` con presupuesto de tokens + resumen incremental de sesión | 🟢 | §A.9 | ✅ Hecho — `application/context_builder.py`: presupuesto medible (`token_budget`, ~4 char/token) en vez de conteos fijos arbitrarios, prioriza hechos → resumen → turnos → notas. Resumen incremental cada N turnos vía `OpenAISessionSummarizer`; `contexto_tokens` queda en el log estructurado |
+| 2.7 | Reintentos con backoff y timeouts en el adaptador LLM | 🟢 | §A.1 | ✅ Hecho — `AsyncOpenAI` recibe `timeout`/`max_retries` explícitos (`config.py`); el SDK ya reintenta con backoff, no hizo falta bucle propio |
+| 2.8 | **Detección de solicitudes multi-intención en el router (`clarify` explícito)** | 🟢 | §A.12 | ✅ Hecho — dos o más acciones distintas en un turno → `clarify` pidiendo que se envíen por separado, en vez de ejecutar una y descartar la otra en silencio (`classify_intent.prompt.md` v1.2.0). Ejecutar ambas de verdad exige rediseñar el schema de salida del LLM — se decidió no hacerlo en Fase 2, queda como ítem 4.7 |
+| 2.9 | **Actualizar `openai` para usar la Responses API que el código ya contempla** | 🟡 | §A.1 | Deuda — `openai==1.54.0` no tiene `client.responses`, así que `_invoke_model` siempre cae al branch de `chat.completions` aunque el código ya está preparado para la otra API |
+| 2.10 | Agregar `ConversationRoute.SMALL_TALK` | 🟢 | §A.8 | ✅ Hecho — el clasificador no tenía ruta para saludos/presentaciones/despedidas naturales, caían en `clarify` por descarte (`classify_intent.prompt.md` v1.3.0 + branch nuevo en `hybrid_router.route()`) |
+| 2.11 | `intent` inventado fuera de `route=orchestrator` | 🟢 | §A.8 | ✅ Hecho — el LLM rellenaba `intent` con valores fuera del enum (ej. `"greeting"`) aunque la ruta no fuera `orchestrator`, y el `ValidationError` resultante tiraba la clasificación a `clarify`. `classify_intent.prompt.md` v1.3.1 aclara que `intent` es `null` fuera de `orchestrator` |
+| 2.12 | `confidence: null` + defensa en profundidad con JSON mode | 🟢 | §A.8 | ✅ Hecho — `confidence` es obligatorio y el LLM lo devolvía `null` (`classify_intent.prompt.md` v1.3.2). Además se activó `response_format=json_object` en clasificador y extractor de perfil (no en el responder de conocimiento general, que necesita texto libre) |
+| 2.13 | `payload` devuelto como string en vez de objeto | 🟢 | §A.8 | ✅ Hecho — el clasificador generaba la respuesta final él mismo en vez de solo enrutar (ej. `payload: "Tu nombre es Alexis."`). `classify_intent.prompt.md` v1.3.3 aclara que el clasificador nunca contesta |
+| 2.14 | `extract_profile_facts` sobre-extraía detalles de tareas como hechos de perfil | 🟢 | §A.9 | ✅ Hecho — 3 de 5 documentos reales en `user_profile_facts` eran detalles puntuales de una tarea (hora, confirmación), no hechos estables, con `confidence≈1.0` sin criterio. `extract_profile_facts.prompt.md` v1.1.0 agrega ejemplos de qué no extraer. |
+| 2.15 | Regresión en `eval-router`: `small_talk`/`general_knowledge` permisivos ante manipulación + costo de tokens sobre el umbral | 🟢 | §A.12 | ✅ Hecho — una corrida del golden dataset tras 2.10–2.14 encontró prompt injection y pedidos de datos del sistema cayendo en `small_talk`/`general_knowledge` en vez de `clarify`, y el prompt (denso tras varias iteraciones) superando el costo medio de tokens permitido. `classify_intent.prompt.md` v1.4.0→v1.4.3: sección de seguridad explícita + reestructuración a bullets, con dos regresiones propias detectadas y corregidas en el camino |
+| 2.16 | Respuesta de `small_talk` era un texto fijo, no generada | 🟢 | §A.8 | ✅ Hecho — la misma cadena salía sin importar lo que dijera el usuario. Nuevo `OpenAISmallTalkResponder` (texto libre) genera la respuesta por turno; `/help` se queda estático a propósito (es un menú, no charla) |
+
+**DoD de fase:** la calidad del router es medible y se vigila en CI; la memoria de largo plazo sobrevive a
+reinicios; el contexto enviado al LLM está acotado y registrado.
+
+**Validado (2026-08-19):** Suites de integración contra Mongo real que
+sustentan esta fase: `test_long_term_memory_integration.py`, `test_session_memory_integration.py`,
+`test_context_builder.py`. Deuda abierta sin bloquear el DoD: 2.9 (Responses API) y el hueco
+de 2.14/2.16 (fallos reales no sumados al golden dataset, ver §A.12 DoD) — ninguno afecta las tres garantías
+de arriba. 
+
+### Fase 3 — MCP en profundidad
+
+| # | Cambio | Nivel | Área | Estado |
+| --- | --- | --- | --- | --- |
+| 3.1 | MCP como única vía de ejecución de acciones; eliminar caminos duplicados | 🟢 | §A.8 | ✅ Hecho — `TaskOrchestrator` (usado por el CLI) llamaba a `TaskService` directo, en paralelo a las tools MCP y a `app.py`: tres caminos distintos a Mongo. Nuevo `McpTaskServiceClient` (cliente MCP real por stdio, `infrastructure/mcp/client.py`) implementa la misma interfaz async que `TaskService` (`list_tasks_async`/`create_task_async`/`complete_task_async`), así que `_dispatch` no cambió — solo el `service` que recibe el orquestador. `cli.py` ahora construye `McpTaskServiceClient()` por defecto en vez de `TaskService()`. Hallazgo real: el SDK de MCP no hereda el entorno del proceso padre por defecto (solo una allowlist de seguridad sin `MONGO_URI`/`OPENAI_API_KEY`) — sin pasar el entorno explícito, el servidor no encontraba `.env`. Verificado E2E real (CLI → orquestador → cliente MCP → subproceso servidor → Mongo local), no solo con tests. `test_intent_router.py`/`test_mcp_server.py` (huérfanos, testeaban un `IntentRouter` y un `actualizar_tarea` que ya no existen) se borraron; reemplazados por `test_mcp_client.py` (unitario, sesión falsa) y `test_mcp_client_integration.py` (protocolo MCP real contra Mongo local). Gap de `delete_task` (preexistente, no una regresión) formalizado como ítem 3.6 |
+| 3.2 | Tests de contrato por tool (esquema + comportamiento) | 🟡 | §A.12 | ✅ Hecho — `test_mcp_tools_contract.py` (8 tests, protocolo MCP real por stdio contra Mongo local, no mocks): esquema de las 6 tools vía `list_tools()` (nombres + campos requeridos), comportamiento por tool incluyendo casos borde (`crear_tarea` sin `title`, `actualizar_tarea` sin campos, `buscar_tarea`/`completar_tarea` con `task_id` inexistente, idempotencia de `completar_tarea`) |
+| 3.3 | Scopes declarados por tool + auditoría de invocaciones | 🟡 | §A.11 | ✅ Hecho (subconjunto sin auth, ver §A.11) — `TOOL_SCOPES` en `task_tools.py` etiqueta cada tool como `read`/`write` (metadata, sin enforcement todavía: eso depende del `Principal` de Fase 6-7). Cada invocación registra `mcp_tool_invocada`/`mcp_tool_resultado` vía el logger estructurado existente, con el nombre de la tool, el scope y las *claves* de los parámetros recibidos (nunca sus valores, que pueden ser texto libre del usuario) |
+| 3.4 | `tenant_id` inyectado por el servidor, nunca parámetro del LLM | 🟢 | §A.11 | ✅ Hecho — ya se cumplía de hecho: `MongoTaskRepository` fija `tenant_id` internamente (`"default"`), ninguna de las 6 tools lo declara como parámetro. Faltaba que estuviera garantizado por test, no solo por inspección. `test_mcp_tools_contract.py` ahora afirma que ninguna tool expone `tenant_id` en su `inputSchema` — verificado que el test realmente detecta la regresión (se probó agregando el parámetro a una tool y confirmando que falla, luego se revirtió) |
+| 3.5 | `structuredContent` envuelve bajo `{"result": ...}` cuando el retorno anotado es `dict \| None`, pero no para un `dict` simple — inconsistente entre tools, obliga a cada consumidor a conocer el detalle por tool | 🟡 | §A.12 | ✅ Hecho — en vez de forzar un wrapping uniforme bajo la clave genérica `"result"`, se rediseñó el retorno de las 3 tools afectadas para que siempre sea un objeto con nombres de campo explícitos: `listar_tareas` → `{"tasks": [...]}`, `buscar_tarea`/`actualizar_tarea` → `{"task": {...} \| None}`. `crear_tarea`/`completar_tarea`/`health_check` no cambiaron, ya eran objetos simples. `McpTaskServiceClient.list_tasks_async` ajustado a la nueva clave; `test_mcp_client.py` y `test_mcp_tools_contract.py` actualizados, más una prueba nueva para el comportamiento de `listar_tareas` que no existía |
+| 3.6 | `delete_task` sin tool MCP (`eliminar_tarea`) ni rama en `_dispatch` — el intent existe en el enum y el prompt lo enseña al LLM, pero ejecutarlo siempre devuelve el fallback genérico de fallo | 🟢 | §A.8 | ✅ Hecho — nueva tool `eliminar_tarea(task_id)` (auditada, ítem 3.3; retorna `{"task": {...} \| None}`, mismo contrato de 3.5), `McpTaskServiceClient.delete_task_async`, rama `delete_task` en `_dispatch` y en `_format_public_message` (antes caía al dump crudo del resultado). Cobertura: `test_mcp_tools_contract.py` (esquema + éxito + id inexistente) y `test_orchestrator.py` (dispatch end-to-end). Sigue sin resolver `task_reference`→`task_id` a propósito — eso es 3.7 |
+| 3.7 | `complete_task`/`delete_task` solo ejecutan con `task_id` exacto; el usuario nunca da ese id (es un alfanumérico largo), siempre da una descripción (`task_reference`) | 🟡 | §A.8 | ✅ Hecho — desbloqueado por el agente (ítem 4.3, ver su evidencia para el diseño real): el agente decide por sí mismo llamar `listar_tareas` cuando necesita identificar una tarea por descripción, y elige el `task_id` correcto antes de invocar la tool de escritura — comportamiento emergente del bucle de tool-calling, no un método dedicado. Responsabilidad exclusiva del agente, sin repartirla con el router, tal como se decidió. Verificado real (no mockeado) con el caso límite que motivó no resolverlo de forma determinista: "la tarea odontológica" resuelto correctamente contra "Ir al dentista para limpieza de dientes", de punta a punta hasta completar la tarea en Mongo |
+| 3.8 | El logger estructurado escribía a `stdout`, el mismo canal que usa el protocolo JSON-RPC del servidor MCP en modo stdio — cualquier log de una tool corrompía el stream (verificado con lectura cruda del stdout del subproceso, no solo con el cliente MCP, que era tolerante al ruido y lo ocultaba) | 🟢 | §A.8 | ✅ Hecho — hallazgo propio al verificar 3.3 (el primer log real emitido desde dentro del servidor MCP). `logging.py`: `PrintLoggerFactory(file=sys.stdout)` → `sys.stderr`, que es el canal reservado para diagnóstico tanto en MCP-stdio como en la CLI (`stdout` es la salida real del producto). Verificado con lectura cruda de stdout/stderr del subproceso, no solo con el SDK cliente |
+| 3.9 | Docstrings insuficientes para un consumidor LLM: no dicen forma de respuesta, comportamiento ante "no encontrado", límite de `listar_tareas` ni valores válidos de `status` | 🟢 | §A.12 | ✅ Hecho — los 7 docstrings de `task_tools.py` ahora documentan forma de retorno, semántica de "no encontrado", el límite de 10 de `listar_tareas` y los valores válidos de `status`. Solo texto, verificado contra el protocolo real (`list_tools()`), sin cambios de comportamiento ni tests |
+| 3.10 | Retornos tipados `dict[str, Any]` → `outputSchema` de FastMCP vacío (verificado contra el protocolo); el docstring es el único contrato hoy | 🟡 | §A.12 | ✅ Hecho — modelos Pydantic reales por tool (`Task` del dominio reutilizado, más `ListarTareasResponse`/`TareaResponse`/`CompletarTareaResponse`/`EliminarTareaResponse`/`HealthCheckResponse`). `outputSchema` verificado contra el protocolo: ya trae propiedades, tipos y `required`. De paso: `crear_tarea` filtraba `inserted_id` de Mongo a la respuesta (quitado, no era dato de dominio); `eliminar_tarea` no devuelve una `Task` completa, solo un recibo, tipado aparte |
+| 3.11 | `listar_tareas` limita a 10 de forma hardcodeada e invisible, sin filtros — reemplaza al 4.12 (mal ubicado en Fase 4, es trabajo de tools) | 🟡 | §A.11 | ✅ Hecho (parcial, ver 3.12) — `listar_tareas(estado?, limite?)`, propagado por `TaskService`/`MongoTaskRepository`/`McpTaskServiceClient`. `limite` por defecto 20 (antes 10 fijo), techo de 100 en servidor pase lo que se pida. Filtro por fecha separado como 3.12: `Task.dates` es un objeto libre sin clave canónica, filtrar contra eso no sería confiable |
+| 3.12 | `Task.dates` no tiene una clave fija (ej. `due_date`) — sin eso, `listar_tareas` no puede filtrar por fecha de forma confiable | 🟡 | §A.11 | ✅ Hecho — también encontrado: `complete_task_async` nunca guardaba cuándo se completó una tarea, ese dato no existía en ningún lado. `Task` gana 3 campos de primer nivel (`str \| None`, formato ISO 8601 normalizado, mismo patrón que `deleted_at`): `created_at` (lo fija el sistema al crear), `due_date` (lo da el usuario, con validador que rechaza cualquier formato no-ISO), `completed_at` (lo fija `complete_task_async`, una sola vez — no se re-estampa en llamadas repetidas, para no romper la idempotencia). Los validadores no interpretan lenguaje natural ("el viernes"): traducir eso a ISO es responsabilidad de quien llama a la tool, documentado en los docstrings de `crear_tarea`/`actualizar_tarea`. Filtrar `listar_tareas` por estos campos queda para cuando haya un caso de uso real que lo pida. `dates` (el dict libre que estos campos reemplazan) se eliminó de `Task`, junto con `steps`/`context_metadata` — ninguno tenía consumidor real ni esquema, y `dates` en particular era el hueco original: `tests/test_task_service.py` (ya excluido de CI, bug ajeno) esperaba justo `dates.created_at`/`due_date`/`completed_at` anidados, nunca implementado |
+| 3.13 | *(hallazgo, Fase 4)* `app.py` (`TaskCreateRequest`/`TaskUpdateRequest`, endpoint CRUD) sigue declarando `dates`/`context_metadata`/`steps` | 🟢 | §A.1 | ✅ Hecho — los modelos de request ya no declaran esos 3 campos porque las tools `crear_tarea`/`actualizar_tarea` nunca los aceptaron como parámetro. |
+
+**DoD de fase:** ninguna acción se puede ejecutar sin pasar por una tool MCP; cada invocación queda
+auditada; ninguna tool acepta filtros que cruzen tenants.
+
+> **Validado (2026-08-21):** las tres cláusulas se cumplen — `TaskOrchestrator` y el cliente MCP externo
+> comparten la única vía de ejecución (3.1); toda invocación pasa por `_audited` (3.3); ninguna tool expone
+> `tenant_id` como parámetro, verificado por test (3.4). 3.7 queda abierto a propósito: no es deuda de esta
+> fase, es una dependencia declarada de 4.3. Hallazgos sin mapear detectados durante la fase, ahora
+> formalizados como 1.10 y 1.11 (abajo, en Fase 1 — son deuda de tipado/tests preexistente, no de MCP).
+
+### Fase 4 — Arquitectura de agentes
+
+| # | Cambio | Nivel | Área | Estado |
+| --- | --- | --- | --- | --- |
+| 4.1 | Adelantar tracing OpenTelemetry si no se hizo ya (depurar agentes sin traces es inviable) | 🟡 | §A.5 | ✅ Hecho — `opentelemetry-api` en dependencias base (spans no-op de costo ~cero si el tracing está apagado); SDK/exporter/instrumentación en el extra `[otel]`, opt-in vía `OTEL_ENABLED` (default `false`, mismo criterio que Mongo en `docker-compose.yml`). Jaeger local (`jaegertracing/all-in-one:1.60`, puertos 16686 UI / 4317 OTLP gRPC) agregado a `docker-compose.yml` — Jaeger (elegido sobre Grafana Tempo, ver discusión) por ser un solo contenedor sin config, consistente con lo que ya preveía §A.5. Spans manuales en los 4 tramos: `router.clasificar` (`hybrid_router.route`), `llm.completar` (`_OpenAITextClient._invoke_model`, único choke point de las 5 subclases), `orquestador.ejecutar` (`TaskOrchestrator.handle_message_async`), `memoria.cargar` (`AgentContext.build_context_summary_async`). `FastAPIInstrumentor`/`PymongoInstrumentor` activados solo si `OTEL_ENABLED=true`. Verificado real, no solo con mocks: con Jaeger arriba y `OTEL_ENABLED=true`, los 4 spans llegaron y se confirmaron vía la API de Jaeger (`/api/traces`), correlacionados bajo el mismo `trace_id` para un turno completo. Hallazgo aparte (no arreglado aquí, ver 3.13): `app.py` sigue declarando `dates`/`context_metadata`/`steps` en `TaskCreateRequest`/`TaskUpdateRequest`, campos que 3.12 eliminó de `Task` — `mypy` lo confirma (`Unexpected keyword argument`), detectado al correr el mypy de verificación de este ítem |
+| 4.2 | Guardrails: whitelist de tools, límite de pasos, presupuesto de tokens, confirmación de escrituras | 🟡 | §A.8 | ✅ Hecho — `application/guardrails.py`: `Guardrails.evaluate_step(tool_name, steps_used, tokens_used, confirmed)` decide `ALLOW`/`DENY_TOOL_NOT_WHITELISTED`/`DENY_STEP_BUDGET_EXCEEDED`/`DENY_TOKEN_BUDGET_EXCEEDED`/`NEEDS_CONFIRMATION`, en ese orden. `build_default_guardrails()` toma la whitelist de `TOOL_SCOPES` real (`task_tools.py`, ítem 3.3) en vez de duplicarla — un test contra el diccionario real detecta si una tool nueva se agrega sin decidir su scope. No depende de que 4.3 exista: es una política pura, sin I/O, probada con una secuencia de pasos simulada (10 tests nuevos, `test_guardrails.py`). Queda lista para que 4.3 la consuma tal cual |
+| 4.3 | Agente con tools MCP: ejecutor principal de toda acción que el router no pueda despachar con el 100% de lo necesario (criterio de 4.11), no un fallback raro | 🟡 | §A.8 | ✅ Hecho — **rediseñado tras revisión**: la primera versión (`resolve_task_reference_to_id`, un método fijo por capability) fue señalada como no-agente-de-verdad — el LLM no decidía nada, solo resolvía un sub-problema que el código ya había decidido que existía. Reemplazado por un agente con tool-calling real: `application/agent/agent.py` arma el catálogo de tools desde `McpTaskServiceClient.list_tools()` (el servidor MCP real, nunca un esquema duplicado a mano — nuevo `list_tools()`/`call_tool()` genéricos en `client.py`), se lo pasa al LLM (`OpenAIAgentLLM.invoke_with_tools`, `chat.completions` con `tools=`/`tool_choice="auto"`) y dentro de un bucle deja que el modelo decida qué tool(s) invocar y con qué argumentos — incluyendo llamar `listar_tareas` por su cuenta cuando necesita identificar una tarea por descripción, o incluir atributos (prioridad, categoría, fecha, descripción) que el usuario mencionó en lenguaje natural al crear una tarea. Cada tool call propuesta pasa por `Guardrails.evaluate_step` (ítem 4.2) con `steps_used`/`tokens_used` acumulados de verdad a lo largo del bucle (cierra la mitad del hallazgo 4.16), acotado por `max_steps`. El router sigue protegiendo la ruta barata (4.11) solo para lo que de verdad no requiere interpretar nada: `list_tasks` y `create_task` resuelto por regla exacta. `complete_task`/`delete_task` siempre se despachan al agente (ver 4.17: ni con `task_id` explícito vale la pena un camino aparte, ningún usuario real escribe ese id). Confirmación interactiva real antes de escrituras: cerrada en 4.16, una vez existió el endpoint conversacional de 4.10. Verificado real de punta a punta (MCP real + LLM real, sin mocks): (1) "crea una tarea urgente para llamar al banco mañana antes de las 5pm, categoría trabajo" — el agente extrajo `priority`, `due_date` (fecha relativa resuelta a ISO) y `category` correctamente, y al fallar la primera validación de Pydantic (`category` en español, `priority` sin `level`) el propio bucle mostró recuperación real: el error de la tool volvió como resultado, el LLM lo leyó y reintentó con los valores corregidos — comportamiento emergente, no programado; (2) "termina la tarea odontológica" — el agente decidió por sí mismo llamar `listar_tareas` antes de `completar_tarea`, mismo caso límite ya verificado en la versión anterior. 16 tests nuevos (`test_agent.py` reescrito + `test_orchestrator.py` actualizado) |
+| 4.4 | Port de orquestación en `domain/` (habilita cambiar de motor sin reescribir) | 🟢 | §A.8 | ✅ Hecho — nuevo `domain/repositories/conversation_orchestrator.py`: `ConversationOrchestrator` (`Protocol`, `handle_message_async`/`handle_message`), mismo patrón que `TaskRepository`/`SessionMemoryRepository`/`LongTermMemoryRepository`/`LLMClient`. `TaskOrchestrator` lo cumple sin cambios (ya tenía esa firma). `cli.py` tipa la variable `orchestrator` contra el puerto en los dos puntos donde se construye, en vez de la clase concreta. Hallazgo aparte (no arreglado aquí, fuera de alcance de este ítem): `mypy` sobre `interfaces/cli.py` (nunca estuvo en el scope habitual del comando de verificación, solo `domain`/`application`) reporta 5 errores preexistentes ajenos a este cambio — ninguno relacionado con el nuevo puerto |
+| 4.5 | Documento de decisión: evaluar los criterios de state graph (4) y de librerías de guardrails de IA (3, NeMo Guardrails/Guardrails AI/similares) y registrar la conclusión de ambos | 🟢 | §A.8 | ✅ Hecho — ninguno de los 7 criterios se cumple hoy (ver decisión completa en §A.8, justo antes del DoD de fase). Conclusión: no adoptar ninguna de las dos por ahora; revisar cuando exista el endpoint conversacional de 4.10 con tráfico real, o el proyecto se exponga a usuarios externos (Fase 6+) |
+| 4.6 | LLM-as-judge calibrado para la respuesta final | 🟢 | §A.12 | ✅ Hecho (evaluación offline, alcance decidido explícitamente — ver §A.12) — `ResponseJudgment` (dominio: `correcta`/`util`/`en_espanol`/`puntuacion`/`justificacion`), prompt `eval/judge_response.prompt.md` con rúbrica y ejemplos, `OpenAIResponseJudge.judge_response()` (mismo patrón que los demás responders de `openai_llm_client.py`, instanciado con un modelo distinto del evaluado — `gpt-5-nano`, familia de razonamiento, vs. `gpt-4o-mini` que genera las respuestas). Dataset de calibración `tests/eval/golden_judge.jsonl` (30 casos con juicio humano, cubriendo respuestas correctas, en inglés, evasivas/vagas y alucinadas — 4 de los 30 son regresiones reales de esta sesión: 4.17, 4.18, 4.19, y el riesgo de 4.16 de borrar la tarea equivocada). Harness `tests/eval/run_eval_judge.py` + wrapper `test_eval_judge.py` (marca `eval`, **no wireado a ningún workflow de CI** — deliberadamente manual, corre solo cuando se toque el prompt del juez o el dataset). Hallazgo real al intentar correrlo con `gpt-5-nano`: `_OpenAITextClient` mandaba `temperature=0` fijo en cada llamada — los modelos de razonamiento (o1/o3/o4, gpt-5) solo aceptan el valor por defecto y la API rechazaba la llamada con 400. Corregido en el cliente compartido (`_supports_custom_temperature`, por prefijo de modelo), no solo en el script del juez — beneficia a cualquier cliente LLM del proyecto que use un modelo de esa familia. Segundo hallazgo real inmediato: con eso resuelto, el juez seguía fallando por `APITimeoutError` — el timeout por defecto (`llm_request_timeout_seconds`, 5s) está calibrado para modelos rápidos sin razonamiento, y un modelo de razonamiento piensa antes de responder. `_OpenAITextClient` gana parámetros opcionales `timeout`/`max_retries` por instancia (antes fijos a `Settings`); `run_eval_judge.py` construye el juez con 60s sin tocar el default global de producción. 4 tests nuevos en total (temperature + override de timeout/retries). Primera calibración real (`gpt-5-nano`, 30 casos): 76.67% de acuerdo en booleanos, por debajo del umbral (80%) — pero el patrón de los 7 desacuerdos apuntaba al dataset, no al juez: 4 casos "correctos" no tenían `contexto` con el resultado real, así que el juez no podía verificar la afirmación y correctamente sospechaba (exactamente lo que pide la rúbrica); y la rúbrica no distinguía "vaga pero no inventa nada" (sigue siendo `correcta=true`) de "afirma un dato específico sin respaldo" (`correcta=false`), ni "cumple una parte y admite honestamente el resto" de una respuesta evasiva. Corregido: 4 casos del dataset ganan `contexto` con el resultado real (gej-002, gej-010, gej-022, gej-027); `judge_response.prompt.md` v1.1.0 sharpen esas dos distinciones con 3 ejemplos nuevos de contraste. Recalibración pendiente de correr bajo demanda |
+| 4.7 | Soporte de solicitudes multi-intención: ejecutar varias acciones de dominio en un mismo turno | 🟢 | §A.12 | ✅ Hecho, ver evidencia de 4.9 — la mitigación de Fase 2 (ítem 2.8, `clarify` explícito) queda solo para lo que de verdad no puede ejecutarse (acción de dominio + pregunta de conocimiento general, o un verbo no soportado) |
+| 4.8 | Reordenar responsabilidades de `infrastructure/` mezcladas por la forma orgánica en que creció (router vs. LLM genérico, protocols vs. lógica de reglas) | 🟢 | §A.8 | ✅ Hecho — disparador confirmado: `openai_llm_client.py` vivía dentro de `routers/` pero ya no era código del router — lo consumen también el agente (`OpenAIAgentLLM`, ítem 4.3), el resumen de sesión (`OpenAISessionSummarizer`, `ContextBuilder`) y el juez offline (`OpenAIResponseJudge`, ítem 4.6). Movido a `infrastructure/llm/openai_llm_client.py` (nuevo subpaquete, mismo patrón que `mcp/`/`persistence/`/`prompts/`/`observabilidad/`); `routers/` queda solo con `hybrid_router.py`, la lógica de ruteo real. Actualizadas las 7 referencias (imports + un comentario de path). Revisada la segunda mitad del hallazgo ("protocols vs. lógica de reglas"): los `Protocol` locales de `hybrid_router.py` (`IntentClassifier`, `GeneralKnowledgeResponder`, etc.) son puertos angostos de inyección exclusivos del router, no una mezcla real — se dejan como están. Sin cambios de comportamiento, solo `git mv` + imports; 146/146 tests sin tocar |
+| 4.9 | Router clasifica `multi_task` (2+ acciones en un mensaje) y el agente (4.3) las ejecuta en secuencia vía MCP, en vez de degradar siempre a `clarify` | 🟢 | §A.8 | ✅ Hecho — `IntentAction.MULTI_TASK` nuevo en el enum de dominio. `classify_intent.prompt.md` (v1.8.0): 2+ acciones de dominio distintas, cada una con lo mínimo para ejecutarse, → `multi_task` con `payload={}` (sin desglosar — quien decide el orden y ejecuta cada acción es el agente); si a alguna le falta algo esencial, o si mezcla una acción de dominio con una pregunta de otra ruta (ej. conocimiento general), sigue siendo `clarify`. En `_dispatch`, `multi_task` se entrega entero al agente — mismo camino que `complete_task`/`delete_task`, sin código nuevo de ejecución: el bucle de tool-calling ya soportaba varias tools por turno desde 4.3 (`test_calls_a_tool_then_returns_the_final_answer`), solo faltaba que el router dejara de bloquearlo con `clarify` (mitigación de la Fase 2, ítem 2.8). Golden dataset: 8 de los 10 casos de `multi_intencion` pasan de `clarify` a `multi_task` (los 2 restantes siguen en `clarify` por motivos distintos: mezcla de rutas, y un verbo no soportado por ningún intent) — actualizado en el dataset, sin correr eval-router (opt-in, ver 4.13). 1 test nuevo en `test_orchestrator.py` |
+| 4.10 | Endpoint conversacional en `app.py` que expone el orquestador (router + agente) con respuesta en lenguaje natural — precondición para cualquier frontend o canal de voz (Alexa, Fase 6) | 🟢 | §A.1 | ✅ Hecho — `POST /chat` (`{message, session_id?}` → `{message, session_id, success, action}`): `TaskOrchestrator` (vía el puerto `ConversationOrchestrator`, ítem 4.4) con `McpTaskServiceClient` (MCP real, no `TaskService` directo — sigue el criterio de 3.1) y los repos de sesión/perfil de Mongo, ya existentes en la app, ahora también en `app.state`. Sesión gestionada por el cliente: sin `session_id` en el payload, el servidor crea uno y lo devuelve para que el siguiente turno lo reutilice — memoria conversacional real entre peticiones HTTP. `TaskOrchestrator.handle_message_async`/`handle_message` ganan un `request_id` opcional (igual en `ConversationOrchestrator`): `/chat` le pasa el mismo id que `RequestIdMiddleware` ya generó, en vez de que el orquestador genere el suyo — cierra el hallazgo anticipado en el propio código antes de este ítem. Verificado real de punta a punta (MCP real + LLM real + Mongo local, sin mocks), 3 turnos de una sesión: saludo+listado, creación de tarea, y "hazlo de nuevo" resuelto por contexto (ítem 4.18) mostrando la tarea recién creada — confirma el flujo completo de esta sesión (4.3, 4.9, 4.17, 4.18, 4.19) funcionando también desde HTTP, no solo CLI. **Dos hallazgos reales encontrados y corregidos en esa misma verificación** (ninguno se detecta con tests mockeados): (1) `RequestIdMiddleware` heredaba de `BaseHTTPMiddleware`, que ejecuta el resto del stack en una task de `anyio` separada de la que espera la respuesta — rompe cualquier librería aguas abajo atada a cancel scopes por task, como el cliente MCP por stdio (`RuntimeError: Attempted to exit a cancel scope in a different task`); reescrito como middleware ASGI puro (mismo comportamiento — header, `request.state.request_id`, reutiliza un `X-Request-ID` entrante si ya viene). (2) `McpTaskServiceClient` establecía su sesión stdio de forma perezosa en la primera petición real — para un cliente de vida larga compartido entre peticiones, eso ata los cancel scopes de `anyio` a la task de esa primera petición, y cerrarlos luego desde el shutdown del lifespan (otra task) fallaba con el mismo error; nuevo `connect()` explícito, llamado en el lifespan antes de aceptar peticiones, en la misma task que hará `aclose()`. 8 tests nuevos (`test_api_chat.py`: 6: mensaje, session_id nuevo/reutilizado, request_id del middleware, request_id provisto por el cliente, mensaje vacío rechazado; `test_mcp_client.py`: `connect()`) |
+| 4.11 | Regla de decisión explícita router vs. agente (no es lectura vs. escritura): el router solo invoca una tool MCP directo si ya tiene el 100% de lo necesario sin interpretar lenguaje natural; si falta estructurar algo, pasa por el agente | 🟢 | §A.8 | ✅ Hecho — reglas duras (`EXACT_LIST_TASKS_COMMANDS`) ya cumplían por construcción. Gap real en el clasificador LLM: trataba "tareas de hoy"/"esta semana" como `list_tasks` sin filtro, perdiéndolo en silencio. `classify_intent.prompt.md` v1.5.0 agrega: lectura con filtro de fecha/estado en NL → `clarify`, no ejecuta consulta ciega. 3 casos nuevos + 3 corregidos en golden dataset; eval-router 111/112 (ruido preexistente no relacionado, grt-059). `coste_medio_tokens_maximo` 600→650 en `umbrales.yaml`, justificado ahí. **Superado por 4.19**: `clarify` era la única opción disponible en ese momento porque ni la tool filtraba (resuelto por 3.11) ni existía el agente (resuelto por 4.3) — con ambos ya construidos, la respuesta correcta al criterio de esta misma regla es agente, no `clarify` |
+| 4.13 | Caché semántico de intents sin parámetros (extiende 4.11): reconocer paráfrasis de un mismo comando ("muéstrame mis tareas" ≈ "qué tareas tengo" ≈ "dime mis pendientes") contra un conjunto cerrado de intents conocidos (`intent` + `tool` + `parámetros requeridos: ninguno`), y ejecutar la tool MCP directo sin pasar por el clasificador LLM ni el agente | 🟡 | §A.8 | Bloqueado: requiere tráfico real de una fase preproductiva con usuarios reales para saber qué paráfrasis se repiten lo suficiente como para justificar el caché — no hay forma de construirlo con datos sintéticos sin adivinar. Reglas de diseño ya fijadas para cuando llegue ese momento: (1) se guarda `intent`+`tool`+`parámetros`, nunca la respuesta — la tool se re-ejecuta siempre contra el estado real; (2) la coincidencia debe ser de **igualdad** contra la clase de intent reconocida, no un umbral de similitud `< 1` — un score parcial nunca autoriza ejecución, cae al clasificador LLM; (3) solo aplica al subconjunto de intents sin parámetros por interpretar (mismo criterio de 4.11) — cualquier caso con dato variable (fecha, referencia de tarea) queda fuera de este caché y sigue por agente |
+| 4.14 | *(hallazgo, vía trazas de 4.1)* `_handle_message` extrae hechos de perfil (llamada LLM) antes de clasificar la intención, para todo mensaje sin excepción — incluidos saludos puros que no pueden contener un hecho nuevo | 🟢 | §A.8 | 🟡 Parcial — de las dos optimizaciones planteadas, solo la primera se implementó; la segunda resultó insegura y se descartó con evidencia (ver abajo). (1) **Hecho**: nuevo `ProductionIntentRouter.peek_fast_rule_action(message)` — envoltorio síncrono y sin I/O de `_check_fast_rules` (la misma regla que ya resuelve saludos/despedidas sin LLM), expuesto para que el orquestador decida *antes* de extraer. En `_handle_message`, si la regla rápida ya resuelve `small_talk`, se salta `extract_profile_facts` por completo — un saludo puro no puede contener un hecho nuevo. Con eso, un turno de saludo puro baja de 7.84s a solo pagar `answer_small_talk` (0.70s) más overhead, sin las otras dos llamadas LLM. 1 test nuevo en `test_hybrid_router.py` (`peek_fast_rule_action`) + 1 en `test_orchestrator.py` (`extract_profile_facts` no se llama en el camino de regla rápida). (2) **Descartado**: paralelizar `extract_profile_facts` y `route()` con `asyncio.gather` para el resto de mensajes rompe una garantía real que dos tests ya cubrían (`test_orchestrator_persists_and_reuses_session_context_from_repository`, `test_orchestrator_persists_generic_profile_facts_from_repository`) — `route()` necesita ver, en el mismo turno, los hechos que `extract_profile_facts` acaba de persistir (un mensaje que declara un dato y pregunta por él en la misma frase depende de eso). `gather` los ejecuta concurrentemente, así que `route()` vería el contexto sin el hecho de este turno. Se mantiene el orden secuencial (extraer → persistir → reconstruir contexto → clasificar) para todo mensaje que no resuelva por regla rápida — verificado revirtiendo el intento de `gather` y confirmando que los 2 tests vuelven a fallar con él puesto |
+| 4.15 | *(hallazgo, validación de estructura)* `application/` era la única capa sin subcarpetas por sub-tema — `infrastructure/` ya las tenía (`mcp/`, `persistence/`, `prompts/`, `routers/`, `observabilidad/`) — con 3 sub-temas mezclados al mismo nivel (CRUD de tareas, orquestación/agente, memoria) | 🟢 | §A.1 | ✅ Hecho — reorganizado en subpaquetes: `application/tasks/task_service.py`, `application/memory/{agent_context,context_builder}.py`, `application/agent/{orchestrator,guardrails}.py`. De paso, dos hallazgos de contenido resueltos en el mismo cambio: `application/prompt_engineering.py` (`PromptBuilder`) era código muerto sin ningún consumidor real (el pipeline de prompts real es `infrastructure/prompts/router/*.prompt.md` + `loader.py`, ítem 2.2) — eliminado junto con su test; `infrastructure/task_repository.py` (factory `build_default_task_repository`) vivía suelto en la raíz de `infrastructure/` en vez de junto al resto del adaptador Mongo — fusionado dentro de `persistence/mongo/mongo_repository.py`, que ya tenía las mismas dependencias. |
+| 4.16 | Los guardrails de escritura del agente son parcialmente inertes: `steps_used`/`tokens_used` fijos en `0` (sin contador real), y `confirmed=True` forzado sin que el usuario confirme nada de verdad | 🟡 | §A.8 | ✅ Hecho — (1) ya resuelto por el rediseño del agente (ver evidencia de 4.3): `steps_used`/`tokens_used` reales entre pasos. (2) Resuelto: `agent.py` ya no fuerza `confirmed=True` — pasa `confirmed=False` real al evaluar cada tool call. Alcance decidido explícitamente (no todas las escrituras, ver discusión): solo las irreversibles piden confirmación — `crear_tarea`/`actualizar_tarea` quedan fuera (reversibles, fricción ya evaluada en 4.17), `completar_tarea`/`eliminar_tarea` sí la exigen. Nuevo `GuardrailsConfig.confirmation_required_tools` (subconjunto explícito de `write_tools`, no toda la whitelist de escritura). Cuando `Guardrails.evaluate_step` devuelve `NEEDS_CONFIRMATION`, `Agent.handle()` detiene el turno entero de inmediato (sin ejecutar nada) y devuelve `AgentResult.pending_confirmation={tool, arguments}` junto con una pregunta determinista (`"¿Confirmas que quieres eliminar la tarea (t-9)?"`). El orquestador persiste esa confirmación pendiente en la memoria de sesión (`ShortTermMemory`, nuevo `get_item_async` — lee un item por clave sin el recorte a `max_items` de instancia, para que sobreviva aunque se agreguen otros items) y responde con `action="needs_confirmation"`, sin tocar MCP. En el siguiente turno HTTP, antes de clasificar nada, el orquestador intercepta el mensaje: afirmativo (`sí`/`confirmo`/`dale`/...) → `Agent.execute_confirmed_tool(tool, arguments)` ejecuta exactamente la misma tool con los mismos argumentos, sin volver a pasar por el LLM ni por el bucle de razonamiento; negativo (`no`/`cancela`/...) → se descarta sin ejecutar nada. **Hallazgo real señalado en revisión** (no cubierto por la primera versión): una respuesta que no matchea esas keywords exactas ("por supuesto", "obvio que sí", "mejor ni te molestes") caía a descartar la confirmación pendiente y reprocesar el mensaje desde cero, sin que nada supiera que existía una pregunta pendiente — rompía el hilo justo en el caso más natural (el usuario no repite la palabra exacta "sí"/"no"). Corregido reusando el clasificador que ya corre para todo mensaje ambiguo, en vez de construir un clasificador dedicado nuevo (sin costo de LLM adicional): dos `IntentAction` nuevos, `confirm_pending_action`/`cancel_pending_action`. Si la regla rápida de keywords no matchea, ya **no se descarta** la confirmación pendiente — sigue viva en la sesión (visible en el contexto del siguiente turno) hasta que `classify_intent` la resuelva explícitamente en cualquier redacción, o el usuario cambie de tema (en cuyo caso el mensaje se procesa normalmente y la confirmación sigue pendiente para un turno futuro, no se pierde). 14 tests nuevos en total (`test_agent.py`: la tool se detiene sin ejecutar + `crear_tarea` sigue sin pedir confirmación + `execute_confirmed_tool` ejecuta/deniega/propaga error; `test_guardrails.py`: `write_tools` y `confirmation_required_tools` son conjuntos distintos; `test_orchestrator.py`: propone sin ejecutar, confirma y ejecuta por keyword, cancela por keyword, confirma/cancela por el clasificador en lenguaje natural, y un mensaje sin relación no pierde la confirmación pendiente para un turno posterior). **Regresión real encontrada al validar con el golden eval real** (`classify_intent.prompt.md` v1.9.0, primera versión): enseñar `confirm_pending_action`/`cancel_pending_action` como bullet permanente del prompt estático causaba falsos positivos en mensajes sin ninguna confirmación pendiente (`grt-069`/`grt-081` del dataset, "esa tarea ya no"/"eso que dije antes, hazlo" mal clasificados) y casi duplicaba el coste medio de tokens del router para **todo** mensaje, no solo los que de verdad tienen una confirmación pendiente (650 → 1003 tokens medidos, bloqueando el pipeline). Corregido (v1.10.1): la instrucción se saca del prompt estático — el esquema estructurado (derivado del enum de Python) ya acepta esos dos valores sin que el prompt los explique — y se inyecta solo en el `context` de la llamada puntual donde de verdad hay una confirmación pendiente ambigua (`_build_pending_confirmation_hint` en `orchestrator.py`, con la pregunta real). Verificado real con el golden dataset completo tras el fix: `grt-069`/`grt-081` vuelven a clasificar `clarify` correctamente, sin ningún caso nuevo de confirm/cancel espurio. `coste_medio_tokens_maximo` subido 650 → 1050 en `umbrales.yaml`: la deuda acumulada de reglas previas nunca revalidadas (4.9/4.18/4.19, cada una documentada como "sin correr eval-router") ya había subido el costo real a ~900 antes de tocar nada de este ítem — revertir el propio cambio de 4.16 solo bajó ~100 tokens, confirmando que el grueso es deuda previa. Recortar ese prompt acumulado para bajar el costo real queda como deuda técnica aparte (no bloqueante) |
+| 4.17 | *(hallazgo)* `_format_public_message` para `list_tasks` devolvía un string fijo (`"Aquí tienes tus tareas."`) sin importar el resultado real — el usuario pedía ver sus tareas y la respuesta no mostraba ninguna. Además, `complete_task`/`delete_task` con `task_id` explícito tenían un camino determinista aparte que en la práctica nunca se activa: ningún usuario escribe el id alfanumérico de una tarea | 🟢 | §A.8 | ✅ Hecho — `list_tasks` ahora arma el mensaje a partir del resultado real (título + estado de cada tarea, o "No tienes tareas pendientes." si la lista viene vacía) — mismo principio que la salida conversacional LLM-generada, aplicado aquí como renderizado directo del dato real (determinista, sin llamada a LLM: es una lista de datos ya conocidos, no texto libre). Se eliminó el camino determinista de `complete_task`/`delete_task` con `task_id`: ambas acciones se despachan siempre al agente (ver 4.3), sin ninguna rama ni validación previa — el router (`_needs_clarification`) ya garantiza que llegue algún identificador antes de que la intención llegue a `_dispatch`, así que un guard defensivo ahí era redundante. 2 tests nuevos (`test_orchestrator.py`: mensaje con tareas reales, mensaje sin tareas) y 1 test reescrito (`task_id` explícito ahora también despacha al agente) |
+| 4.18 | *(hallazgo, real en CLI)* `classify_intent` no resolvía continuaciones implícitas del turno anterior ("hazlo de nuevo" tras un `list_tasks`) — el prompt solo enseñaba a resolver pronombres con antecedente en `complete_task`/`delete_task`, no repetición/confirmación en general. Caía a `clarify` con confianza baja aunque `conversation_context` trajera la acción previa | 🟢 | §A.8 | ✅ Hecho — regla generalizada en `classify_intent.prompt.md` (v1.6.0): antes de clasificar, resolver contra `conversation_context` cualquier referencia implícita al turno anterior (pronombres, elipsis, repetición, confirmación), para cualquier intent — no una regla puntual por caso detectado, que no escala en tokens ni en ventana de contexto. Sin correr eval-router (opt-in, ver 4.13) |
+| 4.19 | *(hallazgo, real en CLI)* `list_tasks` con un filtro de fecha/estado/negación en lenguaje natural ("tengo tareas sin finalizar?") caía a `clarify` sin excepción — regla heredada de 4.11, de cuando ni la tool filtraba ni existía el agente. Con ambos resueltos, seguía sin usarse ninguno: la tool `listar_tareas` ya acepta `estado` (3.11) y el agente ya sabe razonar con la tool real (4.3), pero el clasificador seguía degradando a `clarify` por regla fija | 🟢 | §A.8 | ✅ Hecho — `classify_intent.prompt.md` (v1.7.0): un `list_tasks` con filtro descrito en NL ya no baja la confianza ni fuerza `clarify` — sigue siendo `list_tasks`, con el texto del filtro tal cual en `payload.filter_description`. En `_dispatch`, `list_tasks` con `filter_description` presente se entrega al agente en vez de tomar el camino barato: `listar_tareas` solo filtra por igualdad exacta de un único `estado` (no negación ni rangos de fecha), así que decidir cómo traducir la descripción — una llamada, varias combinadas, o ninguna — es razonamiento, no un parámetro literal que el router pueda pasar. `list_tasks` sin filtro (mayoría de los casos) sigue en el camino barato sin cambios. 1 test nuevo (`test_orchestrator.py`) |
+| 4.20 |  El CRUD estructurado (`/tasks`) seguía llamando a `TaskService` directo en vez de MCP. Consecuencia concreta: las escrituras vía `/tasks` no pasaban por la auditoría que sí tienen todas las escrituras vía `/chat` | 🟢 | §A.8 | ✅ Hecho — CRUD migrado a `McpTaskServiceClient`, mismo cliente que `/chat` (nuevo `get_mcp_client`, único punto de override para tests). Dos piezas nuevas necesarias porque el cliente MCP no cubría todo lo que el CRUD necesitaba: `McpTaskServiceClient.get_task_async`/`get_task_history_async`/`update_task_async`, y una tool MCP nueva `historial_tarea` (no existía ninguna — `TaskService.get_task_history_async` nunca estuvo expuesta por MCP), auditada y con scope `read` como el resto de lecturas. `TaskCreateRequest`/`TaskUpdateRequest` rediseñados con los campos reales que `crear_tarea`/`actualizar_tarea` aceptan (`due_date` directo en vez de un `dates` libre) — Los `try/except ValueError` de los endpoints de escritura pasan a `except RuntimeError`: los errores de validación ahora cruzan la frontera MCP (`_call_tool` los reempaqueta como `RuntimeError`), no `ValueError` directo. `test_api_e2e.py` reescrito contra el protocolo MCP real (mismo patrón que `test_mcp_client_integration.py`, incluida la restricción de cerrar la sesión stdio en la misma task que la abrió — no en `asyncTearDown`, que corre en una task distinta bajo `IsolatedAsyncioTestCase`, verificado empíricamente). 12 tests nuevos/reescritos entre `test_mcp_client.py`, `test_mcp_tools_contract.py` y `test_api_e2e.py` |
+| 4.21 | *(hallazgo, al validar 4.16 con el golden eval real)* `classify_intent.prompt.md` acumuló varias reglas (4.9 multi_task, 4.18 referencias implícitas, 4.19 filtro NL) sin volver a correr `tests/test_eval_router.py` — cada una documentada como "sin correr eval-router (opt-in)". El costo real ya estaba en ~900 tokens/caso antes de tocar nada de 4.16, sin que nada lo detectara | 🟢 | §A.8 | Sin arreglar — `coste_medio_tokens_maximo` subido 650 → 1050 en `umbrales.yaml` para desbloquear el pipeline (ver evidencia de 4.16), no para dar por buena la deuda. Recortar el prompt acumulado para bajar el costo real a algo más cercano al umbral original queda pendiente. Mientras tanto: correr `pytest tests/ -m eval` con una key real después de **cualquier** cambio a `classify_intent.prompt.md`, sin excepción — la política "opt-in, corre cuando se toque el prompt" ya existía, pero en la práctica se venía saltando repetidamente sin justificación explícita |
+
+**4.12 (movido):** el trabajo de darle filtros a `listar_tareas` se reubicó como ítem **3.11** —
+es mecánico (una tool más completa), no depende de que exista el agente. 4.11 sigue dependiendo de
+que 3.11 exista para que las lecturas filtradas puedan ejecutarse una vez el agente decida hacerlo.
+
+**DoD de fase:** el patrón híbrido funciona — la ruta barata resuelve gratis solo lo que no requiere
+interpretar nada (criterio de 4.11), y el agente ejecuta el resto de las acciones vía MCP siguiendo la
+recomendación del router, no como excepción; los guardrails están testeados; la decisión sobre state graph
+está documentada con criterios, no con preferencia.
+
+### Fase 5 — RAG y contexto avanzado
+
+| # | Cambio | Nivel | Área | Estado |
+| --- | --- | --- | --- | --- |
+| 5.1 | Evaluar los 4 criterios de §A.10 con datos reales de consultas | 🟢 | §A.10 | ✅ Hecho — el criterio 1 (corpus de texto libre y largo) falla de forma estructural, no por falta de tráfico: `Task` (`domain/task_models.py`) solo tiene `title`/`description`, campos cortos y estructurados; no existe ninguna feature que produzca texto largo (sin adjuntos, sin transcripciones de voz — Alexa es Fase 6, todavía no construida). Ningún volumen de consultas cambia esa conclusión, así que no hace falta esperar tráfico real como en 4.13. Los otros 3 criterios (volumen, naturaleza semántica de la consulta, tolerancia a recall) son irrelevantes mientras el 1 no se cumpla — no se evalúan en detalle por no ser el cuello de botella |
+| 5.2 | Si aplica: adaptador Atlas Vector Search sobre el port existente, con filtro por tenant | 🔴 | §A.10 | No aplica (ver 5.1) |
+| 5.3 | Si aplica: evaluación de recuperación (recall@k) antes de conectarlo al flujo | 🟡 | §A.12 | No aplica (ver 5.1) |
+| 5.4 | Si no aplica: documentar la decisión negativa y cerrar la fase | 🟢 | §A.10 | ✅ Hecho — decisión: **no adoptar RAG/Atlas Vector Search por ahora**. El port `DocumentSearchRepository` (domain/) y su adaptador `MongoTextSearchRepository` (`$text` sobre `title`/`description`) ya existían como precondición de Fase 1 — cubren la búsqueda de texto libre que sí aplica hoy sin pagar el costo de un motor vectorial. **Condición de reapertura explícita:** esta decisión depende de que el criterio 1 siga sin cumplirse, y Fase 6 (integración con Alexa) es exactamente lo que podría cambiarlo — transcripciones de voz largas y libres son el tipo de corpus que el árbol de decisión de §A.10 sí justificaría. Revisar los 4 criterios de nuevo cuando Alexa esté integrada y haya transcripciones reales que evaluar, no antes |
+
+**DoD de fase:** existe una decisión escrita y justificada. **"No aplica" es un resultado válido y
+exitoso** de esta fase — con la condición de reapertura ligada a Fase 6 dejada explícita en 5.4.
+
+### Fase 6 — Integración con Alexa
+
+| # | Cambio | Nivel | Área | Estado |
+| --- | --- | --- | --- | --- |
+| 6.1 | Adaptador Alexa en `interfaces/`, reutilizando el orquestador sin cambios | 🟢 | §A.1 | ✅ Hecho — nuevo `interfaces/alexa.py`: traduce el request de Alexa Skills Kit y lo entrega a `TaskOrchestrator.handle_message_async`, el mismo que usa `/chat`  — sin lógica de negocio nueva, sin tocar el orquestador. Modelo de interacción: un único intent custom `MensajeIntent` con un slot `mensaje` que captura la frase libre del usuario (Alexa no tiene un tipo de slot de dictado totalmente libre para skills custom; ese es el patrón estándar para asistentes conversacionales). `session.sessionId` de Alexa se reutiliza como `session_id` del orquestador (prefijo `alexa-`, para no colisionar con sesiones de `/chat`) — memoria conversacional real entre turnos de voz, igual que HTTP. `LaunchRequest` (apertura de sesión sin frase todavía) se traduce a un saludo sintético (`"hola"`) que sí pasa por el router/LLM como cualquier saludo real — ni el mensaje de bienvenida es un texto fijo, mismo criterio que la política de no-respuestas-estáticas. Los intents de la propia plataforma (`AMAZON.StopIntent`/`CancelIntent`/`HelpIntent`, `SessionEndedRequest`) se resuelven sin pasar por el orquestador: no son mensajes de usuario que el router deba interpretar, son controles de la skill — mismo criterio que `/health` siendo determinista. Nuevo endpoint `POST /alexa` en `app.py`, deliberadamente mínimo (solo resuelve `get_orchestrator_factory`, la misma dependencia que `/chat`) — toda la traducción vive en `interfaces/alexa.py`, testeable sin FastAPI. **Sin autenticación todavía** (ver 6.2, sin cerrar) y **sin ajuste de formato para voz** (bullets de `list_tasks` se leerían literal — ver 6.4, sin cerrar): 6.1 es solo la tubería. 12 tests nuevos (`test_alexa_adapter.py`: 9, lógica de traducción sin HTTP; `test_api_alexa.py`: 3, HTTP real con orquestador falso, mismo patrón que `test_api_chat.py`) |
+| 6.2 | Autenticación por API key con hash (Alexa es cliente máquina) | 🟡 | §A.11 | Sin empezar — bloqueante antes de exponer `/alexa` fuera de localhost (§A.11: "ningún endpoint público sin autenticación") |
+| 6.3 | Rate limiting y presupuesto de LLM (primera exposición pública real) | 🟡 | §A.11 | Sin empezar |
+| 6.4 | Ajuste de respuestas para canal de voz: más cortas, sin markdown | 🟢 | §A.1 | Sin empezar — `_format_public_message` (orchestrator.py) devuelve listas con `- ` para `list_tasks`, pensado para texto; en voz se leería el guion literal |
+
+**DoD de fase:** Alexa funciona sin duplicar lógica de negocio; ningún endpoint público sin autenticación;
+existe límite de gasto.
+
+### Fase 7 — Producción y observabilidad
+
+| # | Cambio | Nivel | Área |
+| --- | --- | --- | --- |
+| 7.1 | OpenTelemetry completo: spans, métricas, export OTLP | 🟡 | §A.5 |
+| 7.2 | Dockerfile multi-stage + compose completo | 🟡 | §A.7 |
+| 7.3 | Secretos desde el gestor de la plataforma; retirar `.env` de producción | 🟡 | §A.4 |
+| 7.4 | Autorización con `Principal` y filtrado en el adaptador base | 🟡 | §A.11 |
+| 7.5 | Deploy a staging automático, a producción manual | 🟡 | §A.6 |
+| 7.6 | `pip-audit` en CI y dependencias actualizadas | 🟢 | §A.6 |
+| 7.7 | Backups de Mongo y prueba de restauración | 🟢 | §A.13 |
+
+**DoD de fase:** cualquier interacción es trazable de extremo a extremo; el despliegue es reproducible
+desde una imagen; un backup se ha restaurado con éxito al menos una vez.
+
+### Fase 8 — De proyecto educativo a idea de negocio
+
+| # | Cambio | Nivel | Área |
+| --- | --- | --- | --- |
+| 8.1 | Multi-tenancy activa: filtrado obligatorio en el repositorio base | 🟡 | §A.13 |
+| 8.2 | Coste de LLM por tenant y por día, con cuotas y degradación a modo solo-reglas | 🟡 | §A.13 |
+| 8.3 | Borrado por usuario en cascada + política de retención documentada | 🟡 | §A.13 |
+| 8.4 | Autenticación de usuarios con proveedor gestionado, si hay frontend | 🟡 | §A.11 |
+| 8.5 | Base por tenant solo si un cliente lo exige por contrato | 🔴 | §A.13 |
+
+**DoD de fase:** el aislamiento entre tenants está probado por test; el coste unitario por tenant es
+conocido; la política de privacidad se corresponde con lo que el sistema hace realmente.
+
+---
+
+## A.15 Resumen ejecutivo de decisiones
+
+**Lo que se mantiene sin discusión:** arquitectura hexagonal estricta; router de reglas + LLM pequeño con
+`clarify` (es un buen diseño, no una limitación); MCP como capa de tools; FastAPI + Pydantic v2 + MongoDB;
+nombres y comentarios en español; cambios pequeños e incrementales.
+
+**Los cinco cambios de mayor impacto, en orden:**
+
+1. **Corregir el bridging sync/async de la memoria de sesión** (Fase 0). ✅ **Hecho** (ver §A.9 y fila 0.7
+   de §A.14). Bug de fallo silencioso: el asistente no recordaba y nada avisaba. El hallazgo relacionado en
+   el bootstrap de conexión (`client.py`, fila 0.12) también quedó ✅ **hecho**.
+2. **`pyproject.toml` + `Settings` único** (Fase 0). ✅ **Hecho** (filas 0.2 y 0.4). Desbloquea CI,
+   containerización y despliegue.
+3. **Integration tests contra Mongo real** (Fase 0–1). Es la única clase de test que detecta el bug
+   anterior y los que vendrán. 🟡 Parcial: hay test async equivalente en forma a Motor para memoria de
+   sesión, y ya existe un test contra Mongo real para el ciclo de vida de la conexión
+   (`tests/test_mongo_connection_lifecycle.py`); falta un integration test de sesión contra Mongo real en
+   contenedor (0.8).
+4. **Golden dataset del router** (Fase 2). Prerrequisito no negociable de Fase 4: sin medición no hay
+   mejora, solo cambios.
+5. **Observabilidad estructurada con métricas de coste** (Fase 1). Convierte discusiones sobre coste y
+   latencia en datos.
+
+**Lo que se recomienda explícitamente NO adoptar todavía**, con su criterio de reevaluación:
+
+| Tecnología | Criterio para reevaluar |
+| --- | --- |
+| LangGraph / state graph | ≥2 de los 4 criterios de §A.8 |
+| RAG / Atlas Vector Search | Los 4 criterios de §A.10 |
+| Kubernetes | Múltiples servicios con escalado independiente |
+| Vault gestionado | >1 entorno productivo o >2 personas con acceso a credenciales |
+| Framework de memoria de terceros | Gestión propia >400 líneas con conflictos entre hechos |
+| Plataforma de observabilidad de LLM | Golden dataset >200 casos o >1 prompt en producción |
+
+**Aviso sobre el equilibrio pedagógico.** Este anexo describe el destino, no una lista de tareas
+simultáneas. Adoptar todo de golpe convertiría un proyecto de aprendizaje en un ejercicio de
+configuración de herramientas. El orden propuesto está pensado para que cada incorporación llegue cuando
+el proyecto ya tiene el problema que esa herramienta resuelve: así la herramienta se entiende, en vez de
+solo copiarse.
+
+---
+
+> **Mantenimiento de este documento.** `docs/arquitectura_y_prd.md` es la única fuente de verdad de
+> arquitectura. Cuando una propuesta de este anexo se implemente, debe reflejarse en el cuerpo principal
+> del documento y marcarse aquí como adoptada, con la fecha y el commit. Cuando una propuesta 🔴 se evalúe
+> y se descarte, registrar la decisión y los criterios evaluados: **una decisión negativa documentada vale
+> tanto como una implementación.**

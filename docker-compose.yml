@@ -1,0 +1,33 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: assistant_personal_mongo
+    ports:
+      # Host:contenedor. Se usa 27018 en el host (no el 27017 estándar) para no
+      # chocar con un MongoDB nativo que pueda estar corriendo como servicio de
+      # Windows — si ambos escuchan en 27017, "localhost:27017" pasa a ser
+      # ambiguo y no hay garantía de a cuál de los dos le estás hablando.
+      - "27018:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Backend de trazas local para depurar el orquestador/agente (ítem 4.1). Solo se usa cuando
+  # OTEL_ENABLED=true en `.env` — con OTEL_ENABLED=false (default) el contenedor puede estar
+  # apagado sin que nada falle, igual que Mongo con el resto del stack apagado.
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    container_name: assistant_personal_jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686" # UI
+      - "4317:4317"   # OTLP gRPC (el que usa OTEL_EXPORTER_OTLP_ENDPOINT)
+      - "4318:4318"   # OTLP HTTP
+
+volumes:
+  mongo_data:

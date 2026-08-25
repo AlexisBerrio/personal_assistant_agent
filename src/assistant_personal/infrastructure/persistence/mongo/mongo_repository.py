@@ -1,0 +1,172 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any
+
+from src.assistant_personal.config import get_settings
+from src.assistant_personal.domain.repositories.task_repository import TaskRepository
+from src.assistant_personal.infrastructure.async_dispatch import maybe_await
+from src.assistant_personal.infrastructure.persistence.mongo.client import get_db
+
+
+class MongoTaskRepository:
+    """Repositorio concreto para persistir tareas en MongoDB con Motor."""
+
+    # Techo duro independiente de lo que pida el llamador: evita que una sola lectura vuelque
+    # cientos de tareas al contexto de quien la consuma (hoy el router, mañana un agente LLM).
+    MAX_LIST_LIMIT = 100
+
+    def __init__(self, db_name: str | None = None, get_db_fn: Any | None = None, tenant_id: str | None = None) -> None:
+        self.db_name = db_name or get_settings().mongo_db_name
+        self._get_db_fn = get_db_fn or get_db
+        # Fijo en "default" hasta que exista multi-tenant real.
+        self.tenant_id = tenant_id or "default"
+
+    async def _get_db(self) -> Any:
+        return await self._get_db_fn(self.db_name)
+
+    def _active_task_filter(self, task_id: str | None = None, status: str | None = None) -> dict[str, Any]:
+        filter_query: dict[str, Any] = {"tenant_id": self.tenant_id, "is_deleted": {"$ne": True}}
+        if task_id is not None:
+            filter_query["task_id"] = task_id
+        if status is not None:
+            filter_query["status"] = status
+        return filter_query
+
+    async def check_connection(self) -> bool:
+        """Devuelve True si la base de datos responde a un ping."""
+        try:
+            db = await self._get_db()
+            await db.command("ping")
+            return True
+        except Exception:
+            return False
+
+    async def _collect_documents(self, cursor: Any) -> list[dict[str, Any]]:
+        """Recoge documentos desde un cursor síncrono o asíncrono."""
+        if hasattr(cursor, "__aiter__"):
+            return [doc async for doc in cursor]
+        return list(cursor)
+
+    async def _record_history(
+        self, db: Any, task_id: str, updates: dict[str, Any], previous_task: dict[str, Any] | None
+    ) -> None:
+        if not updates:
+            return
+
+        history_entry = {
+            "task_id": task_id,
+            "tenant_id": self.tenant_id,
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            "changes": [],
+        }
+
+        for field, new_value in updates.items():
+            previous_value = previous_task.get(field) if previous_task else None
+            history_entry["changes"].append({
+                "field": field,
+                "previous_value": previous_value,
+                "new_value": new_value,
+            })
+
+        await maybe_await(db.task_history.insert_one(history_entry))
+
+    async def list_active_tasks_async(self, status: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
+        db = await self._get_db()
+        capped_limit = max(1, min(limit, self.MAX_LIST_LIMIT))
+        cursor = db.personal_tasks.find(self._active_task_filter(status=status), {"_id": 0}).limit(capped_limit)
+        return await self._collect_documents(cursor)
+
+    async def get_task_by_id_async(self, task_id: str) -> dict[str, Any] | None:
+        db = await self._get_db()
+        return await maybe_await(db.personal_tasks.find_one(
+            self._active_task_filter(task_id),
+            {"_id": 0},
+        ))
+
+    async def get_task_history_async(self, task_id: str) -> list[dict[str, Any]]:
+        db = await self._get_db()
+        cursor = db.task_history.find(
+            {"task_id": task_id, "tenant_id": self.tenant_id}, {"_id": 0}
+        ).sort("timestamp", 1)
+        return await self._collect_documents(cursor)
+
+    async def create_task_async(self, payload: dict[str, Any]) -> dict[str, Any]:
+        db = await self._get_db()
+        payload = {**payload, "tenant_id": self.tenant_id}
+        # `insert_one` muta su argumento en el sitio, inyectándole `_id` (un `ObjectId`, no
+        # serializable a JSON). Se le pasa una copia para que el `payload` que devolvemos se
+        # quede limpio.
+        # `result.inserted_id` (el `ObjectId` de Mongo) no se devuelve: es plomería interna de
+        # persistencia, no un dato de dominio — `task_id` ya identifica la tarea para el llamador.
+        await maybe_await(db.personal_tasks.insert_one(dict(payload)))
+        return payload
+
+    async def update_task_async(self, task_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+        db = await self._get_db()
+        previous_task = await maybe_await(db.personal_tasks.find_one(
+            self._active_task_filter(task_id),
+            {"_id": 0},
+        ))
+        if previous_task is None:
+            return None
+
+        result = await maybe_await(db.personal_tasks.update_one(
+            self._active_task_filter(task_id),
+            {"$set": updates},
+        ))
+        if result.matched_count == 0:
+            return None
+
+        await self._record_history(db, task_id, updates, previous_task)
+        updated_task = await maybe_await(db.personal_tasks.find_one(
+            self._active_task_filter(task_id), {"_id": 0}))
+        return updated_task
+
+    async def complete_task_async(self, task_id: str) -> dict[str, Any]:
+        db = await self._get_db()
+        previous_task = await maybe_await(db.personal_tasks.find_one(
+            self._active_task_filter(task_id),
+            {"_id": 0},
+        ))
+        if previous_task is None:
+            return {"matched": 0, "modified": 0}
+
+        # No re-estampar completed_at si ya estaba completada: si no, repetir la llamada sobre
+        # una tarea ya completada dejaría de ser idempotente (modified pasaría a 1 cada vez).
+        update_fields: dict[str, Any] = {"status": "Completed"}
+        if previous_task.get("status") != "Completed":
+            update_fields["completed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+        result = await maybe_await(db.personal_tasks.update_one(
+            self._active_task_filter(task_id),
+            {"$set": update_fields},
+        ))
+        await self._record_history(db, task_id, update_fields, previous_task)
+        return {"matched": result.matched_count, "modified": result.modified_count}
+
+    async def delete_task_async(self, task_id: str) -> dict[str, Any] | None:
+        db = await self._get_db()
+        previous_task = await maybe_await(db.personal_tasks.find_one(
+            self._active_task_filter(task_id),
+            {"_id": 0},
+        ))
+        if previous_task is None:
+            return None
+
+        deleted_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        result = await maybe_await(db.personal_tasks.update_one(
+            self._active_task_filter(task_id),
+            {"$set": {"is_deleted": True, "deleted_at": deleted_at, "status": "Deleted"}},
+        ))
+        if result.matched_count == 0:
+            return None
+
+        await self._record_history(db, task_id, {"status": "Deleted", "is_deleted": True}, previous_task)
+        return {"task_id": task_id, "deleted": True, "deleted_at": deleted_at}
+
+
+def build_default_task_repository(db_name: str | None = None, get_db_fn: Any | None = None) -> TaskRepository:
+    """Construye el adaptador MongoDB por defecto para el puerto del dominio."""
+    return MongoTaskRepository(db_name=db_name or get_settings().mongo_db_name, get_db_fn=get_db_fn or get_db)
+
