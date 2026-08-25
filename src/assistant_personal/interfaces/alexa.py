@@ -54,6 +54,20 @@ class AlexaSkillRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
+def _to_speech_text(message: str) -> str:
+    """Convierte una respuesta pensada para texto (`_format_public_message` en el orquestador,
+    compartido con `/chat`) a una forma legible en voz. El único formato multilínea que produce
+    el orquestador hoy es encabezado + líneas `- item`, pensado para una pantalla — Alexa leería
+    el guion y el salto de línea literal. Cualquier otra respuesta (una sola línea: small_talk,
+    general_knowledge, create/complete/delete_task) pasa sin cambios."""
+    lines = [line.strip() for line in message.split("\n") if line.strip()]
+    if len(lines) <= 1:
+        return message
+    header, *items = lines
+    spoken_items = [item.removeprefix("- ") for item in items]
+    return f"{header} {', '.join(spoken_items)}."
+
+
 def _build_response(*, speech_text: str, should_end_session: bool) -> dict[str, Any]:
     return {
         "version": "1.0",
@@ -117,5 +131,5 @@ async def handle_alexa_request(
     orchestrator = build_orchestrator(session_id)
     result: dict[str, Any] = await orchestrator.handle_message_async(message, request_id=request_id)
 
-    speech_text = result.get("message") or result.get("reason") or _FALLBACK_SPEECH
-    return _build_response(speech_text=speech_text, should_end_session=False)
+    message = result.get("message") or result.get("reason") or _FALLBACK_SPEECH
+    return _build_response(speech_text=_to_speech_text(message), should_end_session=False)

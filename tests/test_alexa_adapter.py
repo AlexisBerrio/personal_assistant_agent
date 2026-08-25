@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from src.assistant_personal.interfaces.alexa import AlexaSkillRequest, handle_alexa_request
+from src.assistant_personal.interfaces.alexa import AlexaSkillRequest, _to_speech_text, handle_alexa_request
 
 
 class FakeOrchestrator:
@@ -72,6 +72,20 @@ class HandleAlexaRequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(orchestrator.calls, [("hola", "req-1")])
         self.assertEqual(response["response"]["outputSpeech"]["text"], "¡Hola! ¿En qué te ayudo?")
         self.assertFalse(response["response"]["shouldEndSession"])
+
+    async def test_list_tasks_bullet_response_is_converted_to_natural_speech(self) -> None:
+        orchestrator = FakeOrchestrator(
+            message="Tus tareas:\n- Comprar pan (Pending)\n- Llamar al dentista (In Progress)"
+        )
+        builder = OrchestratorBuilderSpy(orchestrator)
+        payload = AlexaSkillRequest.model_validate(_message_intent_request("qué tareas tengo"))
+
+        response = await handle_alexa_request(payload, builder, request_id=None)
+
+        self.assertEqual(
+            response["response"]["outputSpeech"]["text"],
+            "Tus tareas: Comprar pan (Pending), Llamar al dentista (In Progress).",
+        )
 
     async def test_message_intent_forwards_the_slot_value_as_the_user_message(self) -> None:
         orchestrator = FakeOrchestrator(message="Tienes 2 tareas pendientes.")
@@ -155,6 +169,32 @@ class HandleAlexaRequestTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(orchestrator.calls, [])
         self.assertIn("no entendí", response["response"]["outputSpeech"]["text"].lower())
+
+
+class ToSpeechTextTests(unittest.TestCase):
+    def test_single_line_message_passes_through_unchanged(self) -> None:
+        self.assertEqual(_to_speech_text("Tarea completada."), "Tarea completada.")
+
+    def test_bullet_list_becomes_a_comma_separated_sentence(self) -> None:
+        message = "Tus tareas:\n- Comprar pan (Pending)\n- Llamar al dentista (In Progress)"
+
+        self.assertEqual(
+            _to_speech_text(message),
+            "Tus tareas: Comprar pan (Pending), Llamar al dentista (In Progress).",
+        )
+
+    def test_ignores_blank_lines_between_items(self) -> None:
+        message = "Tus tareas:\n\n- Comprar pan (Pending)\n\n- Llamar al dentista (In Progress)\n"
+
+        self.assertEqual(
+            _to_speech_text(message),
+            "Tus tareas: Comprar pan (Pending), Llamar al dentista (In Progress).",
+        )
+
+    def test_single_item_list_still_becomes_a_sentence(self) -> None:
+        message = "Tus tareas:\n- Comprar pan (Pending)"
+
+        self.assertEqual(_to_speech_text(message), "Tus tareas: Comprar pan (Pending).")
 
 
 if __name__ == "__main__":
